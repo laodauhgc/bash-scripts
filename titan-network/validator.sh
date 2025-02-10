@@ -9,121 +9,209 @@ ERROR="❌"
 # Các thông báo
 MSG_ROOT_REQUIRED="${ERROR} Script này cần được chạy với quyền root."
 MSG_CANNOT_DETERMINE="Không thể xác định"
-MSG_CPU_MINIMUM="Cấu hình không đạt yêu cầu: Cần tối thiểu 8 vCPU."
-MSG_CPU_OK="CPU: Đạt yêu cầu (tối thiểu 8 vCPU)"
-MSG_RAM_MINIMUM="Cấu hình không đạt yêu cầu: Cần tối thiểu 16 GB RAM."
-MSG_RAM_OK="RAM: Đạt yêu cầu (tối thiểu 16 GB)"
-MSG_DISK_MINIMUM="Cấu hình không đạt yêu cầu: Cần tối thiểu 200GB dung lượng ổ đĩa."
-MSG_DISK_OK="Ổ đĩa: Đạt yêu cầu (tối thiểu 200GB)"
-MSG_UBUNTU_MINIMUM="Hệ điều hành cần phải là Ubuntu 22.04"
-MSG_UBUNTU_OK="Hệ điều hành: Đạt yêu cầu - Ubuntu 22.04"
-MSG_SYSTEM_OK="Đã kiểm tra: Hệ thống đáp ứng cấu hình tối thiểu."
+MSG_CPU_MINIMUM="Cần tối thiểu 8 vCPU."
+MSG_CPU_OK="Đạt yêu cầu (tối thiểu 8 vCPU)."
+MSG_RAM_MINIMUM="Cần tối thiểu 16 GB RAM."
+MSG_RAM_OK="Đạt yêu cầu (tối thiểu 16 GB)."
+MSG_DISK_MINIMUM="Cần tối thiểu 200GB dung lượng ổ đĩa."
+MSG_DISK_OK="Đạt yêu cầu (tối thiểu 200GB)."
+MSG_UBUNTU_MINIMUM="Hệ điều hành cần Ubuntu 22.04."
+MSG_UBUNTU_OK="Hệ điều hành: Đạt yêu cầu."
+MSG_SYSTEM_OK="Hệ thống đáp ứng cấu hình tối thiểu."
 
 # Các mode
 MODES="init recovery monitor uninstall"
 
+# Go version
+GO_VERSION="1.23.6"
+GO_ARCH="linux-amd64"
+GO_FILE="go${GO_VERSION}.${GO_ARCH}.tar.gz"
+GO_URL="https://go.dev/dl/${GO_FILE}"
+
+# Titan version
+TITAN_VERSION="0.3.0"
+TITAND_FILE="titand_${TITAN_VERSION}-1_g167b7fd6.tar.gz"
+TITAND_URL="https://github.com/Titannet-dao/titan-chain/releases/download/v${TITAN_VERSION}/${TITAND_FILE}"
+LIBWASMVM_FILE="libwasmvm.x86_64.so"
+LIBWASMVM_URL="https://github.com/Titannet-dao/titan-chain/releases/download/v${TITAN_VERSION}/${LIBWASMVM_FILE}"
+
+# Systemd file content
+SYSTEMD_FILE_CONTENT="[Unit]
+Description=Titan Daemon
+After=network-online.target
+
+[Service]
+User=root
+ExecStart=/usr/local/bin/titand start
+Restart=always
+RestartSec=3
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target"
+
 # Hàm kiểm tra quyền root
 check_root() {
-    if [[ $EUID -ne 0 ]]; then
-        printf "%b ${MSG_ROOT_REQUIRED}\n" "${ERROR}"
-        exit 1
-    fi
+  if [ "$EUID" -ne 0 ]; then
+    echo "${ERROR} ${MSG_ROOT_REQUIRED}"
+    exit 1
+  fi
 }
 
-# Hàm in thông báo và dừng loading (nếu cần)
-print_and_cleanup() {
-    local message="$1"
-    printf "%s\n" "$message"
-    exit 1
+#Hàm in thông báo
+print_msg() {
+  echo "$1"
 }
 
 # Hàm kiểm tra yêu cầu hệ thống
-check_requirement() {
-    local name="$1"           # Tên của yêu cầu (ví dụ: "CPU")
-    local check_command="$2"  # Lệnh để kiểm tra yêu cầu
-    local expected_value="$3" # Giá trị mong đợi
-    local error_message="$4"  # Thông báo lỗi nếu không đạt yêu cầu
-    local success_message="$5"  # Thông báo thành công
-    local unit="$6"          # Đơn vị (ví dụ: "vCPU", "GB", " ")
-    local checkType="$7"      # "numeric" or "string"
+check_system_requirements() {
+  print_msg "===================== KIỂM TRA CẤU HÌNH ====================="
 
-    local value=$(eval "$check_command")
+  # CPU
+  CPU_CORES=$(lscpu | grep "^CPU(s):" | awk '{print $2}')
+  if [ -z "$CPU_CORES" ] || [ "$CPU_CORES" -lt 8 ]; then
+    print_msg "${ERROR} ${MSG_CPU_MINIMUM} - Không tìm thấy hoặc không đủ CPU."
+    exit 1
+  fi
+  print_msg "${SUCCESS} CPU: ${MSG_CPU_OK} - Hệ thống có $CPU_CORES vCPU."
 
-    if [[ -z "$value" ]]; then
-        printf "%b ${MSG_CANNOT_DETERMINE} %s.\n" "${ERROR}" "$name"
-        sleep 0.5
-        exit 1
-    fi
-	
-	if [[ "$checkType" == "numeric" ]]; then
-    	if [[ $(echo "$value < $expected_value" | bc -l) -eq 1 ]]; then
-        	printf "%s %s - Hệ thống có %s %s.\n" "${ERROR}" "$error_message" "$value" "$unit"
-        	sleep 0.5
-        	exit 1
-    	fi
-	else
-		if [[ "$value" != "$expected_value" ]]; then
-        	printf "%s %s\n" "${ERROR}" "$error_message"
-        	sleep 0.5
-        	exit 1
-    	fi
-	fi
+  # RAM
+  TOTAL_RAM_KB=$(free | grep Mem | awk '{print $2}')
+  TOTAL_RAM_GB=$(echo "scale=1; $TOTAL_RAM_KB / 1024 / 1024" | bc)
 
-    if [[ $name != "Ubuntu Version" ]]; then
-        printf "%s %s - Hệ thống có %s %s.\n"  "${SUCCESS}" "$success_message" "$value" "$unit"
-        sleep 0.5
-    else
-        printf "%s %s\n" "${SUCCESS}" "$success_message"
-        sleep 0.5
-    fi
+  if [ $(echo "$TOTAL_RAM_GB < 15.2" | bc -l) -eq 1 ]; then
+    print_msg "${ERROR} ${MSG_RAM_MINIMUM} - Hệ thống có $TOTAL_RAM_GB GB."
+    exit 1
+  fi
+  print_msg "${SUCCESS} RAM: ${MSG_RAM_OK} - Hệ thống có $TOTAL_RAM_GB GB."
 
+  # Disk
+  DISK_SPACE_GB=$(df -h / | awk 'NR==2 {print $2}' | sed 's/G//')
+  if [ -z "$DISK_SPACE_GB" ]; then
+    print_msg "${ERROR} ${MSG_CANNOT_DETERMINE} Ổ đĩa."
+    exit 1
+  fi
 
+  DISK_SPACE_GB=$(echo $DISK_SPACE_GB | sed 's/[^0-9]//g')
+  if [ "$DISK_SPACE_GB" -lt 180 ]; then
+    print_msg "${ERROR} ${MSG_DISK_MINIMUM} - Hệ thống có $DISK_SPACE_GB GB."
+    exit 1
+  fi
+  print_msg "${SUCCESS} Ổ đĩa: ${MSG_DISK_OK} - Hệ thống có $DISK_SPACE_GB GB."
+
+  # OS
+  UBUNTU_VERSION=$(lsb_release -rs)
+  if [ "$UBUNTU_VERSION" != "22.04" ]; then
+    print_msg "${ERROR} ${MSG_UBUNTU_MINIMUM} - Hệ thống có $UBUNTU_VERSION."
+    exit 1
+  fi
+  print_msg "${SUCCESS} Hệ điều hành: ${MSG_UBUNTU_OK}"
+
+  print_msg "${SUCCESS} ${MSG_SYSTEM_OK}."
+}
+# Hàm cài đặt các gói phụ thuộc
+install_dependencies() {
+    echo "${INFO} Cài đặt các gói phụ thuộc..."
+    sudo apt-get update -y && sudo apt-get install -y \
+        build-essential cmake git python3-pip python3-venv openjdk-11-jdk npm wget curl htop tmux screen ufw openssh-server unzip zip net-tools tree nano
+    echo "${SUCCESS} Các gói phụ thuộc đã được cài đặt."
 }
 
-# Hàm kiểm tra cấu hình hệ thống
-check_system_requirements() {
-    # Kiểm tra các yêu cầu
-    check_requirement "CPU" \
-        "lscpu | grep '^CPU(s):' | awk '{print \$2}'" \
-        "8" \
-        "${MSG_CPU_MINIMUM}" \
-        "${MSG_CPU_OK}" \
-        "vCPU" \
-		"numeric"
+# Hàm cài đặt Go
+install_go() {
+    echo "${INFO} Cài đặt Go ${GO_VERSION}..."
+    # Tải file Go
+    echo "${INFO} Tải ${GO_FILE} từ ${GO_URL}..."
+    wget -q "${GO_URL}" || { echo "${ERROR} Không thể tải ${GO_FILE}."; exit 1; }
 
-    CPU_VALUE=$(lscpu | grep "^CPU(s):" | awk '{print $2}')
+    sudo rm -rf /usr/local/go
+    sudo tar -C /usr/local -xzf "${GO_FILE}"
 
-    check_requirement "RAM" \
-        "free | grep Mem | awk '{print \$2}' | awk '{printf \"%.1f\", \$1 / 1024 / 1024}'" \
-        "15.2" \
-        "${MSG_RAM_MINIMUM}" \
-        "${MSG_RAM_OK}" \
-        "GB" \
-		"numeric"
-    
-    RAM_VALUE=$(free | grep Mem | awk '{print $2}' | awk '{printf "%.1f", $1 / 1024 / 1024}')
+	echo "export PATH=\$PATH:/usr/local/go/bin" >> /root/.profile
+    export PATH=$PATH:/usr/local/go/bin
 
-    check_requirement "Disk Space" \
-        "df -h / | awk 'NR==2 {print \$2}' | sed 's/G//'" \
-        "180" \
-        "${MSG_DISK_MINIMUM}" \
-        "${MSG_DISK_OK}" \
-        "GB" \
-        "numeric"
+    rm "${GO_FILE}"
 
-    DISK_VALUE=$(df -h / | awk 'NR==2 {print $2}' | sed 's/G//')
+    go version
+    echo "${SUCCESS} Go ${GO_VERSION} đã được cài đặt."
+    echo "${INFO} Vui lòng chạy lệnh 'source /root/.profile' để cập nhật biến môi trường PATH."
+}
 
-    check_requirement "Ubuntu Version" \
-        "lsb_release -rs" \
-        "22.04" \
-        "${MSG_UBUNTU_MINIMUM}" \
-        "${MSG_UBUNTU_OK}" \
-        "" \
-		"string"
-	UBUNTU_VERSION=$(lsb_release -rs)
+# Hàm cài đặt titand và libwasmvm
+install_titand() {
+    echo "${INFO} Cài đặt titand ${TITAN_VERSION} và libwasmvm..."
 
-    printf "%s ${MSG_SYSTEM_OK}\n" "${SUCCESS}"
-    sleep 0.5
+    # Tải titand
+    echo "${INFO} Tải ${TITAND_FILE} từ ${TITAND_URL}..."
+    wget -q -P /root/ "${TITAND_URL}" || { echo "${ERROR} Không thể tải ${TITAND_FILE}."; exit 1; }
+
+    # Giải nén titand
+    echo "${INFO} Giải nén ${TITAND_FILE}..."
+    sudo tar -zxvf /root/${TITAND_FILE} --strip-components=1 -C /usr/local/bin
+    rm /root/${TITAND_FILE}
+
+    # Tải libwasmvm
+    echo "${INFO} Tải ${LIBWASMVM_FILE} từ ${LIBWASMVM_URL}..."
+    wget -q -P /root/ "${LIBWASMVM_URL}" || { echo "${ERROR} Không thể tải ${LIBWASMVM_FILE}."; exit 1; }
+
+    # Di chuyển libwasmvm
+    echo "${INFO} Di chuyển ${LIBWASMVM_FILE}..."
+    sudo mv /root/${LIBWASMVM_FILE} /usr/local/lib/
+
+    # Cấu hình thư viện
+    sudo ldconfig
+
+    echo "${SUCCESS} titand ${TITAN_VERSION} và libwasmvm đã được cài đặt."
+}
+
+# Hàm tạo và kích hoạt systemd service
+create_systemd_service() {
+    echo "${INFO} Tạo và kích hoạt systemd service..."
+    # Tạo file service
+    sudo tee /etc/systemd/system/titan.service > /dev/null <<EOF
+${SYSTEMD_FILE_CONTENT}
+EOF
+
+    # Kích hoạt service
+    sudo systemctl enable titan.service > /dev/null
+
+    echo "${SUCCESS} Systemd service đã được tạo và kích hoạt (nhưng chưa khởi động)."
+}
+
+# Hàm gỡ cài đặt titand
+uninstall_titand() {
+    echo "${INFO} Bắt đầu gỡ cài đặt TitanD..."
+
+    # Dừng service nếu đang chạy
+    if systemctl is-active --quiet titan.service; then
+        echo "${INFO} Dừng service titan.service..."
+        sudo systemctl stop titan.service
+    fi
+
+    # Disable service
+    echo "${INFO} Vô hiệu hóa service titan.service..."
+    sudo systemctl disable titan.service
+
+    # Xóa file service
+    echo "${INFO} Xóa file service /etc/systemd/system/titan.service..."
+    sudo rm -f /etc/systemd/system/titan.service
+
+    # Xóa symlinks liên quan đến service (nếu có)
+    echo "${INFO} Xóa các symlink liên quan..."
+    sudo rm -f /etc/systemd/system/multi-user.target.wants/titan.service
+
+    # Xóa titand binary
+    echo "${INFO} Xóa titand binary..."
+    sudo rm -f /usr/local/bin/titand
+
+    # Xóa libwasmvm
+    echo "${INFO} Xóa libwasmvm..."
+    sudo rm -f /usr/local/lib/libwasmvm.x86_64.so
+
+    # Cập nhật ldconfig
+    sudo ldconfig
+
+    echo "${SUCCESS} TitanD đã được gỡ cài đặt thành công."
 }
 
 # Hàm hiển thị hướng dẫn sử dụng
@@ -168,48 +256,47 @@ show_menu() {
 
 # Hàm xử lý mode init
 handle_init() {
-    printf "%s BẮT ĐẦU TẠO MỚI VALIDATOR\n"  "${INFO}"
+    print_msg "${INFO} BẮT ĐẦU TẠO MỚI VALIDATOR"
     # Thêm code cho chế độ init tại đây
 }
 
 # Hàm xử lý mode recovery
 handle_recovery() {
-    printf "%s BẮT ĐẦU KHÔI PHỤC VALIDATOR\n" "${INFO}"
+    print_msg "${INFO} BẮT ĐẦU KHÔI PHỤC VALIDATOR"
     # Thêm code cho chế độ recovery tại đây
 }
 
 # Hàm xử lý mode monitor
 handle_monitor() {
-    printf "%s GIÁM SÁT VALIDATOR\n"  "${INFO}"
+    print_msg "${INFO} GIÁM SÁT VALIDATOR"
     # Thêm code cho chế độ monitor tại đây
 }
 
 # Hàm xử lý mode uninstall
 handle_uninstall() {
-    printf "%s GỠ CÀI ĐẶT VALIDATOR\n"  "${INFO}"
+    print_msg "${INFO} GỠ CÀI ĐẶT VALIDATOR"
+	uninstall_titand
     # Thêm code cho chế độ uninstall tại đây
 }
 
-# Kiểm tra quyền root
-check_root
-
 # Lấy giá trị của tham số --mode
-eval set -- $(getopt --long "mode:" -o "" -n "$0" -- "$@")
-while true; do
-    case "$1" in
-        --mode)
-            MODE="$2"
-            shift 2
-            ;;
-        --)
-            shift
-            break
-            ;;
-        *)
-            MODE=""
-            break
-            ;;
-    esac
+MODE=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --mode)
+      if [ -n "$2" ] && [[ "$2" == init || "$2" == recovery || "$2" == monitor || "$2" == uninstall ]]; then
+        MODE="$2"
+        shift 2
+      else
+        echo "Tham số --mode không hợp lệ."
+        exit 1
+      fi
+      ;;
+    *)
+      echo "Tham số không hợp lệ: $1"
+      exit 1
+      ;;
+  esac
 done
 
 # Kiểm tra xem có tham số --mode hay không
@@ -227,13 +314,27 @@ for m in $MODES; do
 done
 
 if [[ "$valid" == "false" ]]; then
-  show_menu
+   show_menu
 fi
+
+# Kiểm tra quyền root
+check_root
 
 # Kiểm tra cấu hình hệ thống (chỉ cho init và recovery)
 if [[ "$MODE" == "init" ]] || [[ "$MODE" == "recovery" ]]; then
-    echo "===================== KIỂM TRA CẤU HÌNH ====================="
     check_system_requirements
+
+    # Cài đặt các gói phụ thuộc
+    install_dependencies
+
+    # Cài đặt Go
+    install_go
+
+    # Cài đặt titand và libwasmvm
+    install_titand
+
+	# Tạo và kích hoạt systemd service
+    create_systemd_service
 fi
 
 # Thêm thông báo MODE
@@ -267,9 +368,9 @@ case "$MODE" in
         handle_uninstall
         ;;
     *)
-        printf "%s Mode không hợp lệ: %s\n" "${ERROR}" "$MODE"
+        echo "${ERROR} Mode không hợp lệ: $MODE"
         usage
-        exit 1
+        exit 0
         ;;
     esac
 
