@@ -19,6 +19,9 @@ MSG_UBUNTU_MINIMUM="Hệ điều hành cần phải là Ubuntu 22.04"
 MSG_UBUNTU_OK="Hệ điều hành: Đạt yêu cầu - Ubuntu 22.04"
 MSG_SYSTEM_OK="Đã kiểm tra: Hệ thống đáp ứng cấu hình tối thiểu."
 
+# Các mode
+MODES="init recovery monitor uninstall"
+
 # Hàm kiểm tra quyền root
 check_root() {
     if [[ $EUID -ne 0 ]]; then
@@ -125,11 +128,42 @@ check_system_requirements() {
 
 # Hàm hiển thị hướng dẫn sử dụng
 usage() {
-    echo "Sử dụng: $0 --mode=<init|recovery>"
+    echo "Sử dụng: $0 --mode=<init|recovery|monitor|uninstall>"
     echo "Ví dụ:"
     echo "  $0 --mode=init"
     echo "  $0 --mode=recovery"
+	echo "  $0 --mode=monitor"
+    echo "  $0 --mode=uninstall"
     exit 1
+}
+
+# Hàm hiển thị menu
+show_menu() {
+    echo "Vui lòng chọn một mode:"
+    echo "  1) init - BẮT ĐẦU TẠO MỚI VALIDATOR"
+    echo "  2) recovery - BẮT ĐẦU KHÔI PHỤC VALIDATOR"
+    echo "  3) monitor - GIÁM SÁT VALIDATOR"
+    echo "  4) uninstall - GỠ CÀI ĐẶT VALIDATOR"
+    read -p "Nhập số (1-4): " choice
+
+    case "$choice" in
+        1)
+            MODE="init"
+            ;;
+        2)
+            MODE="recovery"
+            ;;
+        3)
+            MODE="monitor"
+            ;;
+        4)
+            MODE="uninstall"
+            ;;
+        *)
+            echo "Lựa chọn không hợp lệ."
+            exit 1
+            ;;
+    esac
 }
 
 # Hàm xử lý mode init
@@ -144,14 +178,20 @@ handle_recovery() {
     # Thêm code cho chế độ recovery tại đây
 }
 
+# Hàm xử lý mode monitor
+handle_monitor() {
+    printf "%s GIÁM SÁT VALIDATOR\n"  "${INFO}"
+    # Thêm code cho chế độ monitor tại đây
+}
+
+# Hàm xử lý mode uninstall
+handle_uninstall() {
+    printf "%s GỠ CÀI ĐẶT VALIDATOR\n"  "${INFO}"
+    # Thêm code cho chế độ uninstall tại đây
+}
+
 # Kiểm tra quyền root
 check_root
-
-# Thêm thông báo kiểm tra cấu hình
-echo "===================== KIỂM TRA CẤU HÌNH ====================="
-
-# Kiểm tra cấu hình hệ thống
-check_system_requirements
 
 # Lấy giá trị của tham số --mode
 eval set -- $(getopt --long "mode:" -o "" -n "$0" -- "$@")
@@ -166,18 +206,34 @@ while true; do
             break
             ;;
         *)
-            printf "%s Lỗi tham số: %s\n" "${ERROR}" "$1" >&2
-            usage
-            exit 1
-        ;;
+            MODE=""
+            break
+            ;;
     esac
 done
 
 # Kiểm tra xem có tham số --mode hay không
 if [ -z "$MODE" ]; then
-    printf "%s Bạn phải chỉ định --mode=<init|recovery>\n" "${ERROR}"
-    usage
-    exit 1
+    show_menu
+fi
+
+#Kiểm tra xem mode nhập vào có hợp lệ không
+valid=false
+for m in $MODES; do
+  if [[ "$MODE" == "$m" ]]; then
+    valid=true
+    break
+  fi
+done
+
+if [[ "$valid" == "false" ]]; then
+  show_menu
+fi
+
+# Kiểm tra cấu hình hệ thống (chỉ cho init và recovery)
+if [[ "$MODE" == "init" ]] || [[ "$MODE" == "recovery" ]]; then
+    echo "===================== KIỂM TRA CẤU HÌNH ====================="
+    check_system_requirements
 fi
 
 # Thêm thông báo MODE
@@ -187,6 +243,12 @@ case "$MODE" in
         ;;
     recovery)
         echo "===================== BẮT ĐẦU KHÔI PHỤC VALIDATOR ====================="
+        ;;
+	monitor)
+        echo "===================== GIÁM SÁT VALIDATOR ====================="
+        ;;
+    uninstall)
+        echo "===================== GỠ CÀI ĐẶT VALIDATOR ====================="
         ;;
 esac
 
@@ -198,11 +260,17 @@ case "$MODE" in
     recovery)
         handle_recovery
         ;;
+	monitor)
+        handle_monitor
+        ;;
+    uninstall)
+        handle_uninstall
+        ;;
     *)
         printf "%s Mode không hợp lệ: %s\n" "${ERROR}" "$MODE"
         usage
         exit 1
-    ;;
+        ;;
     esac
 
 exit 0
