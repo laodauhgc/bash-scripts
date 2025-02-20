@@ -14,23 +14,11 @@ check_command() {
   fi
 }
 
-# Lấy key từ tham số hoặc yêu cầu nhập
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --key=*)
-      KEY="${1#--key=}"
-      shift
-      ;;
-    *)
-      echo "Invalid parameter: $1"
-      echo "Usage: ./install-agent.sh --key=<key>"
-      exit 1
-      ;;
-  esac
-done
-
-if [ -z "$KEY" ]; then
-  echo "No key provided. Please provide a key using --key=<your_key>"
+# Lấy key từ tham số truyền vào, hỗ trợ cả khi chạy qua curl | bash -s --
+if [ -n "$1" ]; then
+  KEY="$1"
+else
+  echo "No key provided. Please provide a key as an argument."
   exit 1
 fi
 
