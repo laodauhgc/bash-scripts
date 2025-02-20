@@ -4,6 +4,7 @@ BLUE='\033[0;34m'
 RED='\033[0;31m'
 ORANGE='\033[0;33m'
 NC='\033[0m'
+
 # Function to generate a random string of 5 characters
 generate_random_string() {
   local random_string=$(LC_ALL=C tr -dc 'a-z' < /dev/urandom | head -c 5 ; echo '')
@@ -39,20 +40,18 @@ generate_valid_instance_name() {
   echo "vm-${random_number}"
 }
 
-# Get hash value from command-line argument, default to empty if not provided
-hash_value="${1:-}"
+# Get agent key from command-line argument, default to empty if not provided
+agent_key="${1:-}"
 
-# Check if hash_value is empty
-if [ -z "$hash_value" ]; then
-    echo -e "${YELLOW}No hash value provided. Please provide a hash value when running the script. Example: ./script.sh your_hash_value ${NC}"
+# Check if agent_key is empty
+if [ -z "$agent_key" ]; then
+    echo -e "${YELLOW}No agent key provided. Please provide a key when running the script. Example: ./script.sh your_agent_key ${NC}"
     exit 1
 fi
 
-# Modified: Agent installation script
+# Agent installation details
 agent_install_url="https://raw.githubusercontent.com/laodauhgc/bash-scripts/refs/heads/main/titan-network/gcp/install-agent.sh"
-agent_install_command="wget $agent_install_url -4O install-agent.sh || curl $agent_install_url -Lo install-agent.sh && bash install-agent.sh --key=$hash_value --ver=vi && rm install-agent.sh"
 
-# startup_script_url="https://raw.githubusercontent.com/laodauhgc/bash-scripts/refs/heads/main/titan-network/gcp/install-edge.sh" #No longer needed
 # List of regions where virtual machines will be created
 zones=(
   "southamerica-east1-b"
@@ -62,6 +61,7 @@ zones=(
   "asia-northeast1-b"
   "asia-northeast1-b"
 )
+
 # Check if an organization exists
 organization_id=$(gcloud organizations list --format="value(ID)" 2>/dev/null)
 sleep 3
@@ -159,17 +159,20 @@ run_enable_project_apicomputer(){
 # Function to create virtual machines
 create_vms(){
     local projects=$(gcloud projects list --format="value(projectId)")
-    vm_counter=1 # Initialize a counter for the device-name
+    vm_counter=1
     for project_id in $projects; do
         echo -e "${ORANGE}Processing VM creation for project-id: $project_id ${NC}"
         gcloud config set project "$project_id"
-
-        # Using the hardcoded service account email as requested
-        service_account_email="696485455120-compute@developer.gserviceaccount.com"
-
+        #service_account_email=$(gcloud iam service-accounts list --project="$project_id" --format="value(email)" | head -n 1) # Replaced with hardcoded value
+        service_account_email="696485455120-compute@developer.gserviceaccount.com" # Hardcoded service account
+        if [ -z "$service_account_email" ]; then
+            echo -e "${RED}No Service Account could be found in project: $project_id ${NC}"
+            continue
+        fi
         for zone in "${zones[@]}"; do
             instance_name=$(generate_valid_instance_name)
-            device_name="titan-agent-$(printf %02d $vm_counter)" # Create a unique device name
+            device_name="titan-agent-$(printf %02d $vm_counter)"
+
             gcloud compute instances create "$instance_name" \
             --project="$project_id" \
             --zone="$zone" \
@@ -186,7 +189,7 @@ create_vms(){
             --shielded-vtpm \
             --shielded-integrity-monitoring \
             --labels=goog-ec-src=vm_add-gcloud \
-            --metadata=startup-script="$agent_install_command" \
+            --metadata=startup-script="wget ${agent_install_url} -4O install-agent.sh || curl ${agent_install_url} -Lo install-agent.sh && bash install-agent.sh --key=${agent_key} --ver=vi && rm install-agent.sh" \
             --reservation-affinity=any
 
             if [ $? -eq 0 ]; then
@@ -194,10 +197,9 @@ create_vms(){
             else
                 echo -e "${RED}Failed to create instance $instance_name in project $project_id at region $zone.${NC}"
             fi
-            ((vm_counter++)) # Increment the counter for the next VM
+            ((vm_counter++))
         done
     done
-
 }
 
 # Function to list all server IPs
@@ -218,7 +220,6 @@ list_of_servers(){
     for ip in "${all_ips[@]}; do
         echo "$ip"
     done
-
 }
 
 # Function to initialize and remove projects
@@ -251,8 +252,7 @@ wait_for_projects_deleted() {
       echo -e "${BLUE}All projects have been completely deleted.${NC}"
       break
     else
-      project_count=$(echo "$current_projects" | wc -l)
-      printf "\033[0;31mThere are still %s project(s) remaining, waiting...\033[0m\n" "$project_count"
+      echo -e "${RED}There are still $(echo "$current_projects" | wc -l) project(s) remaining, waiting...${NC}"
       sleep 7  # Wait before checking again
     fi
   done
