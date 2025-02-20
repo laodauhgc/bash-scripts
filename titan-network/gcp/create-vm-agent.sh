@@ -252,7 +252,7 @@ wait_for_projects_deleted() {
       break
     else
       project_count=$(echo "$current_projects" | wc -l)
-      printf "${RED}There are still %s project(s) remaining, waiting...${NC}\n" "$project_count"
+      printf "\033[0;31mThere are still %s project(s) remaining, waiting...\033[0m\n" "$project_count"
       sleep 7  # Wait before checking again
     fi
   done
