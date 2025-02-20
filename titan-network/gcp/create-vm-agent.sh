@@ -76,7 +76,7 @@ ensure_n_projects() {
 
   if [ "$current_projects" -lt "$desired_projects" ]; then
     projects_to_create=$((desired_projects - current_projects))
-    echo "Not enough projects ($desired_projects required). Creating $projects_to_create project(s)..."
+    echo "Not enough projects $$$desired_projects required$$. Creating $projects_to_create project(s)..."
 
     for ((i = 0; i < projects_to_create; i++)); do
       local project_id=$(generate_project_id)
