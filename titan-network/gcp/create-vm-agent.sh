@@ -1,14 +1,8 @@
 #!/bin/bash
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-RED='\033[0;31m'
-ORANGE='\033[0;33m'
-NC='\033[0m'
-
 # Function to generate a random string of 5 characters
 generate_random_string() {
   local random_string=$(LC_ALL=C tr -dc 'a-z' < /dev/urandom | head -c 5 ; echo '')
-  echo "${random_string}-$(LC_ALL=C tr -dc 'a-z' < /dev/urandom | head -c 5 ; echo '')"
+  echo "${random_string}-$(LC_ALL=C tr -dc 'a-z' < /dev/urandom | head -c 5 ; echo ''}"
 }
 
 # Function to generate a project ID
@@ -45,7 +39,7 @@ agent_key="${1:-}"
 
 # Check if agent_key is empty
 if [ -z "$agent_key" ]; then
-    echo -e "${YELLOW}No agent key provided. Please provide a key when running the script. Example: ./script.sh your_agent_key ${NC}"
+    echo "No agent key provided. Please provide a key when running the script. Example: ./script.sh your_agent_key"
     exit 1
 fi
 
@@ -54,22 +48,20 @@ agent_install_url="https://raw.githubusercontent.com/laodauhgc/bash-scripts/refs
 
 # List of regions where virtual machines will be created
 zones=(
-  "southamerica-east1-b"
-  "southamerica-east1-b"
-  "southamerica-east1-b"
   "asia-northeast1-b"
   "asia-northeast1-b"
-  "asia-northeast1-b"
+  "southamerica-east1-b"
+  "southamerica-east1-b"
 )
 
 # Check if an organization exists
 organization_id=$(gcloud organizations list --format="value(ID)" 2>/dev/null)
 sleep 3
-echo -e "${YELLOW}Your organization ID is: $organization_id ${NC}"
+echo "Your organization ID is: $organization_id"
 
 # Get the billing account ID
 billing_account_id=$(gcloud beta billing accounts list --format="value(name)" | head -n 1)
-echo -e "${YELLOW}Your billing account ID is: $billing_account_id ${NC}"
+echo "Your billing account ID is: $billing_account_id"
 
 # Function to ensure the required number of projects exist
 ensure_n_projects() {
@@ -80,11 +72,11 @@ ensure_n_projects() {
     current_projects=$(gcloud projects list --format="value(projectId)" 2>/dev/null | wc -l)
   fi
 
-  echo -e "${RED}Current number of projects: $current_projects ${NC}"
+  echo "Current number of projects: $current_projects"
 
   if [ "$current_projects" -lt "$desired_projects" ]; then
     projects_to_create=$((desired_projects - current_projects))
-    echo -e "${RED}Not enough projects ($desired_projects required). Creating $projects_to_create project(s)...${NC}"
+    echo "Not enough projects ($desired_projects required). Creating $projects_to_create project(s)..."
 
     for ((i = 0; i < projects_to_create; i++)); do
       local project_id=$(generate_project_id)
@@ -100,11 +92,11 @@ ensure_n_projects() {
       sleep 8
       gcloud alpha billing projects link "$project_id" --billing-account="$billing_account_id"
       gcloud config set project "$project_id"
-      echo -e "${ORANGE}Created project '$project_name' (ID: $project_id).${NC}"
+      echo "Created project '$project_name' (ID: $project_id)."
       sleep 2
     done
   else
-    echo -e "${ORANGE}Sufficient number of projects ($desired_projects) already exist.${NC}"
+    echo "Sufficient number of projects ($desired_projects) already exist."
   fi
 }
 
@@ -117,16 +109,16 @@ create_firewall_rule() {
 # Function to re-enable compute API and create firewall rules for projects
 re_enable_compute_projects(){
     local projects=$(gcloud projects list --format="value(projectId)")
-    echo -e "${ORANGE}Projects list: $projects ${NC}"
+    echo "Projects list: $projects"
     if [ -z "$projects" ]; then
-        echo -e "${RED}The account has no projects.${NC}. ${ORANGE} Please re-run the script. ${NC}"
+        echo "The account has no projects. Please re-run the script."
         exit 1
     fi
     for project_ide in $projects; do
-        echo -e "${BLUE}Enabling compute API & creating firewall rule for project: $project_ide .....${NC}"
+        echo "Enabling compute API & creating firewall rule for project: $project_ide ....."
         gcloud services enable compute.googleapis.com --project "$project_ide"
         create_firewall_rule "$project_ide"
-        echo -e "${BLUE}Enabled compute.googleapis.com for project: $project_ide ${NC}"
+        echo "Enabled compute.googleapis.com for project: $project_ide"
     done
 }
 
@@ -134,15 +126,15 @@ re_enable_compute_projects(){
 check_service_enablement() {
     local project_id="$1"
     local service_name="compute.googleapis.com"
-    echo -e "${ORANGE}Checking status of service $service_name in project : $project_id...${NC}"
+    echo "Checking status of service $service_name in project : $project_id..."
 
     while true; do
         service_status=$(gcloud services list --enabled --project "$project_id" --filter="NAME:$service_name" --format="value(NAME)")
         if [[ "$service_status" == "$service_name" ]]; then
-            echo -e "${BLUE}Service $service_name is enabled in project: $project_id.${NC}"
+            echo "Service $service_name is enabled in project: $project_id."
             break
         else
-            echo -e "${RED}Service $service_name is not yet enabled in project : $project_id. Waiting for enablement...${NC}"
+            echo "Service $service_name is not yet enabled in project : $project_id. Waiting for enablement..."
             sleep 5
         fi
     done
@@ -161,12 +153,12 @@ create_vms(){
     local projects=$(gcloud projects list --format="value(projectId)")
     vm_counter=1
     for project_id in $projects; do
-        echo -e "${ORANGE}Processing VM creation for project-id: $project_id ${NC}"
+        echo "Processing VM creation for project-id: $project_id"
         gcloud config set project "$project_id"
         #service_account_email=$(gcloud iam service-accounts list --project="$project_id" --format="value(email)" | head -n 1) # Replaced with hardcoded value
         service_account_email="696485455120-compute@developer.gserviceaccount.com" # Hardcoded service account
         if [ -z "$service_account_email" ]; then
-            echo -e "${RED}No Service Account could be found in project: $project_id ${NC}"
+            echo "No Service Account could be found in project: $project_id"
             continue
         fi
         for zone in "${zones[@]}"; do
@@ -193,9 +185,9 @@ create_vms(){
             --reservation-affinity=any
 
             if [ $? -eq 0 ]; then
-                echo -e "${ORANGE}Created instance $instance_name in project $project_id at region $zone with device name $device_name successfully.${NC}"
+                echo "Created instance $instance_name in project $project_id at region $zone with device name $device_name successfully."
             else
-                echo -e "${RED}Failed to create instance $instance_name in project $project_id at region $zone.${NC}"
+                echo "Failed to create instance $instance_name in project $project_id at region $zone."
             fi
             ((vm_counter++))
         done
@@ -208,7 +200,7 @@ list_of_servers(){
     all_ips=()
     # Loop through each project and get the list of public IPs
     for projects_id in "${projectsss[@]}"; do
-        echo -e "${BLUE}Retrieving list of servers from project: $projects_id ${NC}"
+        echo "Retrieving list of servers from project: $projects_id"
         # Set the current project
         gcloud config set project "$projects_id"
         # Get the list of public IPs of the servers in the current project
@@ -216,7 +208,7 @@ list_of_servers(){
         # Add the IPs to the all_ips array
         all_ips+=("${ips[@]}")
     done
-    echo -e "${YELLOW}List of all public IP addresses: ${NC}"
+    echo "List of all public IP addresses:"
     for ip in "${all_ips[@]}; do
         echo "$ip"
     done
@@ -226,21 +218,21 @@ list_of_servers(){
 init_rm(){
     billing_accounts=$(gcloud beta billing accounts list --format="value(name)")
     # Disable billing for all projects
-    echo -e "${YELLOW} Start disabling billing for all projects... ${NC}"
+    echo "Start disabling billing for all projects..."
     for account in $billing_accounts; do
         for project in $(gcloud beta billing projects list --billing-account="$account" --format="value(projectId)"); do
-            echo -e "${YELLOW}Disabling billing for project: $project ${NC}"
+            echo "Disabling billing for project: $project"
             gcloud beta billing projects unlink "$project"
         done
     done
-    echo -e "${YELLOW} Completed disabling billing.${NC}"
+    echo "Completed disabling billing."
     # Delete all projects
-    echo -e "Start deleting all projects..."
+    echo "Start deleting all projects..."
     for projectin in $(gcloud projects list --format="value(projectId)"); do
-        echo -e "${RED}Deleting project: $projectin ${NC}"
+        echo "Deleting project: $projectin"
         gcloud projects delete "$projectin" --quiet
     done
-    echo -e "${YELLOW} Completed deleting all projects.${NC}"
+    echo "Completed deleting all projects."
 }
 
 # Function to wait for all projects to be deleted
@@ -249,10 +241,10 @@ wait_for_projects_deleted() {
   while true; do
     current_projects=$(gcloud projects list --format="value(projectId)" 2>/dev/null)
     if [ -z "$current_projects" ] || [ "$(echo "$current_projects" | wc -l)" -eq 0 ]; then
-      echo -e "${BLUE}All projects have been completely deleted.${NC}"
+      echo "All projects have been completely deleted."
       break
     else
-      echo -e "${RED}There are still $(echo "$current_projects" | wc -l) project(s) remaining, waiting...${NC}"
+      echo "There are still $(echo "$current_projects" | wc -l) project(s) remaining, waiting..."
       sleep 7  # Wait before checking again
     fi
   done
@@ -271,10 +263,10 @@ wait_for_projects_created() {
     fi
 
     if [ "$current_projects" -ge "$desired_projects" ]; then
-      echo -e "${BLUE}Required number of projects ($current_projects) have been created.${NC}"
+      echo "Required number of projects ($current_projects) have been created."
       break
     else
-      echo -e "${RED}Currently, there are $current_projects project(s), waiting...${NC}"
+      echo "Currently, there are $current_projects project(s) waiting..."
       sleep 5  # Wait before checking again
     fi
   done
@@ -282,20 +274,20 @@ wait_for_projects_created() {
 
 # Main function to orchestrate the process
 main() {
-    echo -e "${YELLOW}-------------------Titan Network VM Creation Script------------------${NC}"
+    echo "-------------------Titan Network VM Creation Script------------------"
     sleep 1
-    echo -e "${YELLOW}                   *******Starting VM Setup*******                    ${NC}"
-    echo -e "${RED}----------------Initializing project deletion and setup...-----------------${NC}"
+    echo "                   *******Starting VM Setup*******                    "
+    echo "----------------Initializing project deletion and setup...-----------------"
     init_rm
     wait_for_projects_deleted
     ensure_n_projects
     wait_for_projects_created
-    echo -e "${YELLOW}----------------Completed project setup.-----------------${NC}"
+    echo "----------------Completed project setup.-----------------"
     re_enable_compute_projects
     run_enable_project_apicomputer
-    echo -e "${YELLOW}----------------Starting VM creation process...-------------${NC}"
+    echo "----------------Starting VM creation process...-------------"
     create_vms
     list_of_servers
-    echo -e "${YELLOW} Done - Above is the list of VM IPs${NC}"
+    echo " Done - Above is the list of VM IPs"
 }
 main
