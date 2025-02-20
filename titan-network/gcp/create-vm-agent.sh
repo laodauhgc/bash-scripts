@@ -208,7 +208,7 @@ list_of_servers(){
     for projects_id in "${projectsss[@]}"; do
         echo -e "${BLUE}Retrieving list of servers from project: $projects_id ${NC}"
         # Set the current project
-        gcloud config set project "$project_id"
+        gcloud config set project "$projects_id"
         # Get the list of public IPs of the servers in the current project
         ips=($(gcloud compute instances list --format="value(EXTERNAL_IP)" --project="$projects_id"))
         # Add the IPs to the all_ips array
@@ -251,7 +251,7 @@ wait_for_projects_deleted() {
       echo -e "${BLUE}All projects have been completely deleted.${NC}"
       break
     else
-      echo -e "${RED}There are still $(echo "$current_projects" | wc -l) project(s) remaining, waiting...${NC}"
+      echo -e "${RED}There are still $((echo "$current_projects" | wc -l)) project(s) remaining, waiting...${NC}"
       sleep 7  # Wait before checking again
     fi
   done
