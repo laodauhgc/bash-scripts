@@ -251,7 +251,8 @@ wait_for_projects_deleted() {
       echo -e "${BLUE}All projects have been completely deleted.${NC}"
       break
     else
-      printf "${RED}There are still %s project(s) remaining, waiting...${NC}\n" "$(/bin/bash -c "echo \"$current_projects\" | wc -l")"
+      project_count=$(echo "$current_projects" | wc -l)
+      printf "${RED}There are still %s project(s) remaining, waiting...${NC}\n" "$project_count"
       sleep 7  # Wait before checking again
     fi
   done
