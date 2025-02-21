@@ -68,7 +68,7 @@ echo ""
 
 # Cấu hình bộ nhớ
 echo "================= Bộ Nhớ (RAM) =================="
-total_mem_kb=$(grep "MemTotal" /proc/meminfo | awk -F: '{print $2}' | sed 's/ kB//;s/ *$//')
+total_mem_kb=$(grep "MemTotal" /proc/meminfo | awk -F: '{print $2}' | sed 's/ kB//;s/^ *//')
 total_mem_gb=$((total_mem_kb / 1024 / 1024))
 echo "Tổng dung lượng (RAM): ${total_mem_gb} GB"
 
@@ -97,8 +97,16 @@ echo ""
 
 echo "================= Địa chỉ IP và NAT =================="
 
-# Lấy địa chỉ IPv4 (chọn interface khác loopback)
-ipv4=$(ip route get 1.1.1.1 | awk '{print $NF;exit}')
+# Lấy địa chỉ IPv4 (thử nhiều cách)
+ipv4=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $NF;exit}')
+
+if [ -z "$ipv4" ] || [[ "$ipv4" == "127.0.0.1" ]]; then
+  ipv4=$(ip addr show | grep "inet " | grep -v "127.0.0.1" | awk '{print $2}' | cut -d'/' -f1 | head -n 1)
+fi
+
+if [ -z "$ipv4" ] || [[ "$ipv4" == "127.0.0.1" ]]; then
+  ipv4=$(hostname -I | awk '{print $1}')
+fi
 
 if [ -n "$ipv4" ] && [[ "$ipv4" != "127.0.0.1" ]]; then
   echo "Địa chỉ IPv4: $ipv4"
@@ -166,17 +174,7 @@ echo "Loại NAT: $nat_status"
 
 echo "================= Kiểm tra Ảo Hóa Lồng =================="
 
-# Màu sắc ANSI (đã loại bỏ vì có thể gây rối trên một số terminal)
-#RED='\033[0;31m'
-#GREEN='\033[0;32m'
-#YELLOW='\033[0;33m'
-#NC='\033[0m' # No Color
-
-# Icon (cần đảm bảo terminal hỗ trợ hiển thị Unicode) - Loại bỏ để đảm bảo tương thích
-#CHECKMARK="✅"
-#CROSSMARK="❌"
-#INFO="ℹ️"
-
+# Kiểm tra hỗ trợ ảo hóa...
 echo "Kiểm tra hỗ trợ ảo hóa..."
 
 # Kiểm tra hỗ trợ CPU (Intel hoặc AMD)
