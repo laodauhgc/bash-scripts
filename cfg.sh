@@ -18,29 +18,34 @@ command_exists() {
 # Hàm lấy giá trị từ mảng ngôn ngữ
 get_text() {
   local key="$1"
-  echo "${TEXTS[$key]}"
+  echo "${!TEXTS[$key]}"
 }
 
 # ==================================================================
 # Xử lý tham số dòng lệnh
 # ==================================================================
 
-echo "Tham số dòng lệnh: $@" # Ghi nhật ký tất cả các tham số
+# Set default language to English
+LANGUAGE="en"
 
-if [[ "$1" == "--ver" ]]; then
-  LANGUAGE="$2"
-  echo "Ngôn ngữ được chọn (từ tham số): $LANGUAGE" # Ghi nhật ký ngôn ngữ
-  shift
-  shift
-else
-  LANGUAGE="en"
-  echo "Ngôn ngữ mặc định: $LANGUAGE" # Ghi nhật ký ngôn ngữ
-fi
+# Process command line arguments
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --ver)
+      LANGUAGE="$2"
+      shift
+      shift
+      ;;
+    *)
+      echo "Tham số không hợp lệ: $1" >&2
+      exit 1
+      ;;
+  esac
+done
 
-# Giá trị mặc định nếu LANGUAGE không hợp lệ
-LANGUAGE=${LANGUAGE:-"en"}
-
-echo "Ngôn ngữ cuối cùng: $LANGUAGE" # Ghi nhật ký ngôn ngữ
+echo "Tham số dòng lệnh: $@" # Log all parameters
+echo "Ngôn ngữ được chọn (từ tham số): $LANGUAGE" # Log the language
+echo "Ngôn ngữ cuối cùng: $LANGUAGE" # Log the final language
 
 # ==================================================================
 # Định nghĩa ngôn ngữ (nhúng trực tiếp vào script)
@@ -272,7 +277,7 @@ case "$LANGUAGE" in
     ;;
 esac
 
-echo "Mảng ngôn ngữ được chọn: $LANGUAGE"
+echo "Mảng ngôn ngữ được chọn: $TEXTS"
 
 # ==================================================================
 # Kiểm tra sự tồn tại của lệnh
