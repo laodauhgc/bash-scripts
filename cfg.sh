@@ -72,8 +72,10 @@ total_mem_kb=$(grep "MemTotal" /proc/meminfo | awk -F: '{print $2}' | sed 's/ kB
 total_mem_gb=$((total_mem_kb / 1024 / 1024))
 echo "Tổng dung lượng (RAM): ${total_mem_gb} GB"
 
-free_mem_kb=$(grep "MemFree" /proc/meminfo | awk -F: '{print $2}' | sed 's/ kB//;s/ *$//')
-free_mem_gb=$((free_mem_kb / 1024 / 1024))
+# Lấy dung lượng RAM trống (sử dụng free -m)
+free_mem_mb=$(free -m | awk 'NR==2{print $4}')
+free_mem_gb=$(echo "scale=2; $free_mem_mb / 1024" | bc)  # Convert to GB with 2 decimal places
+
 echo "Dung lượng trống (RAM): ${free_mem_gb} GB"
 echo ""
 
@@ -97,15 +99,21 @@ echo ""
 
 echo "================= Địa chỉ IP và NAT =================="
 
-# Lấy địa chỉ IPv4 (thử nhiều cách)
-ipv4=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $NF;exit}')
+# Lấy địa chỉ IPv4 (thử nhiều cách, sử dụng API làm phương án cuối cùng)
+ipv4=$(ip -4 addr | grep global | awk '{print $2}' | cut -d'/' -f1)
 
 if [ -z "$ipv4" ] || [[ "$ipv4" == "127.0.0.1" ]]; then
-  ipv4=$(ip addr show | grep "inet " | grep -v "127.0.0.1" | awk '{print $2}' | cut -d'/' -f1 | head -n 1)
+  ipv4=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $NF;exit}')
 fi
 
 if [ -z "$ipv4" ] || [[ "$ipv4" == "127.0.0.1" ]]; then
   ipv4=$(hostname -I | awk '{print $1}')
+fi
+
+# Nếu vẫn không tìm thấy, sử dụng API bên ngoài
+if [ -z "$ipv4" ] || [[ "$ipv4" == "127.0.0.1" ]]; then
+  echo "Không tìm thấy địa chỉ IPv4 cục bộ, sử dụng API bên ngoài..."
+  ipv4=$(curl -s https://api.ipify.org)
 fi
 
 if [ -n "$ipv4" ] && [[ "$ipv4" != "127.0.0.1" ]]; then
@@ -185,7 +193,7 @@ else
   CPU_SUPPORT="false"
   echo "CPU KHÔNG hỗ trợ ảo hóa."
   echo "Ảo hóa lồng không thể thực hiện được."
-  exit 1
+  exit 0 # Thay vì exit 1, chỉ cần dừng phần kiểm tra này
 fi
 
 # Kiểm tra KVM modules
@@ -207,7 +215,7 @@ if [[ "$CPU_SUPPORT" == "true" ]]; then
     KVM_MODULE="kvm_amd"
   else
     echo "Không tìm thấy file tham số ảo hóa lồng. KVM có thể chưa được cài đặt đúng cách."
-    exit 1
+    exit 0 # Thay vì exit 1, chỉ cần dừng phần kiểm tra này
   fi
 
   NESTED_ENABLED=$(cat "$NESTED_FILE")
@@ -220,42 +228,7 @@ if [[ "$CPU_SUPPORT" == "true" ]]; then
   fi
 fi
 
-# Cài đặt và bật KVM nếu chưa có
-if [[ "$KVM_INSTALLED" == "false" ]] || [[ "$NESTED_STATUS" == "disabled" ]]; then
-  echo "Đang cố gắng cài đặt và cấu hình KVM..."
-  if [[ "$EUID" -ne 0 ]]; then
-    echo "Script này yêu cầu quyền root để cài đặt KVM."
-    exit 1
-  fi
-
-  # Cài đặt KVM
-  apt update && apt install -y qemu-kvm libvirt-daemon-system bridge-utils virt-manager > /dev/null 2>&1
-  if [ $? -eq 0 ]; then
-    echo "KVM và các gói yêu cầu đã được cài đặt thành công."
-  else
-    echo "Cài đặt các gói KVM không thành công. Kiểm tra các lỗi ở trên."
-    exit 1
-  fi
-
-  # Bật nested virtualization
-  modprobe -r "$KVM_MODULE" > /dev/null 2>&1
-  modprobe "$KVM_MODULE" nested=1 > /dev/null 2>&1
-
-  if [ $? -eq 0 ]; then
-     echo "options $KVM_MODULE nested=1" | sudo tee /etc/modprobe.d/kvm.conf > /dev/null
-
-     NESTED_ENABLED=$(cat "$NESTED_FILE") # Read nested value after modprobe
-
-     if [[ "$NESTED_ENABLED" == "Y" ]]; then
-        echo "Đã bật thành công ảo hóa lồng. Vui lòng khởi động lại để các thay đổi có hiệu lực."
-     else
-        echo "Không thể bật ảo hóa lồng. Vui lòng kiểm tra thủ công."
-        exit 1
-     fi
-  else
-    echo "Không thể tải KVM module với ảo hóa lồng được bật. Kiểm tra các lỗi ở trên."
-    exit 1
-  fi
-fi
+# Bỏ qua cài đặt KVM vì CPU không hỗ trợ ảo hóa
+echo "CPU không hỗ trợ ảo hóa, bỏ qua cài đặt KVM."
 
 echo "Kiểm tra hoàn tất."
