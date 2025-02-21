@@ -18,34 +18,29 @@ command_exists() {
 # Hàm lấy giá trị từ mảng ngôn ngữ
 get_text() {
   local key="$1"
-  echo "${!TEXTS[$key]}"
+  echo "${TEXTS[$key]}"
 }
 
 # ==================================================================
 # Xử lý tham số dòng lệnh
 # ==================================================================
 
-# Set default language to English
-LANGUAGE="en"
+echo "Tham số dòng lệnh: $@" # Ghi nhật ký tất cả các tham số
 
-# Process command line arguments
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --ver)
-      LANGUAGE="$2"
-      shift
-      shift
-      ;;
-    *)
-      echo "Tham số không hợp lệ: $1" >&2
-      exit 1
-      ;;
-  esac
-done
+if [[ "$1" == "--ver" ]]; then
+  LANGUAGE="$2"
+  echo "Ngôn ngữ được chọn (từ tham số): $LANGUAGE" # Ghi nhật ký ngôn ngữ
+  shift
+  shift
+else
+  LANGUAGE="en"
+  echo "Ngôn ngữ mặc định: $LANGUAGE" # Ghi nhật ký ngôn ngữ
+fi
 
-echo "Tham số dòng lệnh: $@" # Log all parameters
-echo "Ngôn ngữ được chọn (từ tham số): $LANGUAGE" # Log the language
-echo "Ngôn ngữ cuối cùng: $LANGUAGE" # Log the final language
+# Giá trị mặc định nếu LANGUAGE không hợp lệ
+LANGUAGE=${LANGUAGE:-"en"}
+
+echo "Ngôn ngữ cuối cùng: $LANGUAGE" # Ghi nhật ký ngôn ngữ
 
 # ==================================================================
 # Định nghĩa ngôn ngữ (nhúng trực tiếp vào script)
@@ -259,6 +254,7 @@ declare -A TEXTS_CN=(
 # ==================================================================
 # Chọn ngôn ngữ
 # ==================================================================
+
 case "$LANGUAGE" in
   "vi")
     TEXTS=TEXTS_VI
@@ -277,7 +273,7 @@ case "$LANGUAGE" in
     ;;
 esac
 
-echo "Mảng ngôn ngữ được chọn: $TEXTS"
+echo "Mảng ngôn ngữ được chọn: $LANGUAGE"
 
 # ==================================================================
 # Kiểm tra sự tồn tại của lệnh
@@ -301,17 +297,17 @@ command_exists nft || echo "nft không được cài đặt"
 # ==================================================================
 
 if ! command_exists speedtest-cli; then
-  echo "================= $(get_text INSTALL_SPEEDTEST_HEADER) =================="
-  echo "$(get_text INSTALLING_SPEEDTEST)"
+  echo "================= ${TEXTS[INSTALL_SPEEDTEST_HEADER]} =================="
+  echo "${TEXTS[INSTALLING_SPEEDTEST]}"
 
   # Cố gắng cài đặt bằng pip3
   if command_exists pip3; then
-    sudo pip3 install speedtest-cli || error_exit "$(get_text INSTALL_SPEEDTEST_PIP_FAILED)"
+    sudo pip3 install speedtest-cli || error_exit "${TEXTS[INSTALL_SPEEDTEST_PIP_FAILED]}"
   else
     echo "pip3 không được tìm thấy. Cố gắng cài đặt pip3..."
     # Cố gắng cài đặt pip3 (ví dụ cho Debian/Ubuntu)
-    sudo apt-get update && sudo apt-get install -y python3-pip || error_exit "$(get_text INSTALL_PIP_FAILED)"
-    sudo pip3 install speedtest-cli || error_exit "$(get_text INSTALL_SPEEDTEST_AFTER_PIP_FAILED)"
+    sudo apt-get update && sudo apt-get install -y python3-pip || error_exit "${TEXTS[INSTALL_PIP_FAILED]}"
+    sudo pip3 install speedtest-cli || error_exit "${TEXTS[INSTALL_SPEEDTEST_AFTER_PIP_FAILED]}"
   fi
   echo ""
 fi
@@ -322,7 +318,7 @@ echo "Đã hoàn thành phần cài đặt speedtest-cli" # Ghi nhật ký
 # Cấu hình hệ thống
 # ==================================================================
 
-echo "================= $(get_text SYSTEM_HEADER) =================="
+echo "================= ${TEXTS[SYSTEM_HEADER]} =================="
 echo "$(get_text HOSTNAME): $(hostname)"
 echo "$(get_text CURRENT_TIME): $(date)"
 echo "$(get_text KERNEL): $(uname -r)"
@@ -330,7 +326,7 @@ echo "$(get_text UPTIME): $(uptime -p)"
 echo ""
 
 # Hệ điều hành
-echo "================= $(get_text OS_HEADER) =================="
+echo "================= ${TEXTS[OS_HEADER]} =================="
 os_name=$(lsb_release -d | awk -F: '{print $2}' | sed 's/^ *//;s/ *$//')
 if [ -z "$os_name" ]; then
   echo "$(get_text OS_UNKNOWN)"
@@ -452,7 +448,3 @@ check_nat() {
 
 nat_status=$(check_nat)
 echo "$(get_text NAT_TYPE): $nat_status"
-
-#==================================================================
-#Chon ngon ngu
-#==================================================================
