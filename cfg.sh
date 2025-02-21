@@ -19,21 +19,16 @@ command_exists() {
 # Xử lý tham số dòng lệnh
 # ==================================================================
 
-while [[ $# -gt 0 ]]; do
-  key="$1"
-  case $key in
-    --ver)
-      LANGUAGE="$2"
-      shift # past argument
-      shift # past value
-      ;;
-    *)
-      # unknown option
-      ;;
-  esac
-done
+# Phiên bản đơn giản hơn của xử lý tham số
+if [[ "$1" == "--ver" ]]; then
+  LANGUAGE="$2"
+else
+  LANGUAGE="en"
+fi
 
-# Giá trị mặc định nếu LANGUAGE không được truyền
+echo "Ngôn ngữ được chọn: $LANGUAGE" # Ghi nhật ký ngôn ngữ đã chọn
+
+# Giá trị mặc định nếu LANGUAGE không hợp lệ
 LANGUAGE=${LANGUAGE:-"en"}
 
 # ==================================================================
@@ -285,55 +280,6 @@ declare -A TEXTS_CN=(
   ["CHECK_COMPLETE"]="检查完成。"
 )
 
-declare -A TEXTS_ID=(
-  ["INSTALL_SPEEDTEST_HEADER"]="================= Memeriksa dan memasang speedtest-cli =================="
-  ["INSTALLING_SPEEDTEST"]="speedtest-cli tidak terpasang. Memasang..."
-  ["INSTALL_SPEEDTEST_PIP_FAILED"]="Gagal memasang speedtest-cli dengan pip3."
-  ["INSTALL_PIP_FAILED"]="Gagal memasang pip3. Silakan pasang pip3 secara manual dan coba lagi."
-  ["INSTALL_SPEEDTEST_AFTER_PIP_FAILED"]="Gagal memasang speedtest-cli dengan pip3 setelah memasang pip3."
-
-  ["SYSTEM_HEADER"]="Informasi Sistem"
-  ["HOSTNAME"]="Nama Host"
-  ["CURRENT_TIME"]="Waktu Saat Ini"
-  ["KERNEL"]="Kernel"
-  ["UPTIME"]="Waktu Aktif"
-
-  ["OS_HEADER"]="Sistem Operasi"
-  ["OS"]="Sistem Operasi"
-  ["OS_UNKNOWN"]="Tidak dapat menentukan nama sistem operasi."
-
-  ["CPU_HEADER"]="Informasi CPU"
-  ["CPU_MODEL"]="Model"
-  ["CPU_CORES"]="Jumlah Inti"
-
-  ["RAM_HEADER"]="Informasi RAM"
-  ["RAM_TOTAL"]="Total RAM"
-  ["RAM_FREE"]="RAM Bebas"
-
-  ["DISK_HEADER"]="Informasi Disk"
-
-  ["NETWORK_HEADER"]="Informasi Jaringan"
-  ["CHECKING_SPEED"]="Memeriksa kecepatan jaringan (menggunakan speedtest-cli)..."
-  ["SPEEDTEST_FAILED"]="Pengujian kecepatan jaringan gagal. Silakan periksa koneksi atau pemasangan speedtest-cli."
-
-  ["IP_NAT_HEADER"]="Informasi Alamat IP dan NAT"
-  ["IPV4_ADDRESS"]="Alamat IPv4"
-  ["IPV4_NOT_FOUND"]="Tidak ditemukan alamat IPv4."
-  ["IPV6_ADDRESS"]="Alamat IPv6"
-  ["IPV6_NOT_FOUND"]="Tidak ditemukan alamat IPv6."
-  ["NAT_TYPE"]="Jenis NAT"
-
-  ["NESTED_VIRT_HEADER"]="Pemeriksaan Virtualisasi Bertingkat"
-  ["VIRT_SUPPORTED"]="CPU mendukung virtualisasi (VT-x atau AMD-V)."
-  ["VIRT_NOT_SUPPORTED"]="CPU TIDAK mendukung virtualisasi. Virtualisasi bertingkat tidak mungkin dilakukan."
-  ["KVM_LOADED"]="Modul KVM dimuat."
-  ["KVM_NOT_LOADED"]="Modul KVM TIDAK dimuat."
-  ["NESTED_ENABLED"]="Virtualisasi bertingkat diaktifkan."
-  ["NESTED_DISABLED"]="Virtualisasi bertingkat dinonaktifkan."
-  ["NESTED_FILE_NOT_FOUND"]="Tidak dapat menemukan berkas parameter virtualisasi bertingkat. KVM mungkin tidak terpasang dengan benar."
-  ["CHECK_COMPLETE"]="Pemeriksaan selesai."
-)
-
 # ==================================================================
 # Chọn ngôn ngữ
 # ==================================================================
@@ -356,6 +302,8 @@ case "$LANGUAGE" in
     ;;
 esac
 
+echo "Mảng ngôn ngữ được chọn: $TEXTS" # Ghi nhật ký mảng ngôn ngữ
+
 # ==================================================================
 # Cài đặt speedtest-cli (nếu chưa có)
 # ==================================================================
@@ -375,6 +323,8 @@ if ! command_exists speedtest-cli; then
   fi
   echo ""
 fi
+
+echo "Đã hoàn thành phần cài đặt speedtest-cli" # Ghi nhật ký
 
 # ==================================================================
 # Cấu hình hệ thống
