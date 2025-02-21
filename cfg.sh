@@ -112,12 +112,8 @@ echo ""
 
 echo "================= Địa chỉ IP và NAT =================="
 
-# Lấy địa chỉ IPv4 (ưu tiên địa chỉ bên ngoài)
-ipv4=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $NF;exit}')  # Lấy từ route
-if [[ "$ipv4" == "" ]]; then
-    ipv4=$(curl -s https://api.ipify.org) # Nếu route không có, lấy từ API
-fi
-ipv4=$(echo "$ipv4" | head -n 1) # Chỉ lấy dòng đầu tiên
+# Lấy địa chỉ IPv4 (luôn sử dụng API làm phương án cuối cùng và lấy một địa chỉ duy nhất)
+ipv4=$(curl -s https://api.ipify.org | head -n 1)
 
 if [ -n "$ipv4" ] && [[ "$ipv4" != "127.0.0.1" ]]; then
   echo "Địa chỉ IPv4: $ipv4"
@@ -184,55 +180,42 @@ echo "Loại NAT: $nat_status"
 
 echo "================= Kiểm tra Ảo Hóa Lồng =================="
 
-# Kiểm tra hỗ trợ ảo hóa...
-echo "Kiểm tra hỗ trợ ảo hóa..."
-
 # Kiểm tra hỗ trợ CPU (Intel hoặc AMD)
 if grep -E '(vmx|svm)' /proc/cpuinfo > /dev/null; then
   CPU_SUPPORT="true"
   echo "CPU hỗ trợ ảo hóa (VT-x hoặc AMD-V)."
+
+  # Kiểm tra KVM modules
+  if lsmod | grep kvm > /dev/null; then
+    KVM_INSTALLED="true"
+    echo "KVM modules đã được tải."
+
+    # Kiểm tra nested virtualization
+    if [[ -f /sys/module/kvm_intel/parameters/nested ]]; then
+      NESTED_FILE="/sys/module/kvm_intel/parameters/nested"
+      KVM_MODULE="kvm_intel"
+    elif [[ -f /sys/module/kvm_amd/parameters/nested ]]; then
+      NESTED_FILE="/sys/module/kvm_amd/parameters/nested"
+      KVM_MODULE="kvm_amd"
+    fi
+
+    if [[ -n "$NESTED_FILE" ]]; then
+      NESTED_ENABLED=$(cat "$NESTED_FILE")
+      if [[ "$NESTED_ENABLED" == "Y" ]]; then
+        echo "Ảo hóa lồng đã được bật."
+      else
+        echo "Ảo hóa lồng chưa được bật."
+      fi
+    else
+      echo "Không tìm thấy file tham số ảo hóa lồng. KVM có thể chưa được cài đặt đúng cách."
+    fi
+
+  else
+    echo "KVM modules CHƯA được tải."
+  fi
 else
   CPU_SUPPORT="false"
-  echo "CPU KHÔNG hỗ trợ ảo hóa."
-  echo "Ảo hóa lồng không thể thực hiện được."
-  CPU_SUPPORT="false" # Đảm bảo biến CPU_SUPPORT được đặt thành false
-fi
-
-# Kiểm tra KVM modules (chỉ nếu CPU hỗ trợ ảo hóa)
-if [[ "$CPU_SUPPORT" == "true" ]]; then
-    if lsmod | grep kvm > /dev/null; then
-      KVM_INSTALLED="true"
-      echo "KVM modules đã được tải."
-    else
-      KVM_INSTALLED="false"
-      echo "KVM modules CHƯA được tải."
-    fi
-
-    # Kiểm tra nested virtualization (chỉ nếu CPU hỗ trợ ảo hóa và KVM đã cài)
-    if [[ "$KVM_INSTALLED" == "true" ]]; then
-      if [[ -f /sys/module/kvm_intel/parameters/nested ]]; then
-        NESTED_FILE="/sys/module/kvm_intel/parameters/nested"
-        KVM_MODULE="kvm_intel"
-      elif [[ -f /sys/module/kvm_amd/parameters/nested ]]; then
-        NESTED_FILE="/sys/module/kvm_amd/parameters/nested"
-        KVM_MODULE="kvm_amd"
-      else
-        echo "Không tìm thấy file tham số ảo hóa lồng. KVM có thể chưa được cài đặt đúng cách."
-      fi
-
-      if [[ -n "$NESTED_FILE" ]]; then
-        NESTED_ENABLED=$(cat "$NESTED_FILE")
-        if [[ "$NESTED_ENABLED" == "Y" ]]; then
-          NESTED_STATUS="enabled"
-          echo "Ảo hóa lồng đã được bật."
-        else
-          NESTED_STATUS="disabled"
-          echo "Ảo hóa lồng chưa được bật."
-        fi
-      fi
-    fi
-else
-    echo "CPU không hỗ trợ ảo hóa, bỏ qua kiểm tra KVM và ảo hóa lồng."
+  echo "CPU KHÔNG hỗ trợ ảo hóa. Ảo hóa lồng không thể thực hiện được."
 fi
 
 echo "Kiểm tra hoàn tất."
