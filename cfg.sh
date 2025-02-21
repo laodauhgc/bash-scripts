@@ -69,12 +69,21 @@ echo ""
 # Cấu hình bộ nhớ
 echo "================= Bộ Nhớ (RAM) =================="
 total_mem_kb=$(grep "MemTotal" /proc/meminfo | awk -F: '{print $2}' | sed 's/ kB//;s/^ *//')
-total_mem_gb=$((total_mem_kb / 1024 / 1024))
+total_mem_gb=$(echo "scale=2; $total_mem_kb / 1024 / 1024" | bc)
 echo "Tổng dung lượng (RAM): ${total_mem_gb} GB"
 
-# Lấy dung lượng RAM trống (sử dụng free -m)
-free_mem_mb=$(free -m | awk 'NR==2{print $4}')
-free_mem_gb=$(echo "scale=2; $free_mem_mb / 1024" | bc)  # Convert to GB with 2 decimal places
+# Lấy dung lượng RAM đã sử dụng
+used_mem_mb=$(free -m | awk 'NR==2{print $3}')
+
+# Lấy dung lượng RAM trống, bao gồm cả buffer/cache (quan trọng!)
+free_mem_mb=$(free -m | awk 'NR==2{print $7}')
+
+# Tính toán dung lượng RAM trống chính xác hơn
+total_mem_mb=$(echo "scale=0; $total_mem_gb * 1024" | bc)
+actual_free_mem_mb=$(echo "$total_mem_mb - $used_mem_mb" | bc)
+
+# Chuyển đổi sang GB
+free_mem_gb=$(echo "scale=2; $actual_free_mem_mb / 1024" | bc)
 
 echo "Dung lượng trống (RAM): ${free_mem_gb} GB"
 echo ""
