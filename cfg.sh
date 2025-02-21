@@ -19,17 +19,22 @@ command_exists() {
 # Xử lý tham số dòng lệnh
 # ==================================================================
 
-# Phiên bản đơn giản hơn của xử lý tham số
+echo "Tham số dòng lệnh: $@" # Ghi nhật ký tất cả các tham số
+
 if [[ "$1" == "--ver" ]]; then
   LANGUAGE="$2"
+  echo "Ngôn ngữ được chọn (từ tham số): $LANGUAGE" # Ghi nhật ký ngôn ngữ
+  shift
+  shift
 else
   LANGUAGE="en"
+  echo "Ngôn ngữ mặc định: $LANGUAGE" # Ghi nhật ký ngôn ngữ
 fi
-
-echo "Ngôn ngữ được chọn: $LANGUAGE" # Ghi nhật ký ngôn ngữ đã chọn
 
 # Giá trị mặc định nếu LANGUAGE không hợp lệ
 LANGUAGE=${LANGUAGE:-"en"}
+
+echo "Ngôn ngữ cuối cùng: $LANGUAGE" # Ghi nhật ký ngôn ngữ cuối cùng
 
 # ==================================================================
 # Định nghĩa ngôn ngữ (nhúng trực tiếp vào script)
@@ -305,6 +310,23 @@ esac
 echo "Mảng ngôn ngữ được chọn: $TEXTS" # Ghi nhật ký mảng ngôn ngữ
 
 # ==================================================================
+# Kiểm tra sự tồn tại của lệnh
+# ==================================================================
+
+command_exists speedtest-cli || echo "speedtest-cli không được cài đặt"
+command_exists pip3 || echo "pip3 không được cài đặt"
+command_exists curl || echo "curl không được cài đặt"
+command_exists ip || echo "ip không được cài đặt"
+command_exists grep || echo "grep không được cài đặt"
+command_exists awk || echo "awk không được cài đặt"
+command_exists sed || echo "sed không được cài đặt"
+command_exists df || echo "df không được cài đặt"
+command_exists lsblk || echo "lsblk không được cài đặt"
+command_exists mount || echo "mount không được cài đặt"
+command_exists iptables || echo "iptables không được cài đặt"
+command_exists nft || echo "nft không được cài đặt"
+
+# ==================================================================
 # Cài đặt speedtest-cli (nếu chưa có)
 # ==================================================================
 
@@ -510,24 +532,3 @@ else
 fi
 
 echo "${!TEXTS[CHECK_COMPLETE]}"
-
-#==================================================================
-#Chon ngon ngu
-#==================================================================
-case "$LANGUAGE" in
-  "vi")
-    TEXTS=TEXTS_VI
-    ;;
-  "ru")
-    TEXTS=TEXTS_RU
-    ;;
-  "cn")
-    TEXTS=TEXTS_CN
-    ;;
-  "id")
-    TEXTS=TEXTS_ID
-    ;;
-  *)
-    TEXTS=TEXTS_EN
-    ;;
-esac
