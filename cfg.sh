@@ -15,6 +15,12 @@ command_exists() {
   command -v "$1" &> /dev/null
 }
 
+# Hàm lấy giá trị từ mảng ngôn ngữ
+get_text() {
+  local key="$1"
+  eval "echo \${${TEXTS}[$key]}"
+}
+
 # ==================================================================
 # Xử lý tham số dòng lệnh
 # ==================================================================
@@ -34,7 +40,7 @@ fi
 # Giá trị mặc định nếu LANGUAGE không hợp lệ
 LANGUAGE=${LANGUAGE:-"en"}
 
-echo "Ngôn ngữ cuối cùng: $LANGUAGE" # Ghi nhật ký ngôn ngữ cuối cùng
+echo "Ngôn ngữ cuối cùng: $LANGUAGE" # Ghi nhật ký ngôn ngữ
 
 # ==================================================================
 # Định nghĩa ngôn ngữ (nhúng trực tiếp vào script)
@@ -331,17 +337,17 @@ command_exists nft || echo "nft không được cài đặt"
 # ==================================================================
 
 if ! command_exists speedtest-cli; then
-  echo "================= ${!TEXTS[INSTALL_SPEEDTEST_HEADER]} =================="
-  echo "${!TEXTS[INSTALLING_SPEEDTEST]}"
+  echo "================= $(get_text INSTALL_SPEEDTEST_HEADER) =================="
+  echo "$(get_text INSTALLING_SPEEDTEST)"
 
   # Cố gắng cài đặt bằng pip3
   if command_exists pip3; then
-    sudo pip3 install speedtest-cli || error_exit "${!TEXTS[INSTALL_SPEEDTEST_PIP_FAILED]}"
+    sudo pip3 install speedtest-cli || error_exit "$(get_text INSTALL_SPEEDTEST_PIP_FAILED)"
   else
     echo "pip3 không được tìm thấy. Cố gắng cài đặt pip3..."
     # Cố gắng cài đặt pip3 (ví dụ cho Debian/Ubuntu)
-    sudo apt-get update && sudo apt-get install -y python3-pip || error_exit "${!TEXTS[INSTALL_PIP_FAILED]}"
-    sudo pip3 install speedtest-cli || error_exit "${!TEXTS[INSTALL_SPEEDTEST_AFTER_PIP_FAILED]}"
+    sudo apt-get update && sudo apt-get install -y python3-pip || error_exit "$(get_text INSTALL_PIP_FAILED)"
+    sudo pip3 install speedtest-cli || error_exit "$(get_text INSTALL_SPEEDTEST_AFTER_PIP_FAILED)"
   fi
   echo ""
 fi
@@ -352,38 +358,38 @@ echo "Đã hoàn thành phần cài đặt speedtest-cli" # Ghi nhật ký
 # Cấu hình hệ thống
 # ==================================================================
 
-echo "================= ${TEXTS[SYSTEM_HEADER]} =================="
-echo "${TEXTS[HOSTNAME]}: $(hostname)"
-echo "${TEXTS[CURRENT_TIME]}: $(date)"
-echo "${TEXTS[KERNEL]}: $(uname -r)"
-echo "${TEXTS[UPTIME]}: $(uptime -p)"
+echo "================= $(get_text SYSTEM_HEADER) =================="
+echo "$(get_text HOSTNAME): $(hostname)"
+echo "$(get_text CURRENT_TIME): $(date)"
+echo "$(get_text KERNEL): $(uname -r)"
+echo "$(get_text UPTIME): $(uptime -p)"
 echo ""
 
 # Hệ điều hành
-echo "================= ${TEXTS[OS_HEADER]} =================="
+echo "================= $(get_text OS_HEADER) =================="
 os_name=$(lsb_release -d | awk -F: '{print $2}' | sed 's/^ *//;s/ *$//')
 if [ -z "$os_name" ]; then
   os_name=$(cat /etc/os-release | grep PRETTY_NAME | cut -d '=' -f2 | tr -d '"')
 fi
 
 if [ -z "$os_name" ]; then
-  echo "${TEXTS[OS_UNKNOWN]}"
+  echo "$(get_text OS_UNKNOWN)"
 else
-  echo "${TEXTS[OS]}: $os_name"
+  echo "$(get_text OS): $os_name"
 fi
 echo ""
 
 # Cấu hình CPU
-echo "================= ${TEXTS[CPU_HEADER]} =================="
-echo "${TEXTS[CPU_MODEL]}: $(grep "model name" /proc/cpuinfo | head -n 1 | awk -F: '{print $2}' | sed 's/^ *//;s/ *$//')"
-echo "${TEXTS[CPU_CORES]}: $(nproc)"
+echo "================= $(get_text CPU_HEADER) =================="
+echo "$(get_text CPU_MODEL): $(grep "model name" /proc/cpuinfo | head -n 1 | awk -F: '{print $2}' | sed 's/^ *//;s/ *$//')"
+echo "$(get_text CPU_CORES): $(nproc)"
 echo ""
 
 # Cấu hình bộ nhớ
-echo "================= ${TEXTS[RAM_HEADER]} =================="
+echo "================= $(get_text RAM_HEADER) =================="
 total_mem_kb=$(grep "MemTotal" /proc/meminfo | awk -F: '{print $2}' | sed 's/ kB//;s/^ *//')
 total_mem_gb=$(echo "scale=2; $total_mem_kb / 1024 / 1024" | bc)
-echo "${TEXTS[RAM_TOTAL]}: ${total_mem_gb} GB"
+echo "$(get_text RAM_TOTAL): ${total_mem_gb} GB"
 
 # Lấy dung lượng RAM trống (thử nhiều cách)
 free_mem_gb=$(free -g | awk 'NR==2 {print $4}')  # Thử lấy từ free -g (GB) trước
@@ -393,11 +399,11 @@ if [[ "$free_mem_gb" == "" || "$free_mem_gb" == "0" ]]; then  # Nếu không th�
   free_mem_gb=$(echo "scale=2; $free_mem_mb / 1024" | bc)
 fi
 
-echo "${TEXTS[RAM_FREE]}: ${free_mem_gb} GB"
+echo "$(get_text RAM_FREE): ${free_mem_gb} GB"
 echo ""
 
 # Cấu hình ổ đĩa
-echo "================= ${TEXTS[DISK_HEADER]} =================="
+echo "================= $(get_text DISK_HEADER) =================="
 df -h / | awk 'NR==2{print "Tổng: "$2", Đã dùng: "$3", Còn trống: "$4}'
 echo ""
 
@@ -405,12 +411,12 @@ echo ""
 # Tốc độ mạng (sử dụng speedtest-cli)
 # ==================================================================
 
-echo "================= ${TEXTS[NETWORK_HEADER]} =================="
-echo "${TEXTS[CHECKING_SPEED]}"
+echo "================= $(get_text NETWORK_HEADER) =================="
+echo "$(get_text CHECKING_SPEED)"
 speedtest-cli --simple 2>&1 > /dev/null  # Chuyển hướng stderr và stdout
 
 if [ $? -ne 0 ]; then
-  echo "${TEXTS[SPEEDTEST_FAILED]}"
+  echo "$(get_text SPEEDTEST_FAILED)"
 else
   # Lấy kết quả từ dòng đầu tiên của speedtest-cli --simple
   speedtest_results=$(speedtest-cli --simple)
@@ -423,24 +429,24 @@ echo ""
 # Kiểm tra NAT và hiển thị địa chỉ IP
 # ==================================================================
 
-echo "================= ${TEXTS[IP_NAT_HEADER]} =================="
+echo "================= $(get_text IP_NAT_HEADER) =================="
 
 # Lấy địa chỉ IPv4 (luôn sử dụng API làm phương án cuối cùng và lấy một địa chỉ duy nhất)
 ipv4=$(curl -s https://api.ipify.org | head -n 1)
 
 if [ -n "$ipv4" ] && [[ "$ipv4" != "127.0.0.1" ]]; then
-  echo "${TEXTS[IPV4_ADDRESS]}: $ipv4"
+  echo "$(get_text IPV4_ADDRESS): $ipv4"
 else
-  echo "${TEXTS[IPV4_NOT_FOUND]}"
+  echo "$(get_text IPV4_NOT_FOUND)"
   ipv4="None"
 fi
 
 # Lấy địa chỉ IPv6 (nếu có)
 ipv6=$(ip -6 addr | grep global | awk '{print $2}' | cut -d'/' -f1 | head -n 1) # Chỉ lấy dòng đầu tiên
 if [ -n "$ipv6" ]; then
-  echo "${TEXTS[IPV6_ADDRESS]}: $ipv6"
+  echo "$(get_text IPV6_ADDRESS): $ipv6"
 else
-  echo "${TEXTS[IPV6_NOT_FOUND]}"
+  echo "$(get_text IPV6_NOT_FOUND)"
   ipv6="None"
 fi
 
@@ -485,23 +491,23 @@ check_nat() {
 }
 
 nat_status=$(check_nat)
-echo "${TEXTS[NAT_TYPE]}: $nat_status"
+echo "$(get_text NAT_TYPE): $nat_status"
 
 # ==================================================================
 # Kiểm tra ảo hóa lồng
 # ==================================================================
 
-echo "================= ${TEXTS[NESTED_VIRT_HEADER]} =================="
+echo "================= $(get_text NESTED_VIRT_HEADER) =================="
 
 # Kiểm tra hỗ trợ CPU (Intel hoặc AMD)
 if grep -E '(vmx|svm)' /proc/cpuinfo > /dev/null; then
   CPU_SUPPORT="true"
-  echo "${TEXTS[VIRT_SUPPORTED]}"
+  echo "$(get_text VIRT_SUPPORTED)"
 
   # Kiểm tra KVM modules
   if lsmod | grep kvm > /dev/null; then
     KVM_INSTALLED="true"
-    echo "${TEXTS[KVM_LOADED]}"
+    echo "$(get_text KVM_LOADED)"
 
     # Kiểm tra nested virtualization
     if [[ -f /sys/module/kvm_intel/parameters/nested ]]; then
@@ -515,20 +521,41 @@ if grep -E '(vmx|svm)' /proc/cpuinfo > /dev/null; then
     if [[ -n "$NESTED_FILE" ]]; then
       NESTED_ENABLED=$(cat "$NESTED_FILE")
       if [[ "$NESTED_ENABLED" == "Y" ]]; then
-        echo "${TEXTS[NESTED_ENABLED]}"
+        echo "$(get_text NESTED_ENABLED)"
       else
-        echo "${TEXTS[NESTED_DISABLED]}"
+        echo "$(get_text NESTED_DISABLED)"
       fi
     else
-      echo "${TEXTS[NESTED_FILE_NOT_FOUND]}"
+      echo "$(get_text NESTED_FILE_NOT_FOUND)"
     fi
 
   else
-    echo "${TEXTS[KVM_NOT_LOADED]}"
+    echo "$(get_text KVM_NOT_LOADED)"
   fi
 else
   CPU_SUPPORT="false"
-  echo "${TEXTS[VIRT_NOT_SUPPORTED]}"
+  echo "$(get_text VIRT_NOT_SUPPORTED)"
 fi
 
-echo "${TEXTS[CHECK_COMPLETE]}"
+echo "$(get_text CHECK_COMPLETE)"
+
+#==================================================================
+#Chon ngon ngu
+#==================================================================
+case "$LANGUAGE" in
+  "vi")
+    TEXTS=TEXTS_VI
+    ;;
+  "ru")
+    TEXTS=TEXTS_RU
+    ;;
+  "cn")
+    TEXTS=TEXTS_CN
+    ;;
+  "id")
+    TEXTS=TEXTS_ID
+    ;;
+  *)
+    TEXTS=TEXTS_EN
+    ;;
+esac
