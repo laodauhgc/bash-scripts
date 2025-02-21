@@ -18,7 +18,7 @@ command_exists() {
 # Hàm lấy giá trị từ mảng ngôn ngữ
 get_text() {
   local key="$1"
-  echo "${LANGUAGE_ARRAY[$key]}"
+  echo "${!LANGUAGE_ARRAY[$key]}"
 }
 
 # ==================================================================
