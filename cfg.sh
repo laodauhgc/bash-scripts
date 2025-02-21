@@ -18,7 +18,7 @@ command_exists() {
 # Hàm lấy giá trị từ mảng ngôn ngữ
 get_text() {
   local key="$1"
-  eval "echo \${${TEXTS}[$key]}"
+  eval "echo \${${LANGUAGE_ARRAY}[$key]}"
 }
 
 # ==================================================================
@@ -297,23 +297,23 @@ declare -A TEXTS_CN=(
 
 case "$LANGUAGE" in
   "vi")
-    TEXTS=TEXTS_VI
+    LANGUAGE_ARRAY="TEXTS_VI"
     ;;
   "ru")
-    TEXTS=TEXTS_RU
+    LANGUAGE_ARRAY="TEXTS_RU"
     ;;
   "cn")
-    TEXTS=TEXTS_CN
+    LANGUAGE_ARRAY="TEXTS_CN"
     ;;
   "id")
-    TEXTS=TEXTS_ID
+    LANGUAGE_ARRAY="TEXTS_ID"
     ;;
   *)
-    TEXTS=TEXTS_EN
+    LANGUAGE_ARRAY="TEXTS_EN"
     ;;
 esac
 
-echo "Mảng ngôn ngữ được chọn: $TEXTS" # Ghi nhật ký mảng ngôn ngữ
+echo "Mảng ngôn ngữ được chọn: $LANGUAGE_ARRAY" # Ghi nhật ký mảng ngôn ngữ
 
 # ==================================================================
 # Kiểm tra sự tồn tại của lệnh
@@ -513,7 +513,7 @@ if grep -E '(vmx|svm)' /proc/cpuinfo > /dev/null; then
     if [[ -f /sys/module/kvm_intel/parameters/nested ]]; then
       NESTED_FILE="/sys/module/kvm_intel/parameters/nested"
       KVM_MODULE="kvm_intel"
-    elif [[ -f /sys/module/kvm_amd/parameters/nested ]]; then
+    elif [[ -f /sys/module/kvm_amd/parameters/nested" ]]; then
       NESTED_FILE="/sys/module/kvm_amd/parameters/nested"
       KVM_MODULE="kvm_amd"
     fi
