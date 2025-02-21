@@ -18,7 +18,8 @@ command_exists() {
 # Hàm lấy giá trị từ mảng ngôn ngữ
 get_text() {
   local key="$1"
-  echo "${!LANGUAGE_ARRAY[$key]}"
+  local array_name="$1"
+  echo "${!array_name}"
 }
 
 # ==================================================================
@@ -509,7 +510,7 @@ if grep -E '(vmx|svm)' /proc/cpuinfo > /dev/null; then
     if [[ -f /sys/module/kvm_intel/parameters/nested ]]; then
       NESTED_FILE="/sys/module/kvm_intel/parameters/nested"
       KVM_MODULE="kvm_intel"
-    elif [[ -f /sys/module/kvm_amd/parameters/nested ]]; then
+    elif [[ -f /sys/module/kvm_amd/parameters/nested" ]]; then
       NESTED_FILE="/sys/module/kvm_amd/parameters/nested"
       KVM_MODULE="kvm_amd"
     fi
