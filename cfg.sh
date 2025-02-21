@@ -18,7 +18,7 @@ command_exists() {
 # Hàm lấy giá trị từ mảng ngôn ngữ
 get_text() {
   local key="$1"
-  eval "echo \${${LANGUAGE_ARRAY}[$key]}"
+  echo "${LANGUAGE_ARRAY[$key]}"
 }
 
 # ==================================================================
@@ -297,23 +297,23 @@ declare -A TEXTS_CN=(
 
 case "$LANGUAGE" in
   "vi")
-    LANGUAGE_ARRAY="TEXTS_VI"
+    LANGUAGE_ARRAY=TEXTS_VI
     ;;
   "ru")
-    LANGUAGE_ARRAY="TEXTS_RU"
+    LANGUAGE_ARRAY=TEXTS_RU
     ;;
   "cn")
-    LANGUAGE_ARRAY="TEXTS_CN"
+    LANGUAGE_ARRAY=TEXTS_CN
     ;;
   "id")
-    LANGUAGE_ARRAY="TEXTS_ID"
+    LANGUAGE_ARRAY=TEXTS_ID
     ;;
   *)
-    LANGUAGE_ARRAY="TEXTS_EN"
+    LANGUAGE_ARRAY=TEXTS_EN
     ;;
 esac
 
-echo "Mảng ngôn ngữ được chọn: $LANGUAGE_ARRAY" # Ghi nhật ký mảng ngôn ngữ
+echo "Mảng ngôn ngữ được chọn: ${LANGUAGE_ARRAY}" # Ghi nhật ký mảng ngôn ngữ
 
 # ==================================================================
 # Kiểm tra sự tồn tại của lệnh
@@ -368,10 +368,6 @@ echo ""
 # Hệ điều hành
 echo "================= $(get_text OS_HEADER) =================="
 os_name=$(lsb_release -d | awk -F: '{print $2}' | sed 's/^ *//;s/ *$//')
-if [ -z "$os_name" ]; then
-  os_name=$(cat /etc/os-release | grep PRETTY_NAME | cut -d '=' -f2 | tr -d '"')
-fi
-
 if [ -z "$os_name" ]; then
   echo "$(get_text OS_UNKNOWN)"
 else
@@ -513,7 +509,7 @@ if grep -E '(vmx|svm)' /proc/cpuinfo > /dev/null; then
     if [[ -f /sys/module/kvm_intel/parameters/nested ]]; then
       NESTED_FILE="/sys/module/kvm_intel/parameters/nested"
       KVM_MODULE="kvm_intel"
-    elif [[ -f /sys/module/kvm_amd/parameters/nested" ]]; then
+    elif [[ -f /sys/module/kvm_amd/parameters/nested ]]; then
       NESTED_FILE="/sys/module/kvm_amd/parameters/nested"
       KVM_MODULE="kvm_amd"
     fi
