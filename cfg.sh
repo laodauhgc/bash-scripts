@@ -538,24 +538,3 @@ else
 fi
 
 echo "$(get_text CHECK_COMPLETE)"
-
-#==================================================================
-#Chon ngon ngu
-#==================================================================
-case "$LANGUAGE" in
-  "vi")
-    TEXTS=TEXTS_VI
-    ;;
-  "ru")
-    TEXTS=TEXTS_RU
-    ;;
-  "cn")
-    TEXTS=TEXTS_CN
-    ;;
-  "id")
-    TEXTS=TEXTS_ID
-    ;;
-  *)
-    TEXTS=TEXTS_EN
-    ;;
-esac
