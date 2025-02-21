@@ -84,14 +84,6 @@ declare -A TEXTS_EN=(
   ["IPV6_NOT_FOUND"]="No IPv6 address found."
   ["NAT_TYPE"]="NAT Type"
 
-  ["NESTED_VIRT_HEADER"]="Nested Virtualization Check"
-  ["VIRT_SUPPORTED"]="CPU supports virtualization (VT-x or AMD-V)."
-  ["VIRT_NOT_SUPPORTED"]="CPU does NOT support virtualization. Nested virtualization is not possible."
-  ["KVM_LOADED"]="KVM modules are loaded."
-  ["KVM_NOT_LOADED"]="KVM modules are NOT loaded."
-  ["NESTED_ENABLED"]="Nested virtualization is enabled."
-  ["NESTED_DISABLED"]="Nested virtualization is disabled."
-  ["NESTED_FILE_NOT_FOUND"]="Could not find nested virtualization parameter file. KVM may not be installed properly."
   ["CHECK_COMPLETE"]="Checks completed."
 )
 
@@ -133,14 +125,6 @@ declare -A TEXTS_VI=(
   ["IPV6_NOT_FOUND"]="Không tìm thấy địa chỉ IPv6."
   ["NAT_TYPE"]="Loại NAT"
 
-  ["NESTED_VIRT_HEADER"]="Kiểm Tra Ảo Hóa Lồng"
-  ["VIRT_SUPPORTED"]="CPU hỗ trợ ảo hóa (VT-x hoặc AMD-V)."
-  ["VIRT_NOT_SUPPORTED"]="CPU KHÔNG hỗ trợ ảo hóa. Ảo hóa lồng không thể thực hiện được."
-  ["KVM_LOADED"]="KVM modules đã được tải."
-  ["KVM_NOT_LOADED"]="KVM modules CHƯA được tải."
-  ["NESTED_ENABLED"]="Ảo hóa lồng đã được bật."
-  ["NESTED_DISABLED"]="Ảo hóa lồng chưa được bật."
-  ["NESTED_FILE_NOT_FOUND"]="Không tìm thấy file tham số ảo hóa lồng. KVM có thể chưa được cài đặt đúng cách."
   ["CHECK_COMPLETE"]="Kiểm tra hoàn tất."
 )
 
@@ -182,14 +166,6 @@ declare -A TEXTS_RU=(
   ["IPV6_NOT_FOUND"]="IPv6-адрес не найден."
   ["NAT_TYPE"]="Тип NAT"
 
-  ["NESTED_VIRT_HEADER"]="Проверка вложенной виртуализации"
-  ["VIRT_SUPPORTED"]="Процессор поддерживает виртуализацию (VT-x или AMD-V)."
-  ["VIRT_NOT_SUPPORTED"]="Процессор НЕ поддерживает виртуализацию. Вложенная виртуализация невозможна."
-  ["KVM_LOADED"]="KVM-модули загружены."
-  ["KVM_NOT_LOADED"]="KVM-модули НЕ загружены."
-  ["NESTED_ENABLED"]="Вложенная виртуализация включена."
-  ["NESTED_DISABLED"]="Вложенная виртуализация отключена."
-  ["NESTED_FILE_NOT_FOUND"]="Не удалось найти файл параметра вложенной виртуализации. Возможно, KVM установлен неправильно."
   ["CHECK_COMPLETE"]="Проверки завершены."
 )
 
@@ -231,14 +207,6 @@ declare -A TEXTS_ID=(
   ["IPV6_NOT_FOUND"]="Tidak ditemukan alamat IPv6."
   ["NAT_TYPE"]="Jenis NAT"
 
-  ["NESTED_VIRT_HEADER"]="Pemeriksaan Virtualisasi Bertingkat"
-  ["VIRT_SUPPORTED"]="CPU mendukung virtualisasi (VT-x atau AMD-V)."
-  ["VIRT_NOT_SUPPORTED"]="CPU TIDAK mendukung virtualisasi. Virtualisasi bertingkat tidak mungkin dilakukan."
-  ["KVM_LOADED"]="Modul KVM dimuat."
-  ["KVM_NOT_LOADED"]="Modul KVM TIDAK dimuat."
-  ["NESTED_ENABLED"]="Virtualisasi bertingkat diaktifkan."
-  ["NESTED_DISABLED"]="Virtualisasi bertingkat dinonaktifkan."
-  ["NESTED_FILE_NOT_FOUND"]="Tidak dapat menemukan berkas parameter virtualisasi bertingkat. KVM mungkin tidak terpasang dengan benar."
   ["CHECK_COMPLETE"]="Pemeriksaan selesai."
 )
 
@@ -280,14 +248,6 @@ declare -A TEXTS_CN=(
   ["IPV6_NOT_FOUND"]="未找到 IPv6 地址。"
   ["NAT_TYPE"]="NAT 类型"
 
-  ["NESTED_VIRT_HEADER"]="嵌套虚拟化检查"
-  ["VIRT_SUPPORTED"]="CPU 支持虚拟化 (VT-x 或 AMD-V)。"
-  ["VIRT_NOT_SUPPORTED"]="CPU 不支持虚拟化。无法进行嵌套虚拟化。"
-  ["KVM_LOADED"]="已加载 KVM 模块。"
-  ["KVM_NOT_LOADED"]="未加载 KVM 模块。"
-  ["NESTED_ENABLED"]="已启用嵌套虚拟化。"
-  ["NESTED_DISABLED"]="已禁用嵌套虚拟化。"
-  ["NESTED_FILE_NOT_FOUND"]="找不到嵌套虚拟化参数文件。KVM 可能未正确安装。"
   ["CHECK_COMPLETE"]="检查完成。"
 )
 
@@ -489,69 +449,7 @@ check_nat() {
 nat_status=$(check_nat)
 echo "$(get_text NAT_TYPE): $nat_status"
 
-# ==================================================================
-# Kiểm tra ảo hóa lồng
-# ==================================================================
-
-echo "================= $(get_text NESTED_VIRT_HEADER) =================="
-
-# Kiểm tra hỗ trợ CPU (Intel hoặc AMD)
-if grep -E '(vmx|svm)' /proc/cpuinfo > /dev/null; then
-  CPU_SUPPORT="true"
-  echo "$(get_text VIRT_SUPPORTED)"
-
-  # Kiểm tra KVM modules
-  if lsmod | grep kvm > /dev/null; then
-    KVM_INSTALLED="true"
-    echo "$(get_text KVM_LOADED)"
-
-    # Kiểm tra nested virtualization
-    if [[ -f /sys/module/kvm_intel/parameters/nested ]]; then
-      NESTED_FILE="/sys/module/kvm_intel/parameters/nested"
-      KVM_MODULE="kvm_intel"
-    elif [[ -f /sys/module/kvm_amd/parameters/nested ]]; then
-      NESTED_FILE="/sys/module/kvm_amd/parameters/nested"
-      KVM_MODULE="kvm_amd"
-    fi
-
-    if [[ -n "$NESTED_FILE" ]]; then
-      NESTED_ENABLED=$(cat "$NESTED_FILE")
-      if [[ "$NESTED_ENABLED" == "Y" ]]; then
-        echo "$(get_text NESTED_ENABLED)"
-      else
-        echo "$(get_text NESTED_DISABLED)"
-      fi
-    else
-      echo "$(get_text NESTED_FILE_NOT_FOUND)"
-    fi
-
-  else
-    echo "$(get_text KVM_NOT_LOADED)"
-  fi
-else
-  CPU_SUPPORT="false"
-  echo "$(get_text VIRT_NOT_SUPPORTED)"
-fi
-
-echo "$(get_text CHECK_COMPLETE)"
-
 #==================================================================
 #Chon ngon ngu
 #==================================================================
-case "$LANGUAGE" in
-  "vi")
-    TEXTS=TEXTS_VI
-    ;;
-  "ru")
-    TEXTS=TEXTS_RU
-    ;;
-  "cn")
-    TEXTS=TEXTS_CN
-    ;;
-  "id")
-    TEXTS=TEXTS_ID
-    ;;
-  *)
-    TEXTS=TEXTS_EN
-    ;;
-esac
+
