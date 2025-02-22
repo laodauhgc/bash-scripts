@@ -1,11 +1,4 @@
 #!/bin/bash
-
-# Define some colors and icons
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-YELLOW='\033[0;33m'
-NC='\033[0m' # No Color
-
 INFO_ICON="ℹ️" # Information
 SUCCESS_ICON="✅" # Success
 ERROR_ICON="❌" # Error
@@ -17,7 +10,7 @@ WARNING_ICON="⚠️" # Warning
 
 # Function to print an error message and exit
 error_exit() {
-  echo -e "${RED}${ERROR_ICON} Error: $1${NC}" >&2
+  echo -e "${ERROR_ICON} Error: $1" >&2
   exit 1
 }
 
@@ -31,19 +24,19 @@ command_exists() {
 # ==================================================================
 
 if ! command_exists speedtest-cli; then
-  echo -e "${INFO_ICON} ================= Checking and Installing speedtest-cli =================="
+  echo -e "================= Checking and Installing speedtest-cli =================="
   echo -e "${INFO_ICON} speedtest-cli is not installed. Installing..."
 
   # Attempt to install using pip3
   if command_exists pip3; then
     sudo pip3 install speedtest-cli || error_exit "Failed to install speedtest-cli using pip3."
-    echo -e "${GREEN}${SUCCESS_ICON} speedtest-cli installed successfully using pip3.${NC}"
+    echo -e "${SUCCESS_ICON} speedtest-cli installed successfully using pip3."
   else
     echo -e "${WARNING_ICON} pip3 not found. Attempting to install pip3..."
     # Attempt to install pip3 (e.g., for Debian/Ubuntu)
     sudo apt-get update && sudo apt-get install -y python3-pip || error_exit "Failed to install pip3. Please install pip3 manually and try again."
     sudo pip3 install speedtest-cli || error_exit "Failed to install speedtest-cli using pip3 after installing pip3."
-    echo -e "${GREEN}${SUCCESS_ICON} pip3 and speedtest-cli installed successfully.${NC}"
+    echo -e "${SUCCESS_ICON} pip3 and speedtest-cli installed successfully."
   fi
   echo ""
 fi
@@ -52,7 +45,7 @@ fi
 # System Configuration
 # ==================================================================
 
-echo -e "${INFO_ICON} ================= System =================="
+echo -e "================= System =================="
 echo "Hostname: $(hostname)"
 echo "Current time: $(date)"
 echo "Kernel: $(uname -r)"
@@ -60,7 +53,7 @@ echo "Uptime: $(uptime -p)"
 echo ""
 
 # Operating System
-echo -e "${INFO_ICON} ================= Operating System =================="
+echo -e "================= Operating System =================="
 os_name=$(lsb_release -d | awk -F: '{print $2}' | sed 's/^ *//;s/ *$//')
 if [ -z "$os_name" ]; then
   os_name=$(cat /etc/os-release | grep PRETTY_NAME | cut -d '=' -f2 | tr -d '"')
@@ -74,13 +67,13 @@ fi
 echo ""
 
 # CPU Configuration
-echo -e "${INFO_ICON} ================= CPU =================="
+echo -e "================= CPU =================="
 echo "Model: $(grep "model name" /proc/cpuinfo | head -n 1 | awk -F: '{print $2}' | sed 's/^ *//;s/ *$//')"
 echo "Number of cores: $(nproc)"
 echo ""
 
 # Memory Configuration
-echo -e "${INFO_ICON} ================= Memory (RAM) =================="
+echo -e "================= Memory (RAM) =================="
 total_mem_kb=$(grep "MemTotal" /proc/meminfo | awk -F: '{print $2}' | sed 's/ kB//;s/^ *//')
 total_mem_gb=$(echo "scale=2; $total_mem_kb / 1024 / 1024" | bc)
 echo "Total Memory (RAM): ${total_mem_gb} GB"
@@ -97,7 +90,7 @@ echo "Free Memory (RAM): ${free_mem_gb} GB"
 echo ""
 
 # Disk Configuration
-echo -e "${INFO_ICON} ================= Disk =================="
+echo -e "================= Disk =================="
 df -h / | awk 'NR==2{print "Total: "$2", Used: "$3", Available: "$4}'
 echo ""
 
@@ -105,16 +98,16 @@ echo ""
 # Network Speed (using speedtest-cli)
 # ==================================================================
 
-echo -e "${INFO_ICON} ================= Network =================="
+echo -e "================= Network =================="
 echo -e "${INFO_ICON} Testing network speed (using speedtest-cli)..."
 speedtest-cli --simple 2>&1 > /dev/null  # Redirect stderr and stdout
 
 if [ $? -ne 0 ]; then
-  echo -e "${RED}${ERROR_ICON} Network speed test failed. Please check your connection or speedtest-cli installation.${NC}"
+  echo -e "${ERROR_ICON} Network speed test failed. Please check your connection or speedtest-cli installation."
 else
   # Get results from the first line of speedtest-cli --simple
   speedtest_results=$(speedtest-cli --simple)
-  echo -e "${GREEN}${SUCCESS_ICON} Speedtest Results: ${speedtest_results}${NC}"
+  echo -e "${SUCCESS_ICON} Speedtest Results: ${speedtest_results}"
 fi
 
 echo ""
@@ -123,7 +116,7 @@ echo ""
 # NAT Check and IP Address Display
 # ==================================================================
 
-echo -e "${INFO_ICON} ================= IP Address and NAT =================="
+echo -e "================= IP Address and NAT =================="
 
 # Get IPv4 address (always use the API as a last resort and get a single address)
 ipv4=$(curl -s https://api.ipify.org | head -n 1)
@@ -191,7 +184,7 @@ echo "NAT Type: $nat_status"
 # Nested Virtualization Check
 # ==================================================================
 
-echo -e "${INFO_ICON} ================= Nested Virtualization Check =================="
+echo -e "================= Nested Virtualization Check =================="
 
 # Check CPU support (Intel or AMD)
 if grep -E '(vmx|svm)' /proc/cpuinfo > /dev/null; then
@@ -215,9 +208,9 @@ if grep -E '(vmx|svm)' /proc/cpuinfo > /dev/null; then
     if [[ -n "$NESTED_FILE" ]]; then
       NESTED_ENABLED=$(cat "$NESTED_FILE")
       if [[ "$NESTED_ENABLED" == "Y" ]]; then
-        echo "${GREEN}${SUCCESS_ICON} Nested virtualization is enabled.${NC}"
+        echo "${SUCCESS_ICON} Nested virtualization is enabled."
       else
-        echo "${YELLOW}${WARNING_ICON} Nested virtualization is not enabled.${NC}"
+        echo "${WARNING_ICON} Nested virtualization is not enabled."
       fi
     else
       echo "${WARNING_ICON} Nested virtualization parameter file not found. KVM may not be properly installed."
@@ -228,7 +221,7 @@ if grep -E '(vmx|svm)' /proc/cpuinfo > /dev/null; then
   fi
 else
   CPU_SUPPORT="false"
-  echo "${RED}${ERROR_ICON} CPU does NOT support virtualization. Nested virtualization is not possible.${NC}"
+  echo "${ERROR_ICON} CPU does NOT support virtualization. Nested virtualization is not possible."
 fi
 
-echo "${INFO_ICON} Check complete."
+echo "${SUCCESS_ICON} Check complete."
