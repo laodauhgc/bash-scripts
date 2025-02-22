@@ -18,7 +18,7 @@ command_exists() {
 # Hàm lấy giá trị từ mảng ngôn ngữ
 get_text() {
   local key="$1"
-  echo "${TEXTS[$key]}"
+  echo "${!TEXTS[$key]}"
 }
 
 # ==================================================================
@@ -254,7 +254,6 @@ declare -A TEXTS_CN=(
 # ==================================================================
 # Chọn ngôn ngữ
 # ==================================================================
-
 case "$LANGUAGE" in
   "vi")
     TEXTS=TEXTS_VI
@@ -297,17 +296,17 @@ command_exists nft || echo "nft không được cài đặt"
 # ==================================================================
 
 if ! command_exists speedtest-cli; then
-  echo "================= ${TEXTS[INSTALL_SPEEDTEST_HEADER]} =================="
-  echo "${TEXTS[INSTALLING_SPEEDTEST]}"
+  echo "================= $(get_text INSTALL_SPEEDTEST_HEADER) =================="
+  echo "$(get_text INSTALLING_SPEEDTEST)"
 
   # Cố gắng cài đặt bằng pip3
   if command_exists pip3; then
-    sudo pip3 install speedtest-cli || error_exit "${TEXTS[INSTALL_SPEEDTEST_PIP_FAILED]}"
+    sudo pip3 install speedtest-cli || error_exit "$(get_text INSTALL_SPEEDTEST_PIP_FAILED)"
   else
     echo "pip3 không được tìm thấy. Cố gắng cài đặt pip3..."
     # Cố gắng cài đặt pip3 (ví dụ cho Debian/Ubuntu)
-    sudo apt-get update && sudo apt-get install -y python3-pip || error_exit "${TEXTS[INSTALL_PIP_FAILED]}"
-    sudo pip3 install speedtest-cli || error_exit "${TEXTS[INSTALL_SPEEDTEST_AFTER_PIP_FAILED]}"
+    sudo apt-get update && sudo apt-get install -y python3-pip || error_exit "$(get_text INSTALL_PIP_FAILED)"
+    sudo pip3 install speedtest-cli || error_exit "$(get_text INSTALL_SPEEDTEST_AFTER_PIP_FAILED)"
   fi
   echo ""
 fi
@@ -318,7 +317,7 @@ echo "Đã hoàn thành phần cài đặt speedtest-cli" # Ghi nhật ký
 # Cấu hình hệ thống
 # ==================================================================
 
-echo "================= ${TEXTS[SYSTEM_HEADER]} =================="
+echo "================= $(get_text SYSTEM_HEADER) =================="
 echo "$(get_text HOSTNAME): $(hostname)"
 echo "$(get_text CURRENT_TIME): $(date)"
 echo "$(get_text KERNEL): $(uname -r)"
@@ -326,7 +325,7 @@ echo "$(get_text UPTIME): $(uptime -p)"
 echo ""
 
 # Hệ điều hành
-echo "================= ${TEXTS[OS_HEADER]} =================="
+echo "================= $(get_text OS_HEADER) =================="
 os_name=$(lsb_release -d | awk -F: '{print $2}' | sed 's/^ *//;s/ *$//')
 if [ -z "$os_name" ]; then
   echo "$(get_text OS_UNKNOWN)"
@@ -419,7 +418,7 @@ check_nat() {
   config_output=$(eval "$NAT_CONFIG_CMD")
 
   # Check if the nat table is present at all (no NAT at all)
-  if ! echo "$config_output" | grep -q "table ip nat"; then
+  if not echo "$config_output" | grep -q "table ip nat"; then
       echo "No NAT"
       return
   fi
