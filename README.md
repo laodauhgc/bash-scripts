@@ -10,5 +10,5 @@ curl -s https://raw.githubusercontent.com/laodauhgc/bash-scripts/refs/heads/main
 ```
 **Titan Agent Install**
 ```
-curl -O https://raw.githubusercontent.com/laodauhgc/bash-scripts/refs/heads/main/titan-network/agent.sh && chmod u+x main.sh && ./main.sh --key=your_key_here --ver=vi
+curl -O https://raw.githubusercontent.com/laodauhgc/bash-scripts/refs/heads/main/titan-network/agent.sh && chmod u+x agent.sh && ./agent.sh --key=your_key_here --ver=vi
 ```
