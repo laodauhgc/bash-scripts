@@ -139,3 +139,33 @@ check_command "sudo systemctl status titanagent"
 echo "Titan Agent has been installed and started as a systemd service."
 
 echo "Installation and running of Titan Agent is completed."
+
+# Chờ khởi tạo VN
+sleep 1800
+
+# Tên của máy ảo Multipass
+VM_NAME="ubuntu-pedge"
+
+# Lấy địa chỉ IP riêng của máy ảo
+VM_IP=$(multipass exec "$VM_NAME" -- bash -c "ip addr show eth0 | grep 'inet ' | awk '{print \$2}' | cut -d'/' -f1")
+
+if [ -z "$VM_IP" ]; then
+  echo "Không thể lấy được địa chỉ IP của máy ảo '$VM_NAME'. Đảm bảo máy ảo đang chạy."
+  exit 1
+fi
+
+# Chuyển tiếp tất cả các cổng TCP và UDP đến máy ảo
+echo "Chuyển tiếp tất cả các cổng TCP và UDP đến máy ảo '$VM_NAME' ($VM_IP)..."
+
+for port in {1..65535}; do
+  sudo iptables -t nat -A PREROUTING -p tcp --dport "$port" -j DNAT --to-destination "$VM_IP":"$port"
+  sudo iptables -t nat -A PREROUTING -p udp --dport "$port" -j DNAT --to-destination "$VM_IP":"$port"
+  sudo iptables -A FORWARD -p tcp -d "$VM_IP" --dport "$port" -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT
+  sudo iptables -A FORWARD -p udp -d "$VM_IP" --dport "$port" -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT
+done
+
+sudo iptables -t nat -A POSTROUTING -j MASQUERADE
+
+echo "Đã chuyển tiếp tất cả các cổng TCP và UDP đến máy ảo '$VM_NAME'."
+
+
