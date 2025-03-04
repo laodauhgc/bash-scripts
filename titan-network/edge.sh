@@ -38,6 +38,11 @@ storage_gb=50
 start_port=1235
 container_count=$node_count
 
+# Disable ipv6 - Temp
+sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1
+sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1
+sudo sysctl -w net.ipv6.conf.lo.disable_ipv6=1
+
 # Get the list of public IPs
 public_ips=$(curl -s ifconfig.me)
 
