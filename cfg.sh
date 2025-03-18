@@ -1,39 +1,64 @@
 #!/bin/bash
+
+# Định nghĩa các biểu tượng và màu sắc
 INFO_ICON="ℹ️" # Information
 SUCCESS_ICON="✅" # Success
-ERROR_ICON="❌" # Error
 WARNING_ICON="⚠️" # Warning
+ERROR_ICON="❌" # Error
 
-# ==================================================================
-# Helper Functions
-# ==================================================================
-
-# Function to print an error message and exit
+# Hàm trợ giúp
 error_exit() {
   echo -e "${ERROR_ICON} Error: $1" >&2
   exit 1
 }
 
-# Function to check if a command exists
 command_exists() {
   command -v "$1" &> /dev/null
 }
 
-# ==================================================================
-# Install speedtest-cli (if it doesn't exist)
-# ==================================================================
+# Tùy chọn người dùng
+SHOW_ALL=1
+INTERACTIVE=0
+SAVE_RESULTS=0
+RESULTS_FILE="system_info_$(date +'%Y%m%d_%H%M%S').txt"
 
+# Parse các tùy chọn
+while getopts "hias" opt; do
+  case $opt in
+    h)
+      echo "Usage: $0 [options]"
+      echo "Options:"
+      echo "  -h  Show this help message"
+      echo "  -i  Interactive mode"
+      echo "  -a  Show all information"
+      echo "  -s  Save results to file"
+      exit 0
+      ;;
+    i)
+      INTERACTIVE=1
+      ;;
+    a)
+      SHOW_ALL=1
+      ;;
+    s)
+      SAVE_RESULTS=1
+      ;;
+    *)
+      error_exit "Invalid option: $OPTARG"
+      ;;
+  esac
+done
+
+# Kiểm tra và cài đặt speedtest-cli
 if ! command_exists speedtest-cli; then
   echo -e "================= Checking and Installing speedtest-cli =================="
   echo -e "${INFO_ICON} speedtest-cli is not installed. Installing..."
 
-  # Attempt to install using pip3
   if command_exists pip3; then
     sudo pip3 install speedtest-cli || error_exit "Failed to install speedtest-cli using pip3."
     echo -e "${SUCCESS_ICON} speedtest-cli installed successfully using pip3."
   else
     echo -e "${WARNING_ICON} pip3 not found. Attempting to install pip3..."
-    # Attempt to install pip3 (e.g., for Debian/Ubuntu)
     sudo apt-get update && sudo apt-get install -y python3-pip || error_exit "Failed to install pip3. Please install pip3 manually and try again."
     sudo pip3 install speedtest-cli || error_exit "Failed to install speedtest-cli using pip3 after installing pip3."
     echo -e "${SUCCESS_ICON} pip3 and speedtest-cli installed successfully."
@@ -41,18 +66,26 @@ if ! command_exists speedtest-cli; then
   echo ""
 fi
 
-# ==================================================================
-# System Configuration
-# ==================================================================
+# Chế độ tương tác
+if [ $INTERACTIVE -eq 1 ]; then
+  echo -e "Welcome! You are in interactive mode."
+  read -p "Do you want to continue? (y/n): " -n 1 -r
+  echo ""
+  if [[ $REPLY =~ ^[Nn]$ ]]; then
+    echo "Goodbye!"
+    exit 0
+  fi
+fi
 
-echo -e "================= System =================="
+# Hiển thị thông tin hệ thống
+echo -e "================= System Information =================="
 echo "Hostname: $(hostname)"
 echo "Current time: $(date)"
 echo "Kernel: $(uname -r)"
 echo "Uptime: $(uptime -p)"
 echo ""
 
-# Operating System
+# Hiển thị thông tin hệ điều hành
 echo -e "================= Operating System =================="
 os_name=$(lsb_release -d | awk -F: '{print $2}' | sed 's/^ *//;s/ *$//')
 if [ -z "$os_name" ]; then
@@ -66,61 +99,50 @@ else
 fi
 echo ""
 
-# CPU Configuration
-echo -e "================= CPU =================="
+# Hiển thị thông tin CPU
+echo -e "================= CPU Information =================="
 echo "Model: $(grep "model name" /proc/cpuinfo | head -n 1 | awk -F: '{print $2}' | sed 's/^ *//;s/ *$//')"
 echo "Number of cores: $(nproc)"
 echo ""
 
-# Memory Configuration
-echo -e "================= Memory (RAM) =================="
+# Hiển thị thông tin bộ nhớ
+echo -e "================= Memory Information =================="
 total_mem_kb=$(grep "MemTotal" /proc/meminfo | awk -F: '{print $2}' | sed 's/ kB//;s/^ *//')
 total_mem_gb=$(echo "scale=2; $total_mem_kb / 1024 / 1024" | bc)
 echo "Total Memory (RAM): ${total_mem_gb} GB"
 
-# Get Free RAM (Try multiple methods)
-free_mem_gb=$(free -g | awk 'NR==2 {print $4}')  # Try getting from free -g (GB) first
-
-if [[ "$free_mem_gb" == "" || "$free_mem_gb" == "0" ]]; then  # If unsuccessful, try free -m (MB)
-  free_mem_mb=$(free -m | awk 'NR==2 {print $7}') # Get "available"
+free_mem_gb=$(free -g | awk 'NR==2 {print $4}') 
+if [[ "$free_mem_gb" == "" || "$free_mem_gb" == "0" ]]; then
+  free_mem_mb=$(free -m | awk 'NR==2 {print $7}') 
   free_mem_gb=$(echo "scale=2; $free_mem_mb / 1024" | bc)
 fi
 
 echo "Free Memory (RAM): ${free_mem_gb} GB"
 echo ""
 
-# Disk Configuration
-echo -e "================= Disk =================="
+# Hiển thị thông tin đĩa
+echo -e "================= Disk Information =================="
 df -h / | awk 'NR==2{print "Total: "$2", Used: "$3", Available: "$4}'
 echo ""
 
-# ==================================================================
-# Network Speed (using speedtest-cli)
-# ==================================================================
-
-echo -e "================= Network =================="
+# Kiểm tra tốc độ mạng
+echo -e "================= Network Information =================="
 echo -e "${INFO_ICON} Testing network speed (using speedtest-cli)..."
-speedtest-cli --simple 2>&1 > /dev/null  # Redirect stderr and stdout
+speedtest-cli --simple 2>&1 > /dev/null
 
 if [ $? -ne 0 ]; then
   echo -e "${ERROR_ICON} Network speed test failed. Please check your connection or speedtest-cli installation."
 else
-  # Get results from the first line of speedtest-cli --simple
   speedtest_results=$(speedtest-cli --simple)
   echo -e "${SUCCESS_ICON} Speedtest Results: ${speedtest_results}"
 fi
 
 echo ""
 
-# ==================================================================
-# NAT Check and IP Address Display
-# ==================================================================
-
+# Kiểm tra địa chỉ IP và NAT
 echo -e "================= IP Address and NAT =================="
 
-# Get IPv4 address (always use the API as a last resort and get a single address)
 ipv4=$(curl -s https://api.ipify.org | head -n 1)
-
 if [ -n "$ipv4" ] && [[ "$ipv4" != "127.0.0.1" ]]; then
   echo "IPv4 Address: $ipv4"
 else
@@ -128,8 +150,7 @@ else
   ipv4="None"
 fi
 
-# Get IPv6 address (if available)
-ipv6=$(ip -6 addr | grep global | awk '{print $2}' | cut -d'/' -f1 | head -n 1) # Only get the first line
+ipv6=$(ip -6 addr | grep global | awk '{print $2}' | cut -d'/' -f1 | head -n 1)
 if [ -n "$ipv6" ]; then
   echo "IPv6 Address: $ipv6"
 else
@@ -137,7 +158,6 @@ else
   ipv6="None"
 fi
 
-# Check NAT using iptables/nftables
 check_nat() {
   local config_output
   if command_exists nft; then
@@ -149,54 +169,45 @@ check_nat() {
   fi
   config_output=$(eval "$NAT_CONFIG_CMD")
 
-  # Check if the nat table is present at all (no NAT at all)
   if ! echo "$config_output" | grep -q "table ip nat"; then
-      echo "No NAT"
-      return
+    echo "No NAT"
+    return
   fi
 
-  # Check for NAT type 1 (Masquerade) - SNAT for a whole network on one interface on POSTROUTING chain
-  if echo "$config_output" | grep -q "chain postrouting" &&  echo "$config_output" | grep -q 'masquerade'; then
-      echo "NAT1"
-      return
+  if echo "$config_output" | grep -q "chain postrouting" && echo "$config_output" | grep -q 'masquerade'; then
+    echo "NAT1"
+    return
   fi
 
-  # Check for NAT type 2 (SNAT with specific IP) on POSTROUTING chain
   if echo "$config_output" | grep -q "chain postrouting" && echo "$config_output" | grep -q 'snat to'; then
-      echo "NAT2"
-      return
-   fi
-
-  # Check for NAT type 3 (DNAT) on PREROUTING chain
-  if echo "$config_output" | grep -q "chain prerouting" && echo "$config_output" | grep -q 'dnat to'; then
-       echo "NAT3"
-       return
+    echo "NAT2"
+    return
   fi
 
-  # If none of the above rules matched - still output "No NAT" because no common NAT rule found.
+  if echo "$config_output" | grep -q "chain prerouting" && echo "$config_output" | grep -q 'dnat to'; then
+    echo "NAT3"
+    return
+  fi
+
   echo "No NAT"
 }
 
 nat_status=$(check_nat)
 echo "NAT Type: $nat_status"
 
-# ==================================================================
-# Nested Virtualization Check
-# ==================================================================
+echo ""
 
+# Kiểm tra ảo hóa lồng nhau
 echo -e "================= Nested Virtualization Check =================="
 
-# Check CPU support (Intel or AMD)
 if grep -E '(vmx|svm)' /proc/cpuinfo > /dev/null; then
   CPU_SUPPORT="true"
   echo "${INFO_ICON} CPU supports virtualization (VT-x or AMD-V)."
 
-  # Check KVM modules
   if lsmod | grep kvm > /dev/null; then
     KVM_INSTALLED="true"
     echo "${INFO_ICON} KVM modules are loaded."
 
-    # Check nested virtualization
     if [[ -f /sys/module/kvm_intel/parameters/nested ]]; then
       NESTED_FILE="/sys/module/kvm_intel/parameters/nested"
       KVM_MODULE="kvm_intel"
@@ -224,4 +235,39 @@ else
   echo "${ERROR_ICON} CPU does NOT support virtualization. Nested virtualization is not possible."
 fi
 
-echo "${SUCCESS_ICON} Check complete."
+echo ""
+
+# Lưu kết quả
+if [ $SAVE_RESULTS -eq 1 ]; then
+  echo -e "${INFO_ICON} Saving results to $RESULTS_FILE..."
+  echo "System Information:" > "$RESULTS_FILE"
+  echo "Hostname: $(hostname)" >> "$RESULTS_FILE"
+  echo "Current time: $(date)" >> "$RESULTS_FILE"
+  echo "Kernel: $(uname -r)" >> "$RESULTS_FILE"
+  echo "Uptime: $(uptime -p)" >> "$RESULTS_FILE"
+  echo "" >> "$RESULTS_FILE"
+  echo "Operating System: $os_name" >> "$RESULTS_FILE"
+  echo "" >> "$RESULTS_FILE"
+  echo "CPU Model: $(grep "model name" /proc/cpuinfo | head -n 1 | awk -F: '{print $2}' | sed 's/^ *//;s/ *$//')" >> "$RESULTS_FILE"
+  echo "Number of cores: $(nproc)" >> "$RESULTS_FILE"
+  echo "" >> "$RESULTS_FILE"
+  echo "Total Memory (RAM): ${total_mem_gb} GB" >> "$RESULTS_FILE"
+  echo "Free Memory (RAM): ${free_mem_gb} GB" >> "$RESULTS_FILE"
+  echo "" >> "$RESULTS_FILE"
+  echo "Disk Usage:" >> "$RESULTS_FILE"
+  df -h / | awk 'NR==2{print "Total: "$2", Used: "$3", Available: "$4}' >> "$RESULTS_FILE"
+  echo "" >> "$RESULTS_FILE"
+  echo "Network Speedtest Results: ${speedtest_results}" >> "$RESULTS_FILE"
+  echo "" >> "$RESULTS_FILE"
+  echo "IPv4 Address: $ipv4" >> "$RESULTS_FILE"
+  echo "IPv6 Address: $ipv6" >> "$RESULTS_FILE"
+  echo "NAT Type: $nat_status" >> "$RESULTS_FILE"
+  echo "" >> "$RESULTS_FILE"
+  echo "Nested Virtualization Support: $CPU_SUPPORT" >> "$RESULTS_FILE"
+  if [ "$CPU_SUPPORT" == "true" ]; then
+    echo "Nested Virtualization Enabled: $(if [[ "$NESTED_ENABLED" == "Y" ]]; then echo "Yes"; else echo "No"; fi)" >> "$RESULTS_FILE"
+  fi
+  echo -e "${SUCCESS_ICON} Results saved to $RESULTS_FILE."
+fi
+
+echo -e "\n${SUCCESS_ICON} Check complete."
