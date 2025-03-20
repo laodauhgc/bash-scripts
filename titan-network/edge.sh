@@ -4,6 +4,7 @@
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Check if the script is run as root
@@ -91,7 +92,7 @@ fi
 IMAGE_NAME="nezha123/titan-edge"
 STORAGE_GB=50
 START_PORT=1235
-CONTAINER_COUNT=$node_count
+TOTAL_NODES=$node_count  # Renamed for clarity
 TITAN_EDGE_DIR="/root/titan-edge"
 BIND_URL="https://api-test1.container1.titannet.io/api/v2/device/binding"
 
@@ -188,19 +189,73 @@ check_container_ready() {
     return 1
 }
 
-# Loop through container count
-for ((i=1; i<=$CONTAINER_COUNT; i++)); do
+# Check existing nodes and determine which ones need to be created
+existing_nodes=()
+for ((i=1; i<=5; i++)); do
+    container_name="titan-edge-0${i}"
+    if docker ps -a --format '{{.Names}}' | grep -q "^$container_name$"; then
+        container_status=$(docker inspect -f '{{.State.Status}}' "$container_name" 2>/dev/null)
+        if [[ "$container_status" == "running" ]]; then
+            existing_nodes+=($i)
+            echo -e "${BLUE}INFO: Node ${container_name} already exists and is running.${NC}"
+        fi
+    fi
+done
+
+existing_count=${#existing_nodes[@]}
+nodes_to_create=$((TOTAL_NODES - existing_count))
+
+if [[ $nodes_to_create -le 0 ]]; then
+    echo -e "${GREEN}✓ You already have $existing_count nodes running, which meets or exceeds your requested count of $TOTAL_NODES.${NC}"
+    echo -e "${GREEN}✓ No new nodes will be created.${NC}"
+    
+    # List existing nodes
+    echo -e "${YELLOW}Existing nodes:${NC}"
+    for index in "${existing_nodes[@]}"; do
+        echo -e "  - titan-edge-0${index}"
+    done
+    
+    exit 0
+fi
+
+echo -e "${BLUE}INFO: Found $existing_count existing nodes. Will create $nodes_to_create additional nodes to reach a total of $TOTAL_NODES.${NC}"
+
+# Find the next available node number
+next_node=1
+for ((next_node=1; next_node<=5; next_node++)); do
+    found=0
+    for existing in "${existing_nodes[@]}"; do
+        if [[ "$existing" -eq "$next_node" ]]; then
+            found=1
+            break
+        fi
+    done
+    if [[ "$found" -eq 0 ]]; then
+        break
+    fi
+done
+
+# Create the additional nodes
+created_count=0
+while [[ $created_count -lt $nodes_to_create && $next_node -le 5 ]]; do
     # Define storage path, container name and current port
-    STORAGE_PATH="$TITAN_EDGE_DIR/titan-edge-0${i}"
-    CONTAINER_NAME="titan-edge-0${i}"
-    CURRENT_PORT=$((START_PORT + i - 1))
+    STORAGE_PATH="$TITAN_EDGE_DIR/titan-edge-0${next_node}"
+    CONTAINER_NAME="titan-edge-0${next_node}"
+    CURRENT_PORT=$((START_PORT + next_node - 1))
 
     echo -e "${GREEN}Setting up node ${CONTAINER_NAME} on port ${CURRENT_PORT}...${NC}"
 
-    # Clean up if container already exists
+    # Clean up if container already exists but is not running
     if docker ps -a --format '{{.Names}}' | grep -q "^$CONTAINER_NAME$"; then
-        echo -e "${YELLOW}Container ${CONTAINER_NAME} already exists. Removing it...${NC}"
-        docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1
+        container_status=$(docker inspect -f '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null)
+        if [[ "$container_status" != "running" ]]; then
+            echo -e "${YELLOW}Container ${CONTAINER_NAME} exists but is not running. Removing it...${NC}"
+            docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1
+        else
+            echo -e "${YELLOW}Container ${CONTAINER_NAME} already exists and is running. Skipping...${NC}"
+            next_node=$((next_node + 1))
+            continue
+        fi
     fi
 
     # Ensure storage path exists with proper permissions
@@ -211,12 +266,13 @@ for ((i=1; i<=$CONTAINER_COUNT; i++)); do
         exit 1
     fi
 
-    # Run the container with daemon start
+    # Run the container - open both TCP and UDP ports
     echo -e "${YELLOW}Starting container ${CONTAINER_NAME}...${NC}"
     docker run -d \
         --name "$CONTAINER_NAME" \
         -v "$STORAGE_PATH/.titanedge:/root/.titanedge" \
-        -p "$CURRENT_PORT:$CURRENT_PORT" \
+        -p "$CURRENT_PORT:$CURRENT_PORT/tcp" \
+        -p "$CURRENT_PORT:$CURRENT_PORT/udp" \
         --restart always \
         "$IMAGE_NAME"
 
@@ -225,16 +281,9 @@ for ((i=1; i<=$CONTAINER_COUNT; i++)); do
         exit 1
     fi
     
-    # Start the daemon
-    echo -e "${YELLOW}Starting daemon in ${CONTAINER_NAME}...${NC}"
-    docker exec "$CONTAINER_NAME" titan-edge daemon start --url https://cassini-locator.titannet.io:5000/rpc/v0
-    if [[ $? -ne 0 ]]; then
-        echo -e "${RED}Failed to start daemon in ${CONTAINER_NAME}.${NC}"
-        docker logs "$CONTAINER_NAME"
-        exit 1
-    fi
-
     # Wait for container to be ready and config.toml to be generated
+    # No need to start daemon manually as it's already running in the container
+    echo -e "${YELLOW}Waiting for daemon to initialize in ${CONTAINER_NAME}...${NC}"
     check_container_ready "$CONTAINER_NAME"
     if [[ $? -ne 0 ]]; then
         echo -e "${RED}Failed to confirm container ${CONTAINER_NAME} is ready. Stopping script.${NC}"
@@ -275,9 +324,13 @@ for ((i=1; i<=$CONTAINER_COUNT; i++)); do
     fi
 
     echo -e "${GREEN}✓ Node ${CONTAINER_NAME} has been successfully initialized.${NC}"
+    
+    created_count=$((created_count + 1))
+    next_node=$((next_node + 1))
 done
 
-echo -e "${GREEN}🚀 All nodes are up and running!${NC}"
+total_active_nodes=$((existing_count + created_count))
+echo -e "${GREEN}🚀 All done! You now have ${total_active_nodes} Titan Edge nodes running.${NC}"
 
 # Display instructions for checking node status
 echo -e "${YELLOW}To check the status of your nodes, run:${NC}"
