@@ -14,6 +14,44 @@ if [[ "$(id -u)" -ne "0" ]]; then
     exit 1
 fi
 
+# Increase UDP buffer sizes for better performance
+increase_udp_buffers() {
+    echo -e "${YELLOW}Increasing UDP buffer sizes for better performance...${NC}"
+    
+    # Current values
+    echo -e "${BLUE}Current UDP buffer values:${NC}"
+    echo "net.core.rmem_max: $(sysctl -n net.core.rmem_max)"
+    echo "net.core.wmem_max: $(sysctl -n net.core.wmem_max)"
+    
+    # Increase UDP buffer sizes
+    sysctl -w net.core.rmem_max=2500000 > /dev/null
+    sysctl -w net.core.wmem_max=2500000 > /dev/null
+    
+    # Make changes persistent
+    if ! grep -q "net.core.rmem_max" /etc/sysctl.conf; then
+        echo "net.core.rmem_max=2500000" >> /etc/sysctl.conf
+    else
+        sed -i 's/net.core.rmem_max=[0-9]*/net.core.rmem_max=2500000/' /etc/sysctl.conf
+    fi
+    
+    if ! grep -q "net.core.wmem_max" /etc/sysctl.conf; then
+        echo "net.core.wmem_max=2500000" >> /etc/sysctl.conf
+    else
+        sed -i 's/net.core.wmem_max=[0-9]*/net.core.wmem_max=2500000/' /etc/sysctl.conf
+    fi
+    
+    # New values
+    echo -e "${BLUE}New UDP buffer values:${NC}"
+    echo "net.core.rmem_max: $(sysctl -n net.core.rmem_max)"
+    echo "net.core.wmem_max: $(sysctl -n net.core.wmem_max)"
+    
+    echo -e "${GREEN}✓ UDP buffer sizes increased.${NC}"
+}
+
+# Apply UDP buffer size increase
+increase_udp_buffers
+
+
 # Check for remove parameter
 if [[ "$1" == "rm" || "$1" == "remove" || "$1" == "-rm" || "$1" == "--rm" ]]; then
     echo -e "${YELLOW}⚠️ Removing all Titan Edge containers, volumes and directories...${NC}"
