@@ -13,6 +13,58 @@ if [[ "$(id -u)" -ne "0" ]]; then
     exit 1
 fi
 
+# Check for remove parameter
+if [[ "$1" == "rm" || "$1" == "remove" || "$1" == "-rm" || "$1" == "--rm" ]]; then
+    echo -e "${YELLOW}⚠️ Removing all Titan Edge containers, volumes and directories...${NC}"
+    
+    # Stop and remove all titan-edge containers
+    echo -e "${YELLOW}Stopping and removing containers...${NC}"
+    titan_containers=$(docker ps -a --filter "name=titan-edge" --format "{{.Names}}")
+    
+    if [[ -n "$titan_containers" ]]; then
+        for container in $titan_containers; do
+            echo -e "Removing container ${container}..."
+            docker stop "$container" >/dev/null 2>&1
+            docker rm -f "$container" >/dev/null 2>&1
+        done
+        echo -e "${GREEN}✓ All Titan Edge containers removed.${NC}"
+    else
+        echo -e "${YELLOW}No Titan Edge containers found.${NC}"
+    fi
+    
+    # Remove the titan-edge directories
+    echo -e "${YELLOW}Removing Titan Edge directories...${NC}"
+    if [[ -d "/root/titan-edge" ]]; then
+        rm -rf /root/titan-edge
+        echo -e "${GREEN}✓ Directory /root/titan-edge removed.${NC}"
+    else
+        echo -e "${YELLOW}Directory /root/titan-edge not found.${NC}"
+    fi
+    
+    # Check and remove any other titan edge related directories
+    if [[ -d "/root/.titanedge" ]]; then
+        rm -rf /root/.titanedge
+        echo -e "${GREEN}✓ Directory /root/.titanedge removed.${NC}"
+    fi
+    
+    # Remove titan-related docker volumes (if any)
+    echo -e "${YELLOW}Checking for Titan Edge related Docker volumes...${NC}"
+    titan_volumes=$(docker volume ls --filter "name=titan" --format "{{.Name}}" 2>/dev/null)
+    
+    if [[ -n "$titan_volumes" ]]; then
+        for volume in $titan_volumes; do
+            echo -e "Removing volume ${volume}..."
+            docker volume rm "$volume" >/dev/null 2>&1
+        done
+        echo -e "${GREEN}✓ All Titan Edge volumes removed.${NC}"
+    else
+        echo -e "${YELLOW}No Titan Edge volumes found.${NC}"
+    fi
+    
+    echo -e "${GREEN}🧹 Cleanup complete! All Titan Edge resources have been removed.${NC}"
+    exit 0
+fi
+
 # Get hash value from command line argument
 hash_value="${1:-}"
 
@@ -22,6 +74,9 @@ node_count="${2:-5}"
 # Check if hash_value is empty
 if [[ -z "$hash_value" ]]; then
     echo -e "${YELLOW}No hash value provided via command line. Please provide a hash value when running this script. ${NC}"
+    echo -e "${YELLOW}Or use 'rm' parameter to remove all Titan Edge containers and directories. ${NC}"
+    echo -e "${YELLOW}Usage: $0 <hash_value> [node_count]${NC}"
+    echo -e "${YELLOW}       $0 rm${NC}"
     exit 1
 fi
 
@@ -93,27 +148,43 @@ if [[ $? -ne 0 ]]; then
     exit 1
 fi
 
-# Function to check if container is ready by testing its port
+# Function to check if container is ready
 check_container_ready() {
     local container_name=$1
-    local port=$2
     local max_attempts=30
     local wait_seconds=2
     
     echo -e "${YELLOW}Waiting for container ${container_name} to be ready...${NC}"
     
     for ((i=1; i<=max_attempts; i++)); do
-        # Check if the process is running and listening on the port
-        if docker exec "$container_name" bash -c "ss -tulnp | grep -q :$port"; then
-            echo -e "${GREEN}✓ Container ${container_name} is ready!${NC}"
-            return 0
+        # Check container status
+        status=$(docker inspect -f '{{.State.Status}}' "$container_name" 2>/dev/null)
+        
+        if [[ "$status" == "running" ]]; then
+            # Check if config.toml exists
+            if docker exec "$container_name" test -f /root/.titanedge/config.toml; then
+                echo -e "${GREEN}✓ Container ${container_name} is ready with config.toml!${NC}"
+                return 0
+            else
+                echo -e "${YELLOW}Container ${container_name} is running but config.toml not found yet... Attempt $i/$max_attempts${NC}"
+            fi
+        elif [[ "$status" == "restarting" ]]; then
+            echo -e "${YELLOW}Container ${container_name} is restarting... Attempt $i/$max_attempts${NC}"
+            
+            # Show logs if container is restarting and we've waited a while
+            if [[ $i -eq 10 ]]; then
+                echo -e "${RED}Container is restarting. Showing logs:${NC}"
+                docker logs "$container_name"
+            fi
+        else
+            echo -e "${YELLOW}Container ${container_name} status: $status ... Attempt $i/$max_attempts${NC}"
         fi
         
-        echo -e "${YELLOW}Waiting for container to be ready... Attempt $i/$max_attempts${NC}"
         sleep $wait_seconds
     done
     
     echo -e "${RED}Container ${container_name} failed to become ready after $((max_attempts * wait_seconds)) seconds.${NC}"
+    docker logs "$container_name"
     return 1
 }
 
@@ -126,33 +197,73 @@ for ((i=1; i<=$CONTAINER_COUNT; i++)); do
 
     echo -e "${GREEN}Setting up node ${CONTAINER_NAME} on port ${CURRENT_PORT}...${NC}"
 
-    # Ensure storage path exists
+    # Clean up if container already exists
+    if docker ps -a --format '{{.Names}}' | grep -q "^$CONTAINER_NAME$"; then
+        echo -e "${YELLOW}Container ${CONTAINER_NAME} already exists. Removing it...${NC}"
+        docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1
+    fi
+
+    # Ensure storage path exists with proper permissions
     mkdir -p "$STORAGE_PATH/.titanedge"
+    chmod -R 777 "$STORAGE_PATH/.titanedge"
     if [[ $? -ne 0 ]]; then
         echo -e "${RED}Failed to create storage path for container ${CONTAINER_NAME}.${NC}"
         exit 1
     fi
 
-    # Run the container
+    # Run the container with daemon start
+    echo -e "${YELLOW}Starting container ${CONTAINER_NAME}...${NC}"
     docker run -d \
         --name "$CONTAINER_NAME" \
         -v "$STORAGE_PATH/.titanedge:/root/.titanedge" \
         -p "$CURRENT_PORT:$CURRENT_PORT" \
         --restart always \
-        "$IMAGE_NAME" \
-        daemon start --listen-address="0.0.0.0:$CURRENT_PORT" --url https://cassini-locator.titannet.io:5000/rpc/v0
+        "$IMAGE_NAME"
 
     if [[ $? -ne 0 ]]; then
         echo -e "${RED}Failed to start container ${CONTAINER_NAME}.${NC}"
         exit 1
     fi
-
-    echo -e "${GREEN}Container ${CONTAINER_NAME} is starting...${NC}"
-
-    # Check if the container is ready before binding
-    check_container_ready "$CONTAINER_NAME" "$CURRENT_PORT"
+    
+    # Start the daemon
+    echo -e "${YELLOW}Starting daemon in ${CONTAINER_NAME}...${NC}"
+    docker exec "$CONTAINER_NAME" titan-edge daemon start --url https://cassini-locator.titannet.io:5000/rpc/v0
     if [[ $? -ne 0 ]]; then
-        echo -e "${RED}Failed to confirm container ${CONTAINER_NAME} is ready. Continuing anyway...${NC}"
+        echo -e "${RED}Failed to start daemon in ${CONTAINER_NAME}.${NC}"
+        docker logs "$CONTAINER_NAME"
+        exit 1
+    fi
+
+    # Wait for container to be ready and config.toml to be generated
+    check_container_ready "$CONTAINER_NAME"
+    if [[ $? -ne 0 ]]; then
+        echo -e "${RED}Failed to confirm container ${CONTAINER_NAME} is ready. Stopping script.${NC}"
+        exit 1
+    fi
+
+    # Modify config.toml to set the port and storage size
+    echo -e "${YELLOW}Configuring port ${CURRENT_PORT} and storage for ${CONTAINER_NAME}...${NC}"
+    docker exec "$CONTAINER_NAME" bash -c "sed -i 's/^[[:space:]]*#StorageGB = .*/StorageGB = $STORAGE_GB/' /root/.titanedge/config.toml && \
+                                         sed -i 's/^[[:space:]]*#ListenAddress = \"0.0.0.0:1234\"/ListenAddress = \"0.0.0.0:$CURRENT_PORT\"/' /root/.titanedge/config.toml"
+    if [[ $? -ne 0 ]]; then
+        echo -e "${RED}Failed to configure port and storage for ${CONTAINER_NAME}.${NC}"
+        exit 1
+    fi
+
+    # Restart container to apply new configuration
+    echo -e "${YELLOW}Restarting ${CONTAINER_NAME} to apply configuration...${NC}"
+    docker restart "$CONTAINER_NAME"
+    if [[ $? -ne 0 ]]; then
+        echo -e "${RED}Failed to restart ${CONTAINER_NAME}.${NC}"
+        exit 1
+    fi
+
+    # Wait for container to be ready again
+    sleep 10
+    check_container_ready "$CONTAINER_NAME"
+    if [[ $? -ne 0 ]]; then
+        echo -e "${RED}Failed to confirm container ${CONTAINER_NAME} is ready after restart. Stopping script.${NC}"
+        exit 1
     fi
 
     # Bind the node
