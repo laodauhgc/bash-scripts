@@ -4,8 +4,11 @@
 PORTAINER_NAME="portainer"
 PORTAINER_IMAGE="portainer/portainer-ce:latest"
 PORTAINER_DATA_VOLUME="portainer_data"
-PORTAINER_HTTP_PORT="9000"
-PORTAINER_TCP_PORT="8000"
+
+# Thay đổi các cổng mặc định
+PORTAINER_HTTP_PORT="9001"  # Thay đổi từ 9000
+PORTAINER_TCP_PORT="8001"  # Thay đổi từ 8000
+PORTAINER_HTTPS_PORT="9444" # Thêm cổng HTTPS và thay đổi từ 9443
 
 # Hàm kiểm tra xem Docker đã được cài đặt chưa
 check_docker() {
@@ -32,8 +35,9 @@ install_portainer() {
   # Chạy container Portainer
   echo "Chạy container Portainer..."
   docker run -d \
-    -p "$PORTAINER_HTTP_PORT:$PORTAINER_HTTP_PORT" \
-    -p "$PORTAINER_TCP_PORT:$PORTAINER_TCP_PORT" \
+    -p "$PORTAINER_HTTP_PORT:9000" \
+    -p "$PORTAINER_TCP_PORT:8000" \
+    -p "$PORTAINER_HTTPS_PORT:9443" \
     --name="$PORTAINER_NAME" \
     --restart=always \
     -v /var/run/docker.sock:/var/run/docker.sock \
