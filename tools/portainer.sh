@@ -4,8 +4,8 @@
 PORTAINER_NAME="portainer"
 PORTAINER_IMAGE="portainer/portainer-ce:latest"
 PORTAINER_DATA_VOLUME="portainer_data"
-PORTAINER_HTTP_PORT="9000"
-PORTAINER_TCP_PORT="8000"
+PORTAINER_HTTP_PORT="9001"
+PORTAINER_TCP_PORT="8001"
 
 # Hàm kiểm tra xem Docker đã được cài đặt chưa
 check_docker() {
