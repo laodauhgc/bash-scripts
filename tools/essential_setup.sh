@@ -89,9 +89,35 @@ install_nvm() {
 
   # Load NVM và thêm vào .profile để load khi khởi động shell
   NVM_DIR="$HOME/.nvm"
-  echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.profile
-  echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm' >> ~/.profile
-  echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion' >> ~/.profile
+
+  # Kiểm tra xem ~/.profile đã chứa các lệnh NVM hay chưa
+  if ! grep -q 'export NVM_DIR="$HOME/.nvm"' ~/.profile; then
+    echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.profile
+    log "Đã thêm 'export NVM_DIR' vào ~/.profile."
+  fi
+  if ! grep -q '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' ~/.profile; then
+    echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm' >> ~/.profile
+    log "Đã thêm lệnh load nvm.sh vào ~/.profile."
+  fi
+  if ! grep -q '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"' ~/.profile; then
+    echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion' >> ~/.profile
+    log "Đã thêm lệnh load bash_completion vào ~/.profile."
+  fi
+
+  # Thêm các lệnh vào ~/.bashrc (nếu chưa có)
+   if ! grep -q 'export NVM_DIR="$HOME/.nvm"' ~/.bashrc; then
+    echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.bashrc
+    log "Đã thêm 'export NVM_DIR' vào ~/.bashrc."
+  fi
+  if ! grep -q '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' ~/.bashrc; then
+    echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm' >> ~/.bashrc
+    log "Đã thêm lệnh load nvm.sh vào ~/.bashrc."
+  fi
+  if ! grep -q '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"' ~/.bashrc; then
+    echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion' >> ~/.bashrc
+    log "Đã thêm lệnh load bash_completion vào ~/.bashrc."
+  fi
+
   log "NVM đã được cài đặt và cấu hình để load khi khởi động shell."
 }
 
@@ -112,7 +138,6 @@ install_nodejs() {
   log "Node.js (phiên bản 22) đã được cài đặt và thiết lập làm mặc định."
 }
 
-# Xóa phần liên quan đến Golang
 # Cài đặt Bun.js
 install_bun() {
   log "Bắt đầu cài đặt Bun.js..."
@@ -150,11 +175,8 @@ install_essential_packages
 install_nvm
 install_nodejs
 
-# Xóa phần liên quan đến Golang
-
 install_speedtest-cli
 install_bun
 
 log "Hoàn tất cài đặt các gói cần thiết trên Ubuntu 22.04!"
-
-exit 0
+log "Để đảm bảo các biến môi trường được cập nhật chính xác, hãy chạy lệnh: source ~/.bashrc"
