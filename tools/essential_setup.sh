@@ -80,9 +80,12 @@ install_essential_packages() {
 install_nvm() {
   log "Cài đặt NVM..."
   curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash >/dev/null 2>&1 || { log "Lỗi: Cài đặt NVM thất bại!" "$RED"; exit 1; }
+
+  # Load NVM
   export NVM_DIR="$HOME/.nvm"
   [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
   [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+
   log "NVM đã được cài đặt."
 }
 
@@ -103,16 +106,14 @@ install_bun() {
   curl -fsSL https://bun.sh/install | bash >/dev/null 2>&1 || { log "Lỗi: Cài đặt Bun.js thất bại!" "$RED"; exit 1; }
   log "Bun.js đã được cài đặt thành công."
 
-  # Add Bun to PATH (required for it to work correctly)
+  # Add Bun to PATH
   if grep -q 'export PATH="$PATH:$HOME/.bun/bin"' ~/.bashrc; then
     log "Bun đã có trong PATH, bỏ qua."
   else
     log "Thêm Bun vào PATH..."
     echo 'export PATH="$PATH:$HOME/.bun/bin"' >> ~/.bashrc
-    # Source .bashrc only if it's an interactive shell
-    if [ -n "$PS1" ]; then
-      source ~/.bashrc
-    fi
+    export PATH="$PATH:$HOME/.bun/bin"
+    source ~/.bashrc
     log "Đã thêm Bun vào PATH."
   fi
 }
@@ -139,7 +140,7 @@ install_nodejs
 install_speedtest_cli
 install_bun
 
-log "Để đảm bảo các biến môi trường được cập nhật, hãy chạy lệnh: source ~/.bashrc"
 log "Hoàn tất cài đặt các gói cần thiết trên Ubuntu 22.04!"
+log "Để đảm bảo các biến môi trường được cập nhật, hãy chạy lệnh: source ~/.bashrc"
 
 exit 0
