@@ -80,11 +80,6 @@ add_nodejs_repo() {
 #   log "Kho lưu trữ Golang đã được thêm."
 # }
 
-# Xóa hàm add_postgresql_repo
-# add_postgresql_repo() {
-#   ...
-# }
-
 # Cài đặt Bun.js
 install_bun() {
   log "Bắt đầu cài đặt Bun.js..."
@@ -92,9 +87,17 @@ install_bun() {
   log "Bun.js đã được cài đặt thành công."
 
   # Add Bun to PATH (required for it to work correctly)
-  echo 'export PATH="$PATH:$HOME/.bun/bin"' >> ~/.bashrc
-  source ~/.bashrc
-  log "Đã thêm Bun vào PATH."
+  if grep -q 'export PATH="$PATH:$HOME/.bun/bin"' ~/.bashrc; then
+    log "Bun đã có trong PATH, bỏ qua."
+  else
+    log "Thêm Bun vào PATH..."
+    echo 'export PATH="$PATH:$HOME/.bun/bin"' >> ~/.bashrc
+    # Source .bashrc only if it's an interactive shell
+    if [ -n "$PS1" ]; then
+      source ~/.bashrc
+    fi
+    log "Đã thêm Bun vào PATH."
+  fi
 }
 
 # Cài đặt các gói cần thiết
@@ -123,7 +126,6 @@ update_system
 # Thêm các kho lưu trữ
 add_nodejs_repo
 #add_golang_repo # Uncomment nếu cần và đã điền thông tin
-# Xóa gọi hàm add_postgresql_repo
 
 install_essential_packages
 install_speedtest_cli
