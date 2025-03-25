@@ -25,7 +25,7 @@ ESSENTIAL_PACKAGES=(
   "python3-pip"
   "python3-venv"
   "openjdk-11-jdk"
-  "npm"
+  "npm" # We will use npm from nvm
   "unzip"
   "zip"
   "tree"
@@ -63,22 +63,37 @@ update_system() {
   log "Cập nhật hệ thống hoàn tất."
 }
 
-# Thêm repository cho Node.js (phiên bản mới nhất)
-add_nodejs_repo() {
-  log "Thêm kho lưu trữ Node.js..."
-  curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash - >/dev/null 2>&1 || { log "Lỗi: Thêm kho lưu trữ Node.js thất bại!" "$RED"; exit 1; }
-  log "Kho lưu trữ Node.js đã được thêm."
+# Cài đặt NVM (Node Version Manager)
+install_nvm() {
+  log "Cài đặt NVM..."
+  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash >/dev/null 2>&1 || { log "Lỗi: Cài đặt NVM thất bại!" "$RED"; exit 1; }
+
+  # Add NVM to PATH
+  if grep -q 'export NVM_DIR="$HOME/.nvm"' ~/.bashrc; then
+    log "NVM đã có trong PATH, bỏ qua."
+  else
+    log "Thêm NVM vào PATH..."
+    echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.bashrc
+    echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm' >> ~/.bashrc
+    echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion' >> ~/.bashrc
+
+    # Source .bashrc only if it's an interactive shell
+    if [ -n "$PS1" ]; then
+      source ~/.bashrc
+    fi
+    log "Đã thêm NVM vào PATH."
+  fi
 }
 
-# Thêm repository cho Golang (phiên bản mới nhất)
-# Lưu ý: Ubuntu thường có phiên bản Golang khá mới, nên có thể không cần thêm repo
-# Nếu cần, bạn có thể thêm repo từ https://go.dev/dl/
-# add_golang_repo() {
-#   log "Thêm kho lưu trữ Golang..."
-#   # Ví dụ (có thể cần điều chỉnh):
-#   # add-apt-repository ppa:longsleep/golang-backports >/dev/null 2>&1 || { log "Lỗi: Thêm kho lưu trữ Golang thất bại!" "$RED"; exit 1; }
-#   log "Kho lưu trữ Golang đã được thêm."
-# }
+# Cài đặt Node.js (sử dụng NVM)
+install_nodejs() {
+  log "Cài đặt Node.js (sử dụng NVM)..."
+  # Install latest LTS version
+  nvm install --lts >/dev/null 2>&1 || { log "Lỗi: Cài đặt Node.js (LTS) thất bại!" "$RED"; exit 1; }
+  nvm use --lts >/dev/null 2>&1 || { log "Lỗi: Sử dụng Node.js (LTS) thất bại!" "$RED"; exit 1; }
+  nvm alias default `nvm which --lts` >/dev/null 2>&1 || { log "Lỗi: Thiết lập Node.js (LTS) mặc định thất bại!" "$RED"; exit 1; }
+  log "Node.js (phiên bản LTS) đã được cài đặt và thiết lập làm mặc định."
+}
 
 # Cài đặt Bun.js
 install_bun() {
@@ -123,8 +138,11 @@ install_speedtest_cli() {
 check_root
 update_system
 
+# Cài đặt NVM và Node.js
+install_nvm
+install_nodejs
+
 # Thêm các kho lưu trữ
-add_nodejs_repo
 #add_golang_repo # Uncomment nếu cần và đã điền thông tin
 
 install_essential_packages
