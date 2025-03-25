@@ -152,6 +152,8 @@ install_nodejs
 install_speedtest_cli
 install_bun
 
+log "Để đảm bảo các biến môi trường được cập nhật, hãy chạy lệnh: source ~/.bashrc"
+
 log "Hoàn tất cài đặt các gói cần thiết trên Ubuntu 22.04!"
 
 exit 0
