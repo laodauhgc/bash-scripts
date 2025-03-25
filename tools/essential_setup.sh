@@ -97,16 +97,6 @@ install_nodejs() {
   log "Node.js (phiên bản 22) đã được cài đặt và thiết lập làm mặc định."
 }
 
-# Thêm repository cho Golang (phiên bản mới nhất)
-# Lưu ý: Ubuntu thường có phiên bản Golang khá mới, nên có thể không cần thêm repo
-# Nếu cần, bạn có thể thêm repo từ https://go.dev/dl/
-# add_golang_repo() {
-#   log "Thêm kho lưu trữ Golang..."
-#   # Ví dụ (có thể cần điều chỉnh):
-#   # add-apt-repository ppa:longsleep/golang-backports >/dev/null 2>&1 || { log "Lỗi: Thêm kho lưu trữ Golang thất bại!" "$RED"; exit 1; }
-#   log "Kho lưu trữ Golang đã được thêm."
-# }
-
 # Cài đặt Bun.js
 install_bun() {
   log "Bắt đầu cài đặt Bun.js..."
@@ -145,9 +135,6 @@ install_essential_packages
 # Cài đặt NVM và Node.js
 install_nvm
 install_nodejs
-
-# Thêm các kho lưu trữ
-#add_golang_repo # Uncomment nếu cần và đã điền thông tin
 
 install_speedtest_cli
 install_bun
