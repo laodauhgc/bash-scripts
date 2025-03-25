@@ -78,20 +78,32 @@ install_essential_packages() {
 
 # Cài đặt NVM (Node Version Manager)
 install_nvm() {
+  # Kiểm tra xem NVM đã được cài đặt hay chưa
+  if [ -d "$HOME/.nvm" ]; then
+    log "NVM đã được cài đặt, bỏ qua bước cài đặt."
+    return
+  fi
+
   log "Cài đặt NVM..."
   curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash >/dev/null 2>&1 || { log "Lỗi: Cài đặt NVM thất bại!" "$RED"; exit 1; }
+
+  # Load NVM và thêm vào .profile để load khi khởi động shell
+  NVM_DIR="$HOME/.nvm"
+  echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.profile
+  echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm' >> ~/.profile
+  echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion' >> ~/.profile
+  log "NVM đã được cài đặt và cấu hình để load khi khởi động shell."
+}
+
+# Cài đặt Node.js (sử dụng NVM)
+install_nodejs() {
+  log "Cài đặt Node.js (sử dụng NVM)..."
 
   # Load NVM
   export NVM_DIR="$HOME/.nvm"
   [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
   [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
 
-  log "NVM đã được cài đặt."
-}
-
-# Cài đặt Node.js (sử dụng NVM)
-install_nodejs() {
-  log "Cài đặt Node.js (sử dụng NVM)..."
   # Install Node.js version 22
   nvm install 22 >/dev/null 2>&1 || { log "Lỗi: Cài đặt Node.js 22 thất bại!" "$RED"; exit 1; }
   nvm use 22 >/dev/null 2>&1 || { log "Lỗi: Sử dụng Node.js 22 thất bại!" "$RED"; exit 1; }
@@ -100,6 +112,7 @@ install_nodejs() {
   log "Node.js (phiên bản 22) đã được cài đặt và thiết lập làm mặc định."
 }
 
+# Xóa phần liên quan đến Golang
 # Cài đặt Bun.js
 install_bun() {
   log "Bắt đầu cài đặt Bun.js..."
@@ -112,14 +125,14 @@ install_bun() {
   else
     log "Thêm Bun vào PATH..."
     echo 'export PATH="$PATH:$HOME/.bun/bin"' >> ~/.bashrc
-    export PATH="$PATH:$HOME/.bun/bin"
-    source ~/.bashrc
+    PATH="$PATH:$HOME/.bun/bin"
+    export PATH
     log "Đã thêm Bun vào PATH."
   fi
 }
 
 # Cài đặt speedtest-cli
-install_speedtest_cli() {
+install_speedtest-cli() {
   log "Bắt đầu cài đặt speedtest-cli..."
   curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | sudo bash >/dev/null 2>&1 || { log "Lỗi: Cài đặt repository speedtest-cli thất bại!" "$RED"; exit 1; }
   apt install -y speedtest >/dev/null 2>&1 || { log "Lỗi: Cài đặt speedtest-cli thất bại!" "$RED"; exit 1; }
@@ -137,10 +150,11 @@ install_essential_packages
 install_nvm
 install_nodejs
 
-install_speedtest_cli
+# Xóa phần liên quan đến Golang
+
+install_speedtest-cli
 install_bun
 
 log "Hoàn tất cài đặt các gói cần thiết trên Ubuntu 22.04!"
-log "Để đảm bảo các biến môi trường được cập nhật, hãy chạy lệnh: source ~/.bashrc"
 
 exit 0
