@@ -57,11 +57,15 @@ install_docker_debian() {
     # Get the codename in a way that works on more systems.
     UBUNTU_CODENAME=$(lsb_release -cs)
 
-    # Remove any existing docker.list file
-    sudo rm -f /etc/apt/sources.list.d/docker.list
+    # Remove all existing files in /etc/apt/sources.list.d/
+    sudo rm -f /etc/apt/sources.list.d/*
 
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian ${UBUNTU_CODENAME} stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-    apt update -y
+
+    # Clean and update apt *after* adding the repo
+    sudo apt clean
+    sudo apt update -y
+
     apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
     log "Cài đặt Docker thành công trên Debian/Ubuntu!"
 }
