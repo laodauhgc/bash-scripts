@@ -41,24 +41,40 @@ install_docker_ubuntu() {
   CODENAME=$(lsb_release -cs)
   log "Codename: ${CODENAME}"
 
-  # Cài đặt các gói cần thiết (cố gắng sửa lỗi phụ thuộc)
-  apt update
-  apt --fix-broken install -y
-  apt install -y ca-certificates curl gnupg apt-transport-https
+  # Gỡ cài đặt các gói cũ (nếu có)
+  log "Gỡ các gói Docker cũ (nếu có)..."
+  for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do
+    sudo apt-get remove -y $pkg
+  done
+
+  # Cài đặt các gói cần thiết
+  log "Cài đặt các gói cần thiết..."
+  sudo apt-get update
+  sudo apt-get install -y ca-certificates curl
+
+  # Tạo thư mục keyrings (nếu chưa tồn tại)
+  sudo install -m 0755 -d /etc/apt/keyrings
 
   # Thêm Docker GPG key
-  curl -fsSL https://download.docker.com/linux/debian/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+  log "Thêm Docker GPG key..."
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  sudo chmod a+r /etc/apt/keyrings/docker.asc
 
   # Thêm kho lưu trữ Docker
-  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian ${CODENAME} dists/${CODENAME}" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+  log "Thêm kho lưu trữ Docker..."
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-  # Cài đặt Docker Engine
-  apt update
-  apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+  # Cập nhật và cài đặt Docker Engine
+  log "Cài đặt Docker Engine..."
+  sudo apt-get update
+  sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
   # Khởi động và kích hoạt Docker
-  systemctl start docker
-  systemctl enable docker
+  log "Khởi động và kích hoạt Docker..."
+  sudo systemctl start docker
+  sudo systemctl enable docker
 
   log "Docker đã được cài đặt thành công."
 }
@@ -67,19 +83,13 @@ install_docker_ubuntu() {
 install_docker_compose() {
   log "Đang cài đặt Docker Compose..."
 
-  # Kiểm tra xem Docker Compose đã được cài đặt hay chưa
-  if ! docker compose version >/dev/null 2>&1; then
-    log "Plugin Docker Compose không được cài đặt đúng cách. Vui lòng kiểm tra cài đặt Docker của bạn." "$RED"
-    log "Cài đặt docker compose plugin"
-    apt install -y docker-compose-plugin
-  else
-    log "Docker Compose đã được cài đặt."
-  fi
+  # Kiểm tra xem Docker Compose đã được cài đặt hay chưa (không cần thiết vì nó được cài đặt như một phần của docker-compose-plugin)
+  log "Docker Compose đã được cài đặt như một phần của Docker Engine."
 }
 
 # Xử lý theo hệ điều hành
 case "$OS" in
-  ubuntu|debian)
+  ubuntu)
     install_docker_ubuntu
     ;;
   *)
@@ -96,3 +106,6 @@ log "Đã thêm người dùng $USER vào nhóm docker."
 
 log "Cài đặt hoàn tất. Vui lòng đăng xuất và đăng nhập lại để các thay đổi về nhóm có hiệu lực."
 log "Bạn có thể kiểm tra bằng lệnh: docker run hello-world"
+
+log "Kiểm tra cài đặt bằng lệnh: sudo docker run hello-world"
+# Update: 30.03.2025
