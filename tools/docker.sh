@@ -52,14 +52,15 @@ detect_os() {
 # Cài đặt Docker trên Debian/Ubuntu
 install_docker_debian() {
     log "Đang cài đặt Docker trên Debian/Ubuntu..."
-    apt update -y
     apt install -y apt-transport-https ca-certificates curl software-properties-common gnupg lsb-release
-    curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-    
+
     # Get the codename in a way that works on more systems.
     UBUNTU_CODENAME=$(lsb_release -cs)
 
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian ${UBUNTU_CODENAME} stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+    # Remove any existing docker.list file
+    sudo rm -f /etc/apt/sources.list.d/docker.list
+
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian ${UBUNTU_CODENAME} stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
     apt update -y
     apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
     log "Cài đặt Docker thành công trên Debian/Ubuntu!"
