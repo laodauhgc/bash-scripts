@@ -41,9 +41,10 @@ install_docker_ubuntu() {
   CODENAME=$(lsb_release -cs)
   log "Codename: ${CODENAME}"
 
-  # Cài đặt các gói cần thiết
+  # Cài đặt các gói cần thiết (cố gắng sửa lỗi phụ thuộc)
   apt update
-  apt install -y ca-certificates curl gnupg
+  apt --fix-broken install -y
+  apt install -y ca-certificates curl gnupg apt-transport-https
 
   # Thêm Docker GPG key
   curl -fsSL https://download.docker.com/linux/debian/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
@@ -76,7 +77,6 @@ install_docker_compose() {
   fi
 }
 
-
 # Xử lý theo hệ điều hành
 case "$OS" in
   ubuntu|debian)
@@ -96,3 +96,4 @@ log "Đã thêm người dùng $USER vào nhóm docker."
 
 log "Cài đặt hoàn tất. Vui lòng đăng xuất và đăng nhập lại để các thay đổi về nhóm có hiệu lực."
 log "Bạn có thể kiểm tra bằng lệnh: docker run hello-world"
+# Update: 30.03.2025
