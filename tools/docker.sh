@@ -50,7 +50,7 @@ install_docker_ubuntu() {
   curl -fsSL https://download.docker.com/linux/debian/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
 
   # Thêm kho lưu trữ Docker
-  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian ${CODENAME} stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian ${CODENAME} dists/${CODENAME}" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
   # Cài đặt Docker Engine
   apt update
@@ -96,4 +96,3 @@ log "Đã thêm người dùng $USER vào nhóm docker."
 
 log "Cài đặt hoàn tất. Vui lòng đăng xuất và đăng nhập lại để các thay đổi về nhóm có hiệu lực."
 log "Bạn có thể kiểm tra bằng lệnh: docker run hello-world"
-# Update: 30.03.2025
