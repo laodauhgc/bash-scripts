@@ -20,6 +20,7 @@ install_wireguard() {
   sudo apt update
   # Preseed the answer to the debconf question
   sudo debconf-set-selections <<< "iptables-persistent iptables-persistent/autosave_v4 boolean true"
+  sudo debconf-set-selections <<< "iptables-persistent iptables-persistent/autosave_v6 boolean true"
   sudo apt install -y wireguard iptables-persistent
   echo "Installation complete."
 }
