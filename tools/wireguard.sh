@@ -9,6 +9,7 @@ SERVER_IP="10.0.0.1"
 WIREGUARD_PORT="51820"
 CLIENT_IP="10.0.0.2"
 INTERFACE_NAME="wg0" # Name of the WireGuard interface
+SSH_PORT="22" # Standard SSH Port
 
 # -----------------------------------------------------------------------------
 # Functions
@@ -36,6 +37,7 @@ generate_keys() {
   else
     echo "Key pair already exists in $WIREGUARD_DIR. Skipping key generation."
   fi
+  echo "Client Public Key: $(cat "$WIREGUARD_DIR/public.key")"
 }
 
 # show_info: Displays WireGuard configuration information
@@ -49,6 +51,22 @@ show_info() {
     echo "Server Public IP: $(curl -s ifconfig.me)"
   fi
   echo "--------------------------------------"
+}
+
+# configure_firewall: Configures the firewall to allow SSH and WireGuard
+configure_firewall() {
+  echo "Configuring the firewall (ufw) to allow SSH and WireGuard..."
+  # Allow SSH
+  sudo ufw allow "${SSH_PORT}/tcp"
+  # Allow WireGuard
+  sudo ufw allow "${WIREGUARD_PORT}/udp"
+
+  # Enable ufw if it's not already enabled
+  if ! sudo ufw status | grep -q "Status: active"; then
+    sudo ufw enable
+  fi
+
+  echo "Firewall configuration complete."
 }
 
 # setup_server: Configures the WireGuard server
@@ -132,6 +150,11 @@ install_wireguard
 
 # Generate keys
 generate_keys
+
+# Configure firewall
+if [[ "$1" == "server" ]]; then
+  configure_firewall
+fi
 
 # Process server or client setup
 case "$1" in
