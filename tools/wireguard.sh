@@ -65,7 +65,7 @@ configure_firewall() {
 
   # Enable ufw if it's not already enabled
   if ! sudo ufw status | grep -q "Status: active"; then
-    sudo ufw enable
+    sudo ufw enable --force yes
   fi
 
   echo "Firewall configuration complete."
