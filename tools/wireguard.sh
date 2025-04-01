@@ -57,10 +57,10 @@ show_info() {
 configure_firewall() {
   echo "Configuring the firewall (ufw) to allow SSH and WireGuard..."
   # Allow SSH
-  sudo ufw allow "${SSH_PORT}/tcp"
+  sudo ufw allow "${SSH_PORT}/tcp" --force yes
   # Allow WireGuard (only on the server)
   if [[ "$1" == "server" ]]; then
-     sudo ufw allow "${WIREGUARD_PORT}/udp"
+     sudo ufw allow "${WIREGUARD_PORT}/udp" --force yes
   fi
 
   # Enable ufw if it's not already enabled
