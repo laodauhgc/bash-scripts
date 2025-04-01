@@ -18,10 +18,10 @@ INTERFACE_NAME="wg0" # Name of the WireGuard interface
 install_wireguard() {
   echo "Installing WireGuard and iptables-persistent..."
   sudo apt update
-  # Preseed the answer to the debconf question
+  # Preseed the answers to the debconf questions
   sudo debconf-set-selections <<< "iptables-persistent iptables-persistent/autosave_v4 boolean true"
   sudo debconf-set-selections <<< "iptables-persistent iptables-persistent/autosave_v6 boolean true"
-  sudo apt install -y wireguard iptables-persistent
+  DEBIAN_FRONTEND=noninteractive sudo apt install -y wireguard iptables-persistent
   echo "Installation complete."
 }
 
