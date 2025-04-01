@@ -58,8 +58,10 @@ configure_firewall() {
   echo "Configuring the firewall (ufw) to allow SSH and WireGuard..."
   # Allow SSH
   sudo ufw allow "${SSH_PORT}/tcp"
-  # Allow WireGuard
-  sudo ufw allow "${WIREGUARD_PORT}/udp"
+  # Allow WireGuard (only on the server)
+  if [[ "$1" == "server" ]]; then
+     sudo ufw allow "${WIREGUARD_PORT}/udp"
+  fi
 
   # Enable ufw if it's not already enabled
   if ! sudo ufw status | grep -q "Status: active"; then
@@ -135,25 +137,65 @@ EOL
   show_info "client"
 }
 
+# rm_wireguard: Removes WireGuard and its configuration
+rm_wireguard() {
+  echo "Removing WireGuard and its configuration..."
+
+  # Stop WireGuard interface
+  sudo systemctl stop wg-quick@"${INTERFACE_NAME}"
+
+  # Disable WireGuard interface
+  sudo systemctl disable wg-quick@"${INTERFACE_NAME}"
+
+  # Remove WireGuard configuration file
+  sudo rm -f "$WIREGUARD_DIR/$INTERFACE_NAME.conf"
+
+  # Remove WireGuard key files
+  sudo rm -f "$WIREGUARD_DIR/private.key"
+  sudo rm -f "$WIREGUARD_DIR/public.key"
+
+  # Remove WireGuard directory (if empty)
+  sudo rmdir "$WIREGUARD_DIR" 2>/dev/null # Ignore error if not empty
+
+  # Remove NAT rules
+  sudo iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null # Ignore error if rule doesn't exist
+  sudo netfilter-persistent save
+
+  # Remove firewall rules
+  sudo ufw delete allow "${SSH_PORT}/tcp" 2>/dev/null # Ignore error if rule doesn't exist
+  sudo ufw delete allow "${WIREGUARD_PORT}/udp" 2>/dev/null # Ignore error if rule doesn't exist
+
+  # Purge WireGuard package
+  sudo apt purge -y wireguard iptables-persistent
+
+  echo "WireGuard removal complete."
+}
+
 # -----------------------------------------------------------------------------
 # Main Script Logic
 # -----------------------------------------------------------------------------
 
 # Check for correct number of arguments
 if [[ $# -lt 1 ]]; then
-  echo "Usage: $0 [server|client] [optional: server-ip server-public-key | client-public-key]"
+  echo "Usage: $0 [server|client|rm] [optional: server-ip server-public-key | client-public-key]"
   exit 1
 fi
 
 # Install WireGuard
-install_wireguard
+if [[ "$1" != "rm" ]]; then
+  install_wireguard
+fi
 
 # Generate keys
-generate_keys
+if [[ "$1" != "rm" ]]; then
+  generate_keys
+fi
 
 # Configure firewall
 if [[ "$1" == "server" ]]; then
-  configure_firewall
+  configure_firewall "$1"
+elif [[ "$1" == "client" ]]; then
+  configure_firewall "$1"
 fi
 
 # Process server or client setup
@@ -168,8 +210,11 @@ case "$1" in
     fi
     setup_client "$2" "$3"
     ;;
+  rm)
+    rm_wireguard
+    ;;
   *)
-    echo "Invalid argument. Use 'server' or 'client'."
+    echo "Invalid argument. Use 'server', 'client', or 'rm'."
     exit 1
     ;;
 esac
