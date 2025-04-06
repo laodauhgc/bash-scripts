@@ -8,19 +8,14 @@ GREEN='\033[0;32m'
 NC='\033[0m' # No Color
 
 # --- Cấu hình Cơ bản ---
-# Tên mong muốn cho các project sẽ được tạo
 DESIRED_PROJECT_NAMES=("project-edge-01" "project-edge-02")
-# Số lượng project cần đảm bảo tồn tại (phải khớp với số lượng tên ở trên)
 DESIRED_PROJECT_COUNT=${#DESIRED_PROJECT_NAMES[@]}
-
-# Cấu hình VM (giữ nguyên từ yêu cầu trước)
 TARGET_ZONE="us-east5-c"
 VM_COUNT_PER_PROJECT=8
 VM_MACHINE_TYPE="e2-small"
 VM_IMAGE="projects/ubuntu-os-cloud/global/images/ubuntu-minimal-2204-jammy-v20250311"
 VM_DISK_TYPE="pd-ssd"
 VM_DISK_SIZE="56"
-# Service Account sẽ được lấy tự động cho từng project
 VM_SCOPES="https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write,https://www.googleapis.com/auth/service.management.readonly,https://www.googleapis.com/auth/servicecontrol,https://www.googleapis.com/auth/trace.append"
 STARTUP_SCRIPT_URL="https://raw.githubusercontent.com/laodauhgc/bash-scripts/refs/heads/main/titan-network/gcp/install-edge.sh"
 # --- Kết thúc Cấu hình ---
@@ -29,9 +24,6 @@ STARTUP_SCRIPT_URL="https://raw.githubusercontent.com/laodauhgc/bash-scripts/ref
 declare -a MANAGED_PROJECT_IDS=()
 
 # === Các hàm tiện ích ===
-
-# Function to generate a random string (for project ID)
-# Project ID rules: 6-30 chars, lowercase letters, digits, hyphens, start with letter.
 generate_project_id() {
   local prefix="edge-proj-"
   local random_part=$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom | head -c 12)
@@ -39,8 +31,6 @@ generate_project_id() {
 }
 
 # === Các hàm xử lý GCP ===
-
-# Lấy và kiểm tra hash value
 get_hash_value() {
   hash_value="${1:-}"
   if [ -z "$hash_value" ]; then
@@ -51,7 +41,6 @@ get_hash_value() {
   echo -e "${BLUE}Sử dụng hash value: $hash_value${NC}"
 }
 
-# Kiểm tra gcloud và xác thực
 check_gcloud() {
   if ! command -v gcloud &> /dev/null; then
     echo -e "${RED}Lỗi: Không tìm thấy lệnh 'gcloud'. Vui lòng cài đặt Google Cloud SDK.${NC}"
@@ -65,7 +54,6 @@ check_gcloud() {
   echo -e "${GREEN}Đã xác thực gcloud.${NC}"
 }
 
-# Lấy thông tin Organization và Billing Account
 get_gcp_info() {
   organization_id=$(gcloud organizations list --format="value(ID)" 2>/dev/null)
   if [ -n "$organization_id" ]; then
@@ -83,83 +71,143 @@ get_gcp_info() {
   echo -e "${BLUE}Sử dụng Billing Account ID: $billing_account_id ${NC}"
 }
 
-# Hàm đảm bảo các project mục tiêu tồn tại, được tạo nếu cần và lưu ID
-ensure_target_projects() {
-  echo -e "${ORANGE}--- Đảm bảo $DESIRED_PROJECT_COUNT project mục tiêu tồn tại ---${NC}"
-  MANAGED_PROJECT_IDS=() # Reset mảng ID
+# === HÀM DỌN DẸP - CỰC KỲ NGUY HIỂM ===
+init_rm() {
+    echo -e "${RED}!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!${NC}"
+    echo -e "${RED}!!!               CẢNH BÁO HÀNH ĐỘNG PHÁ HỦY               !!!${NC}"
+    echo -e "${RED}!!! Script này sẽ cố gắng HỦY LIÊN KẾT BILLING và XÓA TẤT CẢ !!!${NC}"
+    echo -e "${RED}!!! các project mà tài khoản hiện tại có quyền truy cập.    !!!${NC}"
+    echo -e "${RED}!!! Hành động này KHÔNG THỂ HOÀN TÁC. Chỉ tiếp tục nếu bạn !!!${NC}"
+    echo -e "${RED}!!! hoàn toàn chắc chắn và chấp nhận rủi ro mất dữ liệu.   !!!${NC}"
+    echo -e "${RED}!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!${NC}"
+    echo -e "${YELLOW}Bạn có 10 giây để hủy (Nhấn Ctrl+C)...${NC}"
+    sleep 10
 
-  # Lấy danh sách project hiện có (chỉ lấy ID và tên) để kiểm tra
-  echo -e "${BLUE}Đang lấy danh sách project hiện có...${NC}"
-  # Sử dụng map để lưu trữ tên -> ID của project hiện có
-  declare -A existing_projects
-  while IFS=" " read -r proj_id proj_name; do
-    # Chỉ lưu nếu tên project không rỗng
-    if [[ -n "$proj_name" ]]; then
-       existing_projects["$proj_name"]="$proj_id"
+    echo -e "${ORANGE}--- Bắt đầu quá trình dọn dẹp project ---${NC}"
+
+    # Lấy danh sách tất cả các project mà tài khoản có thể thấy
+    all_project_ids=($(gcloud projects list --format="value(projectId)" 2>/dev/null))
+
+    if [ ${#all_project_ids[@]} -eq 0 ]; then
+        echo -e "${GREEN}Không tìm thấy project nào để xóa.${NC}"
+        return 0
     fi
-  done < <(gcloud projects list --format="value(projectId,name)")
 
+    echo -e "${YELLOW}Tìm thấy ${#all_project_ids[@]} project. Bắt đầu hủy liên kết billing và xóa...${NC}"
+
+    # Cố gắng hủy liên kết billing trước (có thể lỗi nếu không có quyền hoặc project đang bị khóa)
+    echo -e "${ORANGE}Bước 1: Cố gắng hủy liên kết Billing Account ($billing_account_id)...${NC}"
+    for project_id in "${all_project_ids[@]}"; do
+        echo -e "${YELLOW} - Hủy liên kết billing cho project: $project_id...${NC}"
+        # Sử dụng --quiet để tránh hỏi, bỏ qua lỗi nếu không thể hủy
+        gcloud beta billing projects unlink "$project_id" --billing-account="$billing_account_id" --quiet || echo -e "${RED}   Lỗi khi hủy liên kết billing cho $project_id (có thể do quyền hoặc đã hủy). Tiếp tục...${NC}"
+        sleep 1 # Nghỉ ngắn
+    done
+
+    # Xóa các project
+    echo -e "${ORANGE}Bước 2: Yêu cầu xóa các project...${NC}"
+    local delete_errors=0
+    for project_id in "${all_project_ids[@]}"; do
+        echo -e "${RED} - Gửi yêu cầu xóa project: $project_id...${NC}"
+        # Sử dụng --quiet để không cần xác nhận
+        gcloud projects delete "$project_id" --quiet
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}   Lỗi khi gửi yêu cầu xóa project $project_id (có thể đã được đánh dấu xóa hoặc lỗi khác).${NC}"
+            ((delete_errors++))
+        fi
+        sleep 1 # Nghỉ ngắn
+    done
+
+    if [ $delete_errors -gt 0 ]; then
+         echo -e "${RED}Đã xảy ra lỗi khi yêu cầu xóa $delete_errors project.${NC}"
+    fi
+    echo -e "${ORANGE}--- Hoàn tất gửi yêu cầu dọn dẹp project ---${NC}"
+}
+
+# Hàm chờ đợi cho đến khi không còn project nào được liệt kê
+wait_for_projects_deleted() {
+  echo -e "${ORANGE}--- Chờ đợi quá trình xóa project hoàn tất ---${NC}"
+  local attempt=0
+  # Chờ tối đa 10 phút (60 * 10 giây)
+  local max_attempts=60
+
+  while [ $attempt -lt $max_attempts ]; do
+    # Lấy danh sách project ID còn lại
+    local current_projects
+    current_projects=$(gcloud projects list --format="value(projectId)" 2>/dev/null)
+    local project_count=$(echo "$current_projects" | wc -w) # Đếm số từ (ID)
+
+    if [[ -z "$current_projects" || "$project_count" -eq 0 ]]; then
+      echo -e "${GREEN}Tất cả các project đã được xóa khỏi danh sách.${NC}"
+      echo -e "${GREEN}--- Hoàn tất chờ đợi xóa project ---${NC}"
+      return 0 # Thành công
+    else
+      echo -e "${YELLOW}Còn $project_count project đang trong quá trình xóa hoặc chưa cập nhật. Đang chờ (lần $((attempt+1))/$max_attempts)...${NC}"
+      # echo "Projects remaining: $current_projects" # Bỏ comment để xem ID còn lại
+      sleep 10 # Chờ trước khi kiểm tra lại
+    fi
+    ((attempt++))
+  done
+
+  echo -e "${RED}Lỗi: Hết thời gian chờ đợi xóa project. Vẫn còn project được liệt kê.${NC}"
+  echo -e "${RED}Kiểm tra thủ công trong Google Cloud Console.${NC}"
+  # Quyết định có nên thoát script hay không? Tùy thuộc vào mức độ nghiêm trọng.
+  # Hiện tại sẽ tiếp tục, nhưng có thể bị lỗi ở các bước sau.
+  return 1 # Thất bại
+}
+# === Kết thúc Hàm Dọn Dẹp ===
+
+# Hàm đảm bảo các project mục tiêu tồn tại, được tạo nếu cần và lưu ID
+# Hàm này giờ sẽ luôn tạo project vì đã có bước xóa trước đó
+ensure_target_projects() {
+  echo -e "${ORANGE}--- Bắt đầu tạo $DESIRED_PROJECT_COUNT project mục tiêu ---${NC}"
+  MANAGED_PROJECT_IDS=() # Reset mảng ID
 
   local project_created_count=0
   for desired_name in "${DESIRED_PROJECT_NAMES[@]}"; do
-    local found_id=""
-    # Kiểm tra xem project với tên mong muốn đã tồn tại chưa
-    if [[ -v existing_projects["$desired_name"] ]]; then
-        found_id="${existing_projects[$desired_name]}"
-        echo -e "${GREEN}Project với tên '$desired_name' (ID: $found_id) đã tồn tại.${NC}"
-        MANAGED_PROJECT_IDS+=("$found_id")
-    else
-        # Nếu chưa tồn tại, tạo project mới
-        echo -e "${YELLOW}Project với tên '$desired_name' chưa tồn tại. Đang tạo...${NC}"
-        local new_project_id=$(generate_project_id) # Tạo ID ngẫu nhiên, hợp lệ
-        echo -e "${BLUE}Sử dụng Project ID được tạo: $new_project_id ${NC}"
+      echo -e "${YELLOW}Đang tạo project với tên '$desired_name'...${NC}"
+      local new_project_id=$(generate_project_id)
+      echo -e "${BLUE}Sử dụng Project ID được tạo: $new_project_id ${NC}"
 
-        local create_cmd="gcloud projects create \"$new_project_id\" --name=\"$desired_name\""
-        if [ -n "$organization_id" ]; then
-            create_cmd+=" --organization=\"$organization_id\""
-        fi
+      local create_cmd="gcloud projects create \"$new_project_id\" --name=\"$desired_name\""
+      if [ -n "$organization_id" ]; then
+          create_cmd+=" --organization=\"$organization_id\""
+      fi
 
-        # Thực hiện tạo project
-        if ! eval "$create_cmd"; then
-             echo -e "${RED}Lỗi: Không thể tạo project '$desired_name' (ID: $new_project_id). Kiểm tra lỗi ở trên, quyền hoặc tên/ID đã tồn tại.${NC}"
-             # Có thể cần xử lý lỗi tốt hơn ở đây, ví dụ thử lại với ID khác hoặc thoát
-             continue # Bỏ qua project này và tiếp tục với project tiếp theo
-        fi
-        echo -e "${GREEN}Đã tạo project '$desired_name' với ID: $new_project_id.${NC}"
-        ((project_created_count++))
-        sleep 10 # Chờ một chút để project được khởi tạo hoàn toàn
+      if ! eval "$create_cmd"; then
+           echo -e "${RED}Lỗi: Không thể tạo project '$desired_name' (ID: $new_project_id). Kiểm tra lỗi ở trên, quyền hoặc tên/ID đã tồn tại.${NC}"
+           continue
+      fi
+      echo -e "${GREEN}Đã tạo project '$desired_name' với ID: $new_project_id.${NC}"
+      ((project_created_count++))
+      sleep 10 # Chờ project được khởi tạo
 
-        # Liên kết tài khoản thanh toán
-        echo -e "${YELLOW}Đang liên kết Billing Account '$billing_account_id' vào project '$new_project_id'...${NC}"
-        if ! gcloud beta billing projects link "$new_project_id" --billing-account="$billing_account_id"; then
-             echo -e "${RED}Cảnh báo: Không thể tự động liên kết billing cho project '$new_project_id'.${NC}"
-             echo -e "${YELLOW}Vui lòng liên kết thủ công trong GCP Console. Script sẽ tiếp tục...${NC}"
-             # Không thoát, nhưng cảnh báo người dùng
-        else
-             echo -e "${GREEN}Đã liên kết billing thành công cho project '$new_project_id'.${NC}"
-             sleep 5 # Chờ cho việc liên kết billing ổn định
-        fi
-        MANAGED_PROJECT_IDS+=("$new_project_id")
-    fi
+      echo -e "${YELLOW}Đang liên kết Billing Account '$billing_account_id' vào project '$new_project_id'...${NC}"
+      if ! gcloud beta billing projects link "$new_project_id" --billing-account="$billing_account_id"; then
+           echo -e "${RED}Cảnh báo: Không thể tự động liên kết billing cho project '$new_project_id'.${NC}"
+           echo -e "${YELLOW}Vui lòng liên kết thủ công trong GCP Console. Script sẽ tiếp tục...${NC}"
+      else
+           echo -e "${GREEN}Đã liên kết billing thành công cho project '$new_project_id'.${NC}"
+           sleep 5
+      fi
+      MANAGED_PROJECT_IDS+=("$new_project_id")
   done
 
   if [ ${#MANAGED_PROJECT_IDS[@]} -ne $DESIRED_PROJECT_COUNT ]; then
-      echo -e "${RED}Lỗi: Không thể đảm bảo đủ số lượng project mục tiêu (${#MANAGED_PROJECT_IDS[@]}/${DESIRED_PROJECT_COUNT}). Xem lại lỗi ở trên.${NC}"
+      echo -e "${RED}Lỗi: Không thể tạo đủ số lượng project mục tiêu (${#MANAGED_PROJECT_IDS[@]}/${DESIRED_PROJECT_COUNT}). Xem lại lỗi ở trên.${NC}"
       exit 1
   fi
 
-  if [ "$project_created_count" -gt 0 ]; then
-      echo -e "${ORANGE}Đã tạo $project_created_count project mới. Chờ thêm 30 giây để các dịch vụ được ổn định...${NC}"
-      sleep 30
-  fi
+  echo -e "${ORANGE}Đã tạo $project_created_count project mới. Chờ thêm 30 giây để các dịch vụ được ổn định...${NC}"
+  sleep 30
 
-  echo -e "${GREEN}--- Hoàn tất đảm bảo project. Các Project ID sẽ được quản lý: ${MANAGED_PROJECT_IDS[*]} ---${NC}"
+  echo -e "${GREEN}--- Hoàn tất tạo project. Các Project ID sẽ được quản lý: ${MANAGED_PROJECT_IDS[*]} ---${NC}"
 }
 
 # Tạo firewall rule (Vẫn giữ nguyên quy tắc mở ALL - Cần xem xét lại về bảo mật)
 create_firewall_rule() {
     local project_id=$1
-    local rule_name="allow-all-ingress-insecure" # Tên rõ ràng hơn về sự không an toàn
+    local rule_name="allow-all-ingress-insecure"
     echo -e "${BLUE}Kiểm tra/Tạo firewall rule '$rule_name' trong project '$project_id'...${NC}"
     if ! gcloud compute --project="$project_id" firewall-rules describe "$rule_name" --format="value(name)" > /dev/null 2>&1; then
         echo -e "${YELLOW}Đang tạo firewall rule '$rule_name' (CHO PHÉP TẤT CẢ - KHÔNG AN TOÀN!) trong project '$project_id'...${NC}"
@@ -171,7 +219,7 @@ create_firewall_rule() {
             --rules=all \
             --source-ranges=0.0.0.0/0 \
             --description="CẢNH BÁO: Cho phép tất cả truy cập vào từ mọi nguồn. Chỉ dùng cho mục đích thử nghiệm." \
-            --quiet # Thêm quiet để tránh hỏi xác nhận (nếu có)
+            --quiet
         if [ $? -ne 0 ]; then
             echo -e "${RED}Lỗi khi tạo firewall rule trong project '$project_id'.${NC}"
         else
@@ -188,14 +236,12 @@ enable_compute_and_firewall() {
     for project_id in "${MANAGED_PROJECT_IDS[@]}"; do
         echo -e "${BLUE}Đang xử lý project: $project_id${NC}"
         echo -e "${YELLOW}Kích hoạt compute.googleapis.com cho project '$project_id'...${NC}"
-        # Kích hoạt API, nếu lỗi thì báo đỏ nhưng vẫn tiếp tục thử tạo firewall
-        gcloud services enable compute.googleapis.com --project "$project_id" --async # Sử dụng --async để không phải chờ đợi lâu ở đây
+        gcloud services enable compute.googleapis.com --project "$project_id" --async
         if [ $? -ne 0 ]; then
              echo -e "${RED}Có lỗi xảy ra khi yêu cầu kích hoạt Compute API cho project '$project_id'. Việc kích hoạt có thể vẫn đang diễn ra trong nền.${NC}"
         else
              echo -e "${BLUE}Đã gửi yêu cầu kích hoạt Compute API cho project '$project_id'.${NC}"
         fi
-        # Chờ một chút trước khi tạo firewall rule
         sleep 5
         create_firewall_rule "$project_id"
     done
@@ -208,17 +254,14 @@ check_service_enablement() {
     local service_name="compute.googleapis.com"
     echo -e "${BLUE}Kiểm tra trạng thái Compute API trong project '$project_id'...${NC}"
     local attempt=0
-    # Chờ tối đa 3 phút (36 * 5 giây)
-    local max_attempts=36
+    local max_attempts=36 # Chờ tối đa 3 phút
 
     while [ $attempt -lt $max_attempts ]; do
         local service_status
-        # Lấy trạng thái dựa trên tên cấu hình
         service_status=$(gcloud services list --enabled --project "$project_id" --filter="config.name:$service_name" --format="value(config.name)")
-
         if [[ "$service_status" == "$service_name" ]]; then
             echo -e "${GREEN}Compute API đã được kích hoạt trong project '$project_id'.${NC}"
-            return 0 # Thành công
+            return 0
         else
             echo -e "${YELLOW}Compute API chưa sẵn sàng trong project '$project_id'. Đang chờ (lần $((attempt+1))/$max_attempts)...${NC}"
             sleep 5
@@ -226,7 +269,7 @@ check_service_enablement() {
         fi
     done
     echo -e "${RED}Lỗi: Compute API không được kích hoạt trong project '$project_id' sau thời gian chờ.${NC}"
-    return 1 # Thất bại
+    return 1
 }
 
 # Chạy kiểm tra và chờ đợi API kích hoạt cho tất cả project được quản lý
@@ -236,8 +279,6 @@ run_api_enablement_check() {
    for project_id in "${MANAGED_PROJECT_IDS[@]}"; do
      if ! check_service_enablement "$project_id"; then
         all_enabled=false
-        # Có thể quyết định thoát ngay tại đây nếu một project lỗi
-        # echo -e "${RED}Thoát do lỗi kích hoạt API.${NC}"; exit 1
      fi
    done
    if ! $all_enabled; then
@@ -252,32 +293,19 @@ create_vms() {
     echo -e "${ORANGE}--- Bắt đầu tạo máy ảo (VM) ---${NC}"
     for project_id in "${MANAGED_PROJECT_IDS[@]}"; do
         echo -e "${BLUE}=== Đang xử lý tạo VM cho project: $project_id ===${NC}"
-
-        # 1. Lấy Project Number
         local project_number
         project_number=$(gcloud projects describe "$project_id" --format="value(projectNumber)")
         if [ -z "$project_number" ]; then
             echo -e "${RED}Lỗi: Không thể lấy Project Number cho project '$project_id'. Bỏ qua tạo VM cho project này.${NC}"
-            continue # Chuyển sang project tiếp theo
+            continue
         fi
-        echo -e "${BLUE}Project Number của '$project_id' là: $project_number${NC}"
-
-        # 2. Xác định Service Account mặc định của Compute Engine
         local service_account_email="${project_number}-compute@developer.gserviceaccount.com"
         echo -e "${BLUE}Sử dụng Service Account mặc định: $service_account_email${NC}"
-        # Optional: Thêm kiểm tra xem SA này có thực sự tồn tại không (cần API được kích hoạt)
-        # gcloud iam service-accounts describe "$service_account_email" --project="$project_id" > /dev/null 2>&1
-        # if [ $? -ne 0 ]; then
-        #     echo -e "${RED}Cảnh báo: Không thể xác minh Service Account '$service_account_email' trong project '$project_id'. Đảm bảo nó tồn tại.${NC}"
-        # fi
 
-        # 3. Tạo các VM trong project này
         local vm_created_count=0
         for (( i=1; i<=VM_COUNT_PER_PROJECT; i++ )); do
-            local instance_name=$(printf "vm-edge-%02d" "$i") # Tên VM: vm-edge-01, vm-edge-02,...
+            local instance_name=$(printf "vm-edge-%02d" "$i")
             echo -e "${YELLOW}Đang tạo VM '$instance_name' trong project '$project_id' tại zone '$TARGET_ZONE'...${NC}"
-
-            # Chuẩn bị startup script (thoát khỏi các ký tự đặc biệt nếu cần)
             local startup_script_content="#!/bin/bash
 echo '>>> Downloading startup script...'
 wget \"$STARTUP_SCRIPT_URL\" -T 20 -O install-edge.sh || curl -fsSL \"$STARTUP_SCRIPT_URL\" -o install-edge.sh
@@ -307,16 +335,15 @@ fi"
                 --labels="goog-ec-src=vm_add-gcloud,created-by=bash-script" \
                 --metadata=startup-script="$startup_script_content" \
                 --reservation-affinity=any \
-                --quiet # Thêm quiet
+                --quiet
 
             if [ $? -eq 0 ]; then
                 echo -e "${GREEN}Đã tạo thành công VM '$instance_name' trong project '$project_id'.${NC}"
                 ((vm_created_count++))
             else
                 echo -e "${RED}Lỗi khi tạo VM '$instance_name' trong project '$project_id'. Kiểm tra lỗi chi tiết ở trên.${NC}"
-                # Quyết định: dừng lại (exit 1) hay tiếp tục (continue)? Mặc định là tiếp tục.
             fi
-            sleep 1 # Nghỉ ngắn giữa các lần tạo VM
+            sleep 1
         done
         echo -e "${BLUE}=== Hoàn tất tạo $vm_created_count/$VM_COUNT_PER_PROJECT VM cho project '$project_id' ===${NC}"
     done
@@ -335,12 +362,11 @@ list_server_ips() {
     for project_id in "${MANAGED_PROJECT_IDS[@]}"; do
         echo -e "${BLUE}Đang lấy IP từ project: $project_id ${NC}"
         local ips=()
-        # Lọc chính xác hơn theo tên và zone
         ips=($(gcloud compute instances list \
                 --project="$project_id" \
                 --filter="name~'^vm-edge-' AND zone:( $TARGET_ZONE )" \
                 --format="value(networkInterfaces[0].accessConfigs[0].natIP)" \
-                2>/dev/null)) # Ẩn lỗi nếu không tìm thấy instance
+                2>/dev/null))
 
         if [ ${#ips[@]} -gt 0 ]; then
             echo -e "${GREEN}Tìm thấy ${#ips[@]} IP(s) trong project '$project_id': ${ips[*]}${NC}"
@@ -365,6 +391,7 @@ list_server_ips() {
 main() {
     echo -e "${YELLOW}===============================================================${NC}"
     echo -e "${YELLOW} Bắt đầu Script Tự Động Tạo VM Titan Network Edge trên GCP ${NC}"
+    echo -e "${YELLOW}          (Bao gồm bước DỌN DẸP project hiện có)           ${NC}"
     echo -e "${YELLOW}===============================================================${NC}"
     local start_time=$(date +%s)
 
@@ -373,22 +400,28 @@ main() {
     check_gcloud
     get_gcp_info
 
-    # 2. Đảm bảo project tồn tại
+    # 2. DỌN DẸP PROJECT HIỆN CÓ (Bước nguy hiểm)
+    init_rm
+    wait_for_projects_deleted
+    # Nếu hàm chờ thất bại, có thể quyết định dừng ở đây
+    # if [ $? -ne 0 ]; then exit 1; fi
+
+    # 3. Tạo các project mới theo yêu cầu
     ensure_target_projects
 
-    # 3. Kích hoạt API và tạo Firewall (bắt đầu chạy ngầm và tạo rule)
+    # 4. Kích hoạt API và tạo Firewall
     enable_compute_and_firewall
 
-    # 4. Chờ đợi API kích hoạt hoàn tất
+    # 5. Chờ đợi API kích hoạt hoàn tất
     run_api_enablement_check
 
-    # 5. Tạo máy ảo
+    # 6. Tạo máy ảo
     create_vms
 
-    # 6. Liệt kê IPs
+    # 7. Liệt kê IPs
     list_server_ips
 
-    # 7. Hoàn thành
+    # 8. Hoàn thành
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
     echo -e "${GREEN}===============================================================${NC}"
@@ -398,4 +431,4 @@ main() {
 }
 
 # --- Thực thi Hàm Chính ---
-main "$@" # Truyền tất cả các tham số dòng lệnh vào hàm main
+main "$@"
