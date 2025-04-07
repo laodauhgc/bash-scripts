@@ -127,7 +127,6 @@ if ! [[ "$node_count" =~ ^[1-5]$ ]]; then
 fi
 
 # Configuration
-# IMAGE_NAME="nezha123/titan-edge"
 IMAGE_NAME="laodauhgc/titan-edge"
 STORAGE_GB=50
 START_PORT=1235
