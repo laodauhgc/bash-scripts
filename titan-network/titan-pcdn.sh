@@ -70,7 +70,7 @@ setup_pcdn() {
 services:
   titan-pcdn:
     image: laodauhgc/titan-pcdn:latest
-    container_name: titan-pcdn-agent
+    container_name: titan-pcdn
     privileged: true
     restart: always
     tty: true
