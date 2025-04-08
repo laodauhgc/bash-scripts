@@ -94,11 +94,10 @@ fi
 if [ $? -eq 0 ]; then
     echo "=== Triển khai hoàn tất! ==="
     echo "- Thư mục cài đặt: $(pwd)"
-    echo "- ACCESS_TOKEN được sử dụng (kiểm tra trong container)."
     echo "- Kiểm tra logs: cd $PROJECT_DIR && docker compose logs -f"
     echo "- Trạng thái container:"
     sleep 2
-    docker ps | grep titan-pcdn-agent || echo "Container có thể chưa khởi động hoàn toàn, vui lòng kiểm tra lại sau."
+    docker ps | grep titan-pcdn || echo "Container có thể chưa khởi động hoàn toàn, vui lòng kiểm tra lại sau."
 else
     echo "Lỗi: Không thể khởi động container. Kiểm tra logs: cd $PROJECT_DIR && docker compose logs"
 fi
