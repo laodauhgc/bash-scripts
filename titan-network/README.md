@@ -23,3 +23,7 @@ curl -s https://raw.githubusercontent.com/laodauhgc/bash-scripts/refs/heads/main
 ```
 wget -O titan-pcdn.sh https://raw.githubusercontent.com/laodauhgc/bash-scripts/refs/heads/main/titan-network/titan-pcdn.sh && chmod +x titan-pcdn.sh && sudo ./titan-pcdn.sh [ACCESS_TOKEN]
 ```
+## Remove Titan PCDN
+```
+cd ~/titan-pcdn && docker compose down && cd .. && rm -rf titan-pcdn && docker rmi laodauhgc/titan-pcdn:latest
+```
