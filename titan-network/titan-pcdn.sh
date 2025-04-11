@@ -1,77 +1,79 @@
 #!/bin/bash
-# install-titan-pcdn.sh - Cài đặt tự động Titan PCDN sử dụng image tùy chỉnh
+# titan-pcdn.sh - Automatic installation of Titan PCDN using a custom image
 
-# Ngừng ngay nếu có lỗi
+# Exit immediately if a command exits with a non-zero status.
 set -e
 
-# Màu sắc cho output
+# Colors for output
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# --- Hàm kiểm tra quyền Root ---
+# --- Function to check for Root privileges ---
 check_root() {
   if [[ $EUID -ne 0 ]]; then
-    echo -e "${RED}Lỗi: Script này cần quyền root để chạy.${NC}"
-    echo -e "${YELLOW}Vui lòng sử dụng 'sudo ./install-titan-pcdn.sh [ACCESS_TOKEN]' hoặc chạy với tư cách root.${NC}"
+    echo -e "${RED}Error: This script requires root privileges to run.${NC}"
+    echo -e "${YELLOW}Please use 'sudo ./titan-pcdn.sh [ACCESS_TOKEN]' or run as root.${NC}"
     exit 1
   fi
-  echo -e "${GREEN}* Quyền root đã được xác nhận.${NC}"
+  echo -e "${GREEN}* Root privileges confirmed.${NC}"
 }
 
-# --- Hàm cài đặt Docker ---
+# --- Function to install Docker ---
 install_docker() {
+  # Check if Docker and Docker Compose plugin are already installed
   if command -v docker &> /dev/null && docker compose version &> /dev/null; then
-    echo -e "${GREEN}* Docker và Docker Compose plugin đã được cài đặt.${NC}"
+    echo -e "${GREEN}* Docker and Docker Compose plugin are already installed.${NC}"
     return 0
   fi
 
-  echo -e "${BLUE}* Bắt đầu cài đặt Docker và Docker Compose plugin...${NC}"
+  echo -e "${BLUE}* Starting installation of Docker and Docker Compose plugin...${NC}"
   export DEBIAN_FRONTEND=noninteractive
-  # Cập nhật package list
+  # Update package list
   apt-get update -y > /dev/null
-  # Cài các gói cần thiết
+  # Install necessary packages
   apt-get install -y apt-transport-https ca-certificates curl software-properties-common gnupg lsb-release > /dev/null
-  # Thêm Docker GPG key
+  # Add Docker GPG key
   mkdir -p /usr/share/keyrings
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --batch --yes --output /usr/share/keyrings/docker-archive-keyring.gpg --dearmor
-  # Thêm Docker repository
+  # Add Docker repository
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-  # Cài Docker Engine và Compose plugin
+  # Install Docker Engine and Compose plugin
   apt-get update -y > /dev/null
   apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin > /dev/null
-  # Khởi động và enable Docker service
+  # Start and enable Docker service
   systemctl start docker
   systemctl enable docker
-  echo -e "${GREEN}* Docker và Docker Compose plugin đã được cài đặt và khởi động.${NC}"
+  echo -e "${GREEN}* Docker and Docker Compose plugin have been installed and started.${NC}"
 }
 
-# --- Hàm chính cài đặt PCDN ---
+# --- Main function to set up PCDN ---
 setup_pcdn() {
   local access_token="$1"
-  local project_dir=~/titan-pcdn # Thư mục cài đặt
-  # *** Đặt tên image chính xác ở đây ***
-  local target_image="laodauhgc/titan-pcdn:latest"
+  local project_dir=~/titan-pcdn # Installation directory
+  # *** Set the correct image name here ***
+  # Make sure this matches the image you built (e.g., latest-secured)
+  local target_image="laodauhgc/titan-pcdn:latest-secured"
 
-  echo -e "${BLUE}* Bắt đầu cấu hình Titan PCDN tại thư mục: ${project_dir}${NC}"
+  echo -e "${BLUE}* Starting Titan PCDN configuration in directory: ${project_dir}${NC}"
 
-  # Tạo thư mục và di chuyển vào
+  # Create directory and change into it
   mkdir -p "${project_dir}/data/docker"
   cd "${project_dir}" || exit 1
 
-  # Tạo file .env
-  echo -e "${BLUE}  - Đang tạo file .env chứa ACCESS_TOKEN...${NC}"
+  # Create .env file
+  echo -e "${BLUE}  - Creating .env file containing ACCESS_TOKEN...${NC}"
   echo "ACCESS_TOKEN=${access_token}" > .env
-  chmod 600 .env # Giới hạn quyền đọc cho an toàn
+  chmod 600 .env # Restrict read permissions for security
 
-  # Tạo file docker-compose.yaml
-  echo -e "${BLUE}  - Đang tạo file docker-compose.yaml...${NC}"
+  # Create docker-compose.yaml file
+  echo -e "${BLUE}  - Creating docker-compose.yaml file...${NC}"
   cat > docker-compose.yaml << EOF
 services:
   titan-pcdn:
-    image: ${target_image} # <<< Sử dụng biến chứa tên image đúng
+    image: ${target_image} # <<< Use the variable containing the correct image name
     container_name: titan-pcdn
     privileged: true
     restart: always
@@ -81,79 +83,78 @@ services:
       - apparmor:unconfined
     network_mode: host
     volumes:
-      - ./data:/app/data                     # Volume cho data của worker/agent
-      - ./data/docker:/var/lib/docker       # Volume cho data của Docker-in-Docker (nếu dùng)
-      # - /etc/docker:/etc/docker:ro        # Cân nhắc bỏ dòng này nếu không cần
-      - /var/run/docker.sock:/var/run/docker.sock # Mount socket để giao tiếp với Docker host
+      - ./data:/app/data                     
+      - ./data/docker:/var/lib/docker       
+      # - /etc/docker:/etc/docker:ro        
+      - /var/run/docker.sock:/var/run/docker.sock 
     environment:
-      - ACCESS_TOKEN=\${ACCESS_TOKEN} # Docker Compose sẽ đọc từ file .env
-      - TARGETARCH=amd64             # Đặt cứng hoặc tự động phát hiện nếu cần
+      - ACCESS_TOKEN=\${ACCESS_TOKEN} 
+      - TARGETARCH=amd64             
       - OS=linux
-      # - RUST_LOG=debug               # Ví dụ đặt log level nếu cần debug
+      # - RUST_LOG=debug               
 EOF
 
-  # Pull image mới nhất
-  echo -e "${BLUE}* Đang kéo (pull) image mới nhất: ${target_image}...${NC}" # <<< Sử dụng biến
-  if docker compose pull; then # Compose sẽ đọc image từ file yaml
-    echo -e "${GREEN}* Pull image thành công.${NC}"
+  # Pull the latest image
+  echo -e "${BLUE}* Pulling the latest image: ${target_image}...${NC}" # <<< Use variable
+  if docker compose pull; then # Compose will read the image from the yaml file
+    echo -e "${GREEN}* Image pulled successfully.${NC}"
   else
-    echo -e "${RED}Lỗi: Không thể pull image ${target_image}. Vui lòng kiểm tra kết nối mạng và tên image.${NC}" # <<< Sử dụng biến
+    echo -e "${RED}Error: Could not pull image ${target_image}. Please check network connection and image name.${NC}" # <<< Use variable
     exit 1
   fi
 
-  # Khởi chạy container
-  echo -e "${BLUE}* Đang khởi chạy container Titan PCDN...${NC}"
+  # Start the container
+  echo -e "${BLUE}* Starting Titan PCDN container...${NC}"
   if docker compose up -d; then
-    echo -e "${GREEN}* Khởi chạy container thành công!${NC}"
+    echo -e "${GREEN}* Container started successfully!${NC}"
     echo -e "=================================================="
-    echo -e "${GREEN}=== Cài đặt và Khởi chạy Hoàn Tất! ===${NC}"
-    echo -e "  - Thư mục cài đặt: ${project_dir}"
-    echo -e "  - ACCESS_TOKEN đã được cấu hình (lưu trong file .env)."
-    echo -e "  - Kiểm tra logs: ${YELLOW}cd ${project_dir} && docker compose logs -f${NC}"
-    echo -e "  - Trạng thái container hiện tại:"
-    sleep 2
+    echo -e "${GREEN}=== Installation and Startup Complete! ===${NC}"
+    echo -e "  - Installation directory: ${project_dir}"
+    echo -e "  - ACCESS_TOKEN has been configured (saved in .env file)."
+    echo -e "  - Check logs: ${YELLOW}cd ${project_dir} && docker compose logs -f${NC}"
+    echo -e "  - Current container status:"
+    sleep 2 # Give container a moment to appear in ps
     docker compose ps
     echo ""
-    echo -e "  Lệnh quản lý:"
-    echo -e "  - Khởi động: ${YELLOW}cd ${project_dir} && docker compose up -d${NC}"
-    echo -e "  - Dừng:      ${YELLOW}cd ${project_dir} && docker compose down${NC}"
-    echo -e "  - Khởi động lại: ${YELLOW}cd ${project_dir} && docker compose restart${NC}"
+    echo -e "  Management commands:"
+    echo -e "  - Start:   ${YELLOW}cd ${project_dir} && docker compose up -d${NC}"
+    echo -e "  - Stop:    ${YELLOW}cd ${project_dir} && docker compose down${NC}"
+    echo -e "  - Restart: ${YELLOW}cd ${project_dir} && docker compose restart${NC}"
     echo -e "=================================================="
   else
-    echo -e "${RED}Lỗi: Không thể khởi chạy container. Vui lòng kiểm tra log bằng lệnh:${NC}"
+    echo -e "${RED}Error: Could not start container. Please check logs using the command:${NC}"
     echo -e "${YELLOW}cd ${project_dir} && docker compose logs${NC}"
     exit 1
   fi
 }
 
-# --- Chương trình chính ---
+# --- Main Program ---
 
 echo "=================================================="
-echo "     Chào mừng đến với Script Cài đặt Titan PCDN     "
+echo "     Welcome to the Titan PCDN Installation Script     "
 echo "=================================================="
 
-# 1. Kiểm tra quyền root
+# 1. Check for root privileges
 check_root
 
-# 2. Lấy ACCESS_TOKEN
+# 2. Get ACCESS_TOKEN
 USER_ACCESS_TOKEN=""
 if [ -z "$1" ]; then
-  read -p "Vui lòng nhập ACCESS_TOKEN của bạn: " USER_ACCESS_TOKEN
+  read -p "Please enter your ACCESS_TOKEN: " USER_ACCESS_TOKEN
 else
   USER_ACCESS_TOKEN=$1
 fi
 
 if [ -z "$USER_ACCESS_TOKEN" ]; then
-  echo -e "${RED}Lỗi: ACCESS_TOKEN không được để trống.${NC}"
+  echo -e "${RED}Error: ACCESS_TOKEN cannot be empty.${NC}"
   exit 1
 fi
-echo -e "${GREEN}* Đã nhận ACCESS_TOKEN.${NC}"
+echo -e "${GREEN}* Received ACCESS_TOKEN.${NC}"
 
-# 3. Cài đặt Docker (nếu cần)
+# 3. Install Docker (if needed)
 install_docker
 
-# 4. Thiết lập và chạy PCDN
+# 4. Set up and run PCDN
 setup_pcdn "$USER_ACCESS_TOKEN"
 
 exit 0
-
