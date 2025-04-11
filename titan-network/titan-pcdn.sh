@@ -53,7 +53,7 @@ setup_pcdn() {
   local access_token="$1"
   local project_dir=~/titan-pcdn # Thư mục cài đặt
   # *** Đặt tên image chính xác ở đây ***
-  local target_image="laodauhgc/titan-pcdn:latest-secured"
+  local target_image="laodauhgc/titan-pcdn:latest"
 
   echo -e "${BLUE}* Bắt đầu cấu hình Titan PCDN tại thư mục: ${project_dir}${NC}"
 
