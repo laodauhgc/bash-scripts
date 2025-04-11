@@ -52,6 +52,8 @@ install_docker() {
 setup_pcdn() {
   local access_token="$1"
   local project_dir=~/titan-pcdn # Thư mục cài đặt
+  # *** Đặt tên image chính xác ở đây ***
+  local target_image="laodauhgc/titan-pcdn:latest-secured"
 
   echo -e "${BLUE}* Bắt đầu cấu hình Titan PCDN tại thư mục: ${project_dir}${NC}"
 
@@ -69,7 +71,7 @@ setup_pcdn() {
   cat > docker-compose.yaml << EOF
 services:
   titan-pcdn:
-    image: laodauhgc/titan-pcdn:latest
+    image: ${target_image} # <<< Sử dụng biến chứa tên image đúng
     container_name: titan-pcdn
     privileged: true
     restart: always
@@ -79,22 +81,23 @@ services:
       - apparmor:unconfined
     network_mode: host
     volumes:
-      - ./data:/app/data
-      - ./data/docker:/var/lib/docker
-      - /etc/docker:/etc/docker:ro
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data:/app/data                     # Volume cho data của worker/agent
+      - ./data/docker:/var/lib/docker       # Volume cho data của Docker-in-Docker (nếu dùng)
+      # - /etc/docker:/etc/docker:ro        # Cân nhắc bỏ dòng này nếu không cần
+      - /var/run/docker.sock:/var/run/docker.sock # Mount socket để giao tiếp với Docker host
     environment:
       - ACCESS_TOKEN=\${ACCESS_TOKEN} # Docker Compose sẽ đọc từ file .env
       - TARGETARCH=amd64             # Đặt cứng hoặc tự động phát hiện nếu cần
       - OS=linux
+      # - RUST_LOG=debug               # Ví dụ đặt log level nếu cần debug
 EOF
 
   # Pull image mới nhất
-  echo -e "${BLUE}* Đang kéo (pull) image mới nhất: laodauhgc/titan-pcdn:latest...${NC}"
-  if docker compose pull; then
+  echo -e "${BLUE}* Đang kéo (pull) image mới nhất: ${target_image}...${NC}" # <<< Sử dụng biến
+  if docker compose pull; then # Compose sẽ đọc image từ file yaml
     echo -e "${GREEN}* Pull image thành công.${NC}"
   else
-    echo -e "${RED}Lỗi: Không thể pull image. Vui lòng kiểm tra kết nối mạng và tên image.${NC}"
+    echo -e "${RED}Lỗi: Không thể pull image ${target_image}. Vui lòng kiểm tra kết nối mạng và tên image.${NC}" # <<< Sử dụng biến
     exit 1
   fi
 
@@ -153,3 +156,4 @@ install_docker
 setup_pcdn "$USER_ACCESS_TOKEN"
 
 exit 0
+
