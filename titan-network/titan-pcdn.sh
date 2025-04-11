@@ -54,7 +54,7 @@ setup_pcdn() {
   local access_token="$1"
   local project_dir=~/titan-pcdn # Installation directory
   # *** Set the correct image name here ***
-  # Make sure this matches the image you built (e.g., latest-secured)
+  # Make sure this matches the image you built
   local target_image="laodauhgc/titan-pcdn:latest"
 
   echo -e "${BLUE}* Starting Titan PCDN configuration in directory: ${project_dir}${NC}"
