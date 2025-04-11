@@ -17,3 +17,9 @@ curl -s https://raw.githubusercontent.com/laodauhgc/bash-scripts/refs/heads/main
 *   **Hash:** Required.
 *   **Nodes:** 1-5 (default 5), If you don't fill in `number_of_nodes`, it defaults to `5`.
 *   **Root:** Requires `sudo`.
+
+# Instal Titan PCDN - `titan-pcdn.sh`
+
+```
+wget -O titan-pcdn.sh https://raw.githubusercontent.com/laodauhgc/bash-scripts/refs/heads/main/titan-network/titan-pcdn.sh && chmod +x titan-pcdn.sh && sudo ./titan-pcdn.sh [ACCESS_TOKEN]
+```
