@@ -55,7 +55,7 @@ setup_pcdn() {
   local project_dir=~/titan-pcdn # Installation directory
   # *** Set the correct image name here ***
   # Make sure this matches the image you built (e.g., latest-secured)
-  local target_image="laodauhgc/titan-pcdn:latest-secured"
+  local target_image="laodauhgc/titan-pcdn:latest"
 
   echo -e "${BLUE}* Starting Titan PCDN configuration in directory: ${project_dir}${NC}"
 
@@ -66,14 +66,13 @@ setup_pcdn() {
   # Create .env file
   echo -e "${BLUE}  - Creating .env file containing ACCESS_TOKEN...${NC}"
   echo "ACCESS_TOKEN=${access_token}" > .env
-  chmod 600 .env # Restrict read permissions for security
-
+  chmod 600 .env 
   # Create docker-compose.yaml file
   echo -e "${BLUE}  - Creating docker-compose.yaml file...${NC}"
   cat > docker-compose.yaml << EOF
 services:
   titan-pcdn:
-    image: ${target_image} # <<< Use the variable containing the correct image name
+    image: ${target_image}
     container_name: titan-pcdn
     privileged: true
     restart: always
@@ -95,11 +94,11 @@ services:
 EOF
 
   # Pull the latest image
-  echo -e "${BLUE}* Pulling the latest image: ${target_image}...${NC}" # <<< Use variable
-  if docker compose pull; then # Compose will read the image from the yaml file
+  echo -e "${BLUE}* Pulling the latest image: ${target_image}...${NC}" 
+  if docker compose pull; then 
     echo -e "${GREEN}* Image pulled successfully.${NC}"
   else
-    echo -e "${RED}Error: Could not pull image ${target_image}. Please check network connection and image name.${NC}" # <<< Use variable
+    echo -e "${RED}Error: Could not pull image ${target_image}. Please check network connection and image name.${NC}" 
     exit 1
   fi
 
@@ -113,7 +112,7 @@ EOF
     echo -e "  - ACCESS_TOKEN has been configured (saved in .env file)."
     echo -e "  - Check logs: ${YELLOW}cd ${project_dir} && docker compose logs -f${NC}"
     echo -e "  - Current container status:"
-    sleep 2 # Give container a moment to appear in ps
+    sleep 2 
     docker compose ps
     echo ""
     echo -e "  Management commands:"
