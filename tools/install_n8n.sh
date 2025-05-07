@@ -15,6 +15,29 @@ check_dns() {
   fi
 }
 
+# Hàm kiểm tra và giải phóng cổng 80/443
+check_and_free_ports() {
+  for port in 80 443; do
+    if ss -tulnp 2>/dev/null | grep -q ":$port "; then
+      echo "Cổng $port đang được sử dụng. Kiểm tra tiến trình..."
+      pids=$(ss -tulnp 2>/dev/null | grep ":$port " | awk '{print $NF}' | grep -oP 'pid=\K\d+' | sort -u)
+      for pid in $pids; do
+        process_name=$(ps -p "$pid" -o comm= 2>/dev/null)
+        echo "PID: $pid - Chương trình: $process_name"
+        echo "Dừng tiến trình $process_name (PID: $pid) để giải phóng cổng $port..."
+        kill -9 "$pid"
+      done
+    fi
+  done
+  # Kiểm tra lại xem cổng đã được giải phóng chưa
+  for port in 80 443; do
+    if ss -tulnp 2>/dev/null | grep -q ":$port "; then
+      echo "Lỗi: Không thể giải phóng cổng $port. Vui lòng kiểm tra và dừng tiến trình thủ công."
+      exit 1
+    fi
+  done
+}
+
 # Hàm đọc mật khẩu PostgreSQL từ file credentials
 get_postgres_password() {
   local subdomain_dir=$1
@@ -39,6 +62,17 @@ if ! command -v curl >/dev/null 2>&1; then
   apt install -y curl
   if [ $? -ne 0 ]; then
     echo "Lỗi: Không thể cài đặt curl. Vui lòng kiểm tra kết nối mạng hoặc cài đặt thủ công."
+    exit 1
+  fi
+fi
+
+# Kiểm tra jq để xử lý JSON
+if ! command -v jq >/dev/null 2>&1; then
+  echo "Cài đặt jq để xử lý JSON..."
+  apt update
+  apt install -y jq
+  if [ $? -ne 0 ]; then
+    echo "Lỗi: Không thể cài đặt jq. Vui lòng kiểm tra kết nối mạng hoặc cài đặt thủ công."
     exit 1
   fi
 fi
@@ -141,6 +175,9 @@ if [ "$confirm" != "y" ]; then
   echo "Đã hủy."
   exit 0
 fi
+
+# Giải phóng cổng 80 và 443
+check_and_free_ports
 
 # Lấy Zone ID của domain từ Cloudflare
 zone_id=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$BASE_DOMAIN" \
