@@ -53,28 +53,6 @@ if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>
   exit 1
 fi
 
-# Kiểm tra và cài đặt nginx nếu chưa có
-if ! command -v nginx >/dev/null 2>&1; then
-  echo "Cài đặt Nginx..."
-  apt update
-  apt install -y nginx
-  if [ $? -ne 0 ]; then
-    echo "Lỗi: Không thể cài đặt Nginx. Vui lòng kiểm tra kết nối mạng hoặc cài đặt thủ công."
-    exit 1
-  fi
-fi
-
-# Kiểm tra và cài đặt certbot nếu chưa có
-if ! command -v certbot >/dev/null 2>&1; then
-  echo "Cài đặt Certbot..."
-  apt update
-  apt install -y certbot python3-certbot-nginx
-  if [ $? -ne 0 ]; then
-    echo "Lỗi: Không thể cài đặt Certbot. Vui lòng kiểm tra kết nối mạng hoặc cài đặt thủ công."
-    exit 1
-  fi
-fi
-
 # Kiểm tra netcat (nc) để kiểm tra cổng
 if ! command -v nc >/dev/null 2>&1; then
   echo "Cài đặt netcat để kiểm tra cổng..."
@@ -133,6 +111,10 @@ if ! mkdir -p "$ROOT_DIR" || ! [ -w "$ROOT_DIR" ]; then
   echo "Lỗi: Không thể tạo hoặc ghi vào thư mục $ROOT_DIR. Vui lòng kiểm tra quyền."
   exit 1
 fi
+
+# Tạo thư mục cho Nginx và chứng chỉ
+mkdir -p "$ROOT_DIR/nginx/conf.d"
+mkdir -p "$ROOT_DIR/letsencrypt"
 
 # Xử lý tùy chọn liệt kê instance
 if [ "$LIST" = true ]; then
@@ -235,6 +217,116 @@ for subdomain in "${subdomains[@]}"; do
   compose_file+="\n\n"
 
   compose_file+="  $postgres_service_name:\n    image: postgres:16.8\n    environment:\n      - POSTGRES_USER=n8n-$subdomain\n      - POSTGRES_PASSWORD=$POSTGRES_PASSWORD\n      - POSTGRES_DB=db-n8n-$subdomain\n    volumes:\n      - $SUBDOMAIN_DIR/postgres:/var/lib/postgresql/data\n\n"
+done
+
+# Thêm dịch vụ Nginx
+compose_file+="  nginx:\n    image: nginx:latest\n    ports:\n      - \"80:80\"\n      - \"443:443\"\n    volumes:\n      - $ROOT_DIR/nginx/conf.d:/etc/nginx/conf.d\n      - $ROOT_DIR/letsencrypt:/etc/letsencrypt\n"
+
+# Ghi file docker-compose.yml vào thư mục gốc
+echo -e "$compose_file" > "$ROOT_DIR/docker-compose.yml"
+
+# Khởi động các dịch vụ
+cd "$ROOT_DIR"
+if [ "$REINIT" = true ]; then
+  for subdomain in "${subdomains[@]}"; do
+    n8n_service_name="n8n-${subdomain}"
+    postgres_service_name="postgres-${subdomain}"
+    docker compose stop "$n8n_service_name" "$postgres_service_name"
+    docker compose rm -f "$n8n_service_name" "$postgres_service_name"
+  done
+fi
+docker compose up -d
+cd - >/dev/null
+
+# Tạo file cấu hình Nginx tạm thời để lấy chứng chỉ
+for subdomain in "${subdomains[@]}"; do
+  nginx_conf="$ROOT_DIR/nginx/conf.d/$subdomain.$BASE_DOMAIN.conf"
+
+  cat << EOF > "$nginx_conf"
+server {
+    listen 80;
+    server_name $subdomain.$BASE_DOMAIN;
+
+    location / {
+        return 200 'Temporary server for Certbot';
+    }
+}
+EOF
+done
+
+# Khởi động lại container Nginx để áp dụng cấu hình
+cd "$ROOT_DIR"
+docker compose restart nginx
+cd - >/dev/null
+
+# Kiểm tra cổng 80
+check_port_access 80
+
+# Tải chứng chỉ Let's Encrypt bằng Certbot
+for subdomain in "${subdomains[@]}"; do
+  docker run --rm -v "$ROOT_DIR/letsencrypt:/etc/letsencrypt" certbot/certbot certonly --standalone --non-interactive --agree-tos --email "$LETSENCRYPT_EMAIL" -d "$subdomain.$BASE_DOMAIN"
+  if [ $? -ne 0 ]; then
+    echo "Lỗi: Không thể lấy chứng chỉ Let's Encrypt cho $subdomain.$BASE_DOMAIN."
+    echo "Kiểm tra:"
+    echo "  - Cổng 80 có mở và truy cập được từ bên ngoài không? (ufw allow 80/tcp)"
+    echo "  - DNS của $subdomain.$BASE_DOMAIN có trỏ đúng về IP máy chủ không? (dig $subdomain.$BASE_DOMAIN)"
+    echo "  - Có thể cần liên hệ nhà cung cấp VPS để mở cổng 80."
+    exit 1
+  fi
+done
+
+# Cấu hình Nginx với chứng chỉ
+for subdomain in "${subdomains[@]}"; do
+  nginx_conf="$ROOT_DIR/nginx/conf.d/$subdomain.$BASE_DOMAIN.conf"
+  n8n_port=${port_mapping[$subdomain]}
+
+  cat << EOF > "$nginx_conf"
+server {
+    listen 80;
+    server_name $subdomain.$BASE_DOMAIN;
+
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name $subdomain.$BASE_DOMAIN;
+
+    ssl_certificate /etc/letsencrypt/live/$subdomain.$BASE_DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$subdomain.$BASE_DOMAIN/privkey.pem;
+
+    location / {
+        proxy_pass http://$n8n_service_name:5678;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+done
+
+# Khởi động lại container Nginx để áp dụng cấu hình
+cd "$ROOT_DIR"
+docker compose restart nginx
+cd - >/dev/null
+
+# Cập nhật danh sách instance và tạo file info
+for subdomain in "${subdomains[@]}"; do
+  SUBDOMAIN_DIR="$ROOT_DIR/$subdomain-$(echo $BASE_DOMAIN | tr '.' '-')"
+  mkdir -p "$SUBDOMAIN_DIR"
+
+  # Kiểm tra subdomain đã tồn tại
+  POSTGRES_PASSWORD=$(get_postgres_password "$SUBDOMAIN_DIR")
+  if [ -f "$SUBDOMAIN_DIR/postgres-credentials.txt" ] && [ "$REINIT" = false ]; then
+    continue
+  fi
+
+  # Lưu mật khẩu vào file credentials
+  echo "POSTGRES_PASSWORD=$POSTGRES_PASSWORD" > "$SUBDOMAIN_DIR/postgres-credentials.txt"
+  chmod 600 "$SUBDOMAIN_DIR/postgres-credentials.txt"
 
   # Cập nhật danh sách instance
   if ! grep -Fx "$subdomain" "$ROOT_DIR/instances.txt" >/dev/null 2>&1; then
@@ -243,6 +335,7 @@ for subdomain in "${subdomains[@]}"; do
 
   # Tạo file info.md với hậu tố thời gian
   info_file="$SUBDOMAIN_DIR/info-$(date +%F-%H%M%S).md"
+  n8n_port=${port_mapping[$subdomain]}
   cat << EOF > "$info_file"
 # Thông tin cài đặt n8n cho $subdomain.$BASE_DOMAIN
 
@@ -272,113 +365,6 @@ for subdomain in "${subdomains[@]}"; do
 - Để cập nhật n8n, chạy: \`cd $ROOT_DIR && docker compose pull && docker compose up -d\`.
 EOF
 done
-
-# Ghi file docker-compose.yml vào thư mục gốc
-echo -e "$compose_file" > "$ROOT_DIR/docker-compose.yml"
-
-# Khởi động các dịch vụ
-cd "$ROOT_DIR"
-if [ "$REINIT" = true ]; then
-  for subdomain in "${subdomains[@]}"; do
-    n8n_service_name="n8n-${subdomain}"
-    postgres_service_name="postgres-${subdomain}"
-    docker compose stop "$n8n_service_name" "$postgres_service_name"
-    docker compose rm -f "$n8n_service_name" "$postgres_service_name"
-  done
-fi
-docker compose up -d
-cd - >/dev/null
-
-# Tạo file cấu hình Nginx tạm thời để lấy chứng chỉ
-for subdomain in "${subdomains[@]}"; do
-  nginx_conf="/etc/nginx/sites-available/$subdomain.$BASE_DOMAIN"
-  nginx_link="/etc/nginx/sites-enabled/$subdomain.$BASE_DOMAIN"
-
-  cat << EOF > "$nginx_conf"
-server {
-    listen 80;
-    server_name $subdomain.$BASE_DOMAIN;
-
-    location / {
-        return 200 'Temporary server for Certbot';
-    }
-}
-EOF
-
-  ln -sf "$nginx_conf" "$nginx_link"
-done
-
-# Kiểm tra cấu hình Nginx
-nginx -t
-if [ $? -ne 0 ]; then
-  echo "Lỗi: Cấu hình Nginx không hợp lệ. Vui lòng kiểm tra lại."
-  exit 1
-fi
-
-# Khởi động lại Nginx để áp dụng cấu hình tạm thời
-systemctl restart nginx
-
-# Kiểm tra cổng 80
-check_port_access 80
-
-# Tải chứng chỉ Let's Encrypt bằng Certbot
-for subdomain in "${subdomains[@]}"; do
-  certbot certonly --nginx -d "$subdomain.$BASE_DOMAIN" --non-interactive --agree-tos --email "$LETSENCRYPT_EMAIL"
-  if [ $? -ne 0 ]; then
-    echo "Lỗi: Không thể lấy chứng chỉ Let's Encrypt cho $subdomain.$BASE_DOMAIN."
-    echo "Kiểm tra:"
-    echo "  - Cổng 80 có mở và truy cập được từ bên ngoài không? (ufw allow 80/tcp)"
-    echo "  - DNS của $subdomain.$BASE_DOMAIN có trỏ đúng về IP máy chủ không? (dig $subdomain.$BASE_DOMAIN)"
-    echo "  - Có thể cần liên hệ nhà cung cấp VPS để mở cổng 80."
-    exit 1
-  fi
-done
-
-# Cấu hình Nginx với chứng chỉ
-for subdomain in "${subdomains[@]}"; do
-  nginx_conf="/etc/nginx/sites-available/$subdomain.$BASE_DOMAIN"
-  nginx_link="/etc/nginx/sites-enabled/$subdomain.$BASE_DOMAIN"
-  n8n_port=${port_mapping[$subdomain]}
-
-  cat << EOF > "$nginx_conf"
-server {
-    listen 80;
-    server_name $subdomain.$BASE_DOMAIN;
-
-    location / {
-        return 301 https://\$host\$request_uri;
-    }
-}
-
-server {
-    listen 443 ssl;
-    server_name $subdomain.$BASE_DOMAIN;
-
-    ssl_certificate /etc/letsencrypt/live/$subdomain.$BASE_DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$subdomain.$BASE_DOMAIN/privkey.pem;
-
-    location / {
-        proxy_pass http://localhost:$n8n_port;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-}
-EOF
-
-  ln -sf "$nginx_conf" "$nginx_link"
-done
-
-# Kiểm tra cấu hình Nginx
-nginx -t
-if [ $? -ne 0 ]; then
-  echo "Lỗi: Cấu hình Nginx không hợp lệ. Vui lòng kiểm tra lại."
-  exit 1
-fi
-
-# Khởi động lại Nginx
-systemctl restart nginx
 
 # In thông tin ra màn hình
 for subdomain in "${subdomains[@]}"; do
