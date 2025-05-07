@@ -15,9 +15,9 @@ check_dns() {
   fi
 }
 
-# Hàm kiểm tra và giải phóng cổng 80/443
+# Hàm kiểm tra và giải phóng cổng 80
 check_and_free_ports() {
-  for port in 80 443; do
+  for port in 80; do
     if ss -tulnp 2>/dev/null | grep -q ":$port "; then
       echo "Cổng $port đang được sử dụng. Kiểm tra tiến trình..."
       pids=$(ss -tulnp 2>/dev/null | grep ":$port " | awk '{print $NF}' | grep -oP 'pid=\K\d+' | sort -u)
@@ -30,26 +30,12 @@ check_and_free_ports() {
     fi
   done
   # Kiểm tra lại xem cổng đã được giải phóng chưa
-  for port in 80 443; do
+  for port in 80; do
     if ss -tulnp 2>/dev/null | grep -q ":$port "; then
       echo "Lỗi: Không thể giải phóng cổng $port. Vui lòng kiểm tra và dừng tiến trình thủ công."
       exit 1
     fi
   done
-}
-
-# Hàm tạo CSR và private key bằng openssl
-generate_csr() {
-  local domain=$1
-  local key_file=$2
-  local csr_file=$3
-
-  # Tạo private key và CSR
-  openssl req -new -newkey rsa:2048 -nodes -keyout "$key_file" -out "$csr_file" -subj "/C=US/ST=California/L=San Francisco/O=MyOrg/OU=MyUnit/CN=$domain" >/dev/null 2>&1
-  if [ $? -ne 0 ]; then
-    echo "Lỗi: Không thể tạo CSR cho $domain."
-    exit 1
-  fi
 }
 
 # Hàm đọc mật khẩu PostgreSQL từ file credentials
@@ -69,51 +55,16 @@ if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>
   exit 1
 fi
 
-# Kiểm tra curl để gọi API Cloudflare
-if ! command -v curl >/dev/null 2>&1; then
-  echo "Cài đặt curl để gọi API Cloudflare..."
-  apt update
-  apt install -y curl
-  if [ $? -ne 0 ]; then
-    echo "Lỗi: Không thể cài đặt curl. Vui lòng kiểm tra kết nối mạng hoặc cài đặt thủ công."
-    exit 1
-  fi
-fi
-
-# Kiểm tra jq để xử lý JSON
-if ! command -v jq >/dev/null 2>&1; then
-  echo "Cài đặt jq để xử lý JSON..."
-  apt update
-  apt install -y jq
-  if [ $? -ne 0 ]; then
-    echo "Lỗi: Không thể cài đặt jq. Vui lòng kiểm tra kết nối mạng hoặc cài đặt thủ công."
-    exit 1
-  fi
-fi
-
-# Kiểm tra openssl để tạo CSR
-if ! command -v openssl >/dev/null 2>&1; then
-  echo "Cài đặt openssl để tạo CSR..."
-  apt update
-  apt install -y openssl
-  if [ $? -ne 0 ]; then
-    echo "Lỗi: Không thể cài đặt openssl. Vui lòng kiểm tra kết nối mạng hoặc cài đặt thủ công."
-    exit 1
-  fi
-fi
-
 # Xử lý đối số dòng lệnh
 BASE_DOMAIN="n8n.works"  # Mặc định base domain
-CLOUDFLARE_API_TOKEN=""  # Token không được ghi cứng
 INCLUDE_REDIS=true      # Đặt thành false nếu không muốn sử dụng Redis
 REINIT=false            # Tùy chọn khởi tạo lại
 LIST=false              # Tùy chọn liệt kê instance
 UPDATE_ALL=false        # Tùy chọn cập nhật tất cả instance
 
-while getopts "d:t:rlu" opt; do
+while getopts "d:rlu" opt; do
   case $opt in
     d) BASE_DOMAIN="$OPTARG" ;;
-    t) CLOUDFLARE_API_TOKEN="$OPTARG" ;;
     r) REINIT=true ;;
     l) LIST=true ;;
     u) UPDATE_ALL=true ;;
@@ -121,14 +72,6 @@ while getopts "d:t:rlu" opt; do
   esac
 done
 shift $((OPTIND-1))
-
-# Kiểm tra API token Cloudflare, ưu tiên tham số -t, sau đó kiểm tra biến môi trường
-CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-$CLOUDFLARE_API_TOKEN_ENV}
-
-if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-  echo "Lỗi: Cloudflare API token không được cung cấp. Sử dụng tham số -t hoặc biến môi trường CLOUDFLARE_API_TOKEN_ENV để truyền token."
-  exit 1
-fi
 
 # Kiểm tra biến môi trường BASE_DOMAIN_ENV, ưu tiên hơn giá trị mặc định
 BASE_DOMAIN=${BASE_DOMAIN_ENV:-$BASE_DOMAIN}
@@ -142,9 +85,8 @@ if ! mkdir -p "$ROOT_DIR" || ! [ -w "$ROOT_DIR" ]; then
   exit 1
 fi
 
-# Tạo thư mục cho Nginx và chứng chỉ
+# Tạo thư mục cho Nginx
 mkdir -p "$ROOT_DIR/nginx/conf.d"
-mkdir -p "$ROOT_DIR/ssl"
 
 # Xử lý tùy chọn liệt kê instance
 if [ "$LIST" = true ]; then
@@ -159,9 +101,8 @@ fi
 
 # Kiểm tra danh sách subdomain
 if [ $# -eq 0 ] && [ "$UPDATE_ALL" = false ]; then
-  echo "Cách sử dụng: $0 [-d base_domain] [-t cloudflare_api_token] [-r] [-l] [-u] [subdomain1 subdomain2 ...]"
+  echo "Cách sử dụng: $0 [-d base_domain] [-r] [-l] [-u] [subdomain1 subdomain2 ...]"
   echo "  -d: Chỉ định base domain (mặc định: n8n.works)"
-  echo "  -t: Chỉ định Cloudflare API token (bắt buộc, hoặc dùng biến môi trường CLOUDFLARE_API_TOKEN_ENV)"
   echo "  -r: Khởi tạo lại instance cho các subdomain chỉ định"
   echo "  -l: Liệt kê tất cả instance đã triển khai"
   echo "  -u: Cập nhật tất cả instance hiện có"
@@ -203,48 +144,8 @@ if [ "$confirm" != "y" ]; then
   exit 0
 fi
 
-# Giải phóng cổng 80 và 443
+# Giải phóng cổng 80
 check_and_free_ports
-
-# Tạo chứng chỉ Origin CA cho từng domain
-for subdomain in "${subdomains[@]}"; do
-  domain="$subdomain.$BASE_DOMAIN"
-  cert_file="$ROOT_DIR/ssl/$domain.crt"
-  key_file="$ROOT_DIR/ssl/$domain.key"
-  csr_file="$ROOT_DIR/ssl/$domain.csr"
-
-  if [ ! -f "$cert_file" ] || [ ! -f "$key_file" ]; then
-    echo "Tạo CSR và private key cho $domain..."
-    generate_csr "$domain" "$key_file" "$csr_file"
-
-    # Đọc CSR từ file và tạo JSON body bằng jq
-    csr_content=$(cat "$csr_file")
-    body=$(jq -n --arg domain "$domain" --arg csr "$csr_content" \
-      '{hostnames: [$domain], request_type: "origin-rsa", requested_validity: 5475, csr: $csr}')
-
-    echo "Tạo chứng chỉ Origin CA cho $domain..."
-    response=$(curl -s -X POST "https://api.cloudflare.com/client/v4/certificates" \
-      -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-      -H "Content-Type: application/json" \
-      --data "$body")
-
-    # Lấy chứng chỉ từ response
-    cert=$(echo "$response" | jq -r '.result.certificate')
-
-    if [ -z "$cert" ] || [ "$cert" = "null" ]; then
-      echo "Lỗi: Không thể tạo chứng chỉ Origin CA cho $domain. Kiểm tra API token hoặc quyền truy cập (cần quyền SSL and Certificates:Edit)."
-      echo "Response: $response"
-      exit 1
-    fi
-
-    # Lưu chứng chỉ
-    echo "$cert" > "$cert_file"
-    chmod 600 "$cert_file"
-
-    # Xóa file CSR tạm thời
-    rm "$csr_file"
-  fi
-done
 
 # Gán cổng động cho mỗi instance n8n
 port=5678
@@ -293,7 +194,7 @@ for subdomain in "${subdomains[@]}"; do
 done
 
 # Thêm dịch vụ Nginx
-compose_file+="  nginx:\n    image: nginx:latest\n    ports:\n      - \"80:80\"\n      - \"443:443\"\n    volumes:\n      - $ROOT_DIR/nginx/conf.d:/etc/nginx/conf.d\n      - $ROOT_DIR/ssl:/etc/nginx/ssl\n"
+compose_file+="  nginx:\n    image: nginx:latest\n    ports:\n      - \"80:80\"\n    volumes:\n      - $ROOT_DIR/nginx/conf.d:/etc/nginx/conf.d\n"
 
 # Ghi file docker-compose.yml vào thư mục gốc
 echo -e "$compose_file" > "$ROOT_DIR/docker-compose.yml"
@@ -311,7 +212,7 @@ fi
 docker compose up -d
 cd - >/dev/null
 
-# Cấu hình Nginx với chứng chỉ
+# Cấu hình Nginx để proxy đến n8n (chỉ HTTP, vì Cloudflare xử lý HTTPS)
 for subdomain in "${subdomains[@]}"; do
   domain="$subdomain.$BASE_DOMAIN"
   nginx_conf="$ROOT_DIR/nginx/conf.d/$domain.conf"
@@ -320,18 +221,6 @@ for subdomain in "${subdomains[@]}"; do
 server {
     listen 80;
     server_name $domain;
-
-    location / {
-        return 301 https://\$host\$request_uri;
-    }
-}
-
-server {
-    listen 443 ssl;
-    server_name $domain;
-
-    ssl_certificate /etc/nginx/ssl/$domain.crt;
-    ssl_certificate_key /etc/nginx/ssl/$domain.key;
 
     location / {
         proxy_pass http://$n8n_service_name:5678;
