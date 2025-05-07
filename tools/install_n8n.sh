@@ -79,7 +79,7 @@ fi
 
 # Xử lý đối số dòng lệnh
 BASE_DOMAIN="n8n.works"  # Mặc định base domain
-CLOUDFLARE_API_TOKEN="sZBXpphLFS1oc46OPnu1Xhp7XhvFbZX-PnsA5HPr"  # API token của Cloudflare
+CLOUDFLARE_API_TOKEN=""  # Token không được ghi cứng
 INCLUDE_REDIS=true      # Đặt thành false nếu không muốn sử dụng Redis
 REINIT=false            # Tùy chọn khởi tạo lại
 LIST=false              # Tùy chọn liệt kê instance
@@ -97,9 +97,11 @@ while getopts "d:t:rlu" opt; do
 done
 shift $((OPTIND-1))
 
-# Kiểm tra API token Cloudflare
+# Kiểm tra API token Cloudflare, ưu tiên tham số -t, sau đó kiểm tra biến môi trường
+CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-$CLOUDFLARE_API_TOKEN_ENV}
+
 if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-  echo "Lỗi: Cloudflare API token không được cung cấp. Sử dụng tham số -t để truyền token."
+  echo "Lỗi: Cloudflare API token không được cung cấp. Sử dụng tham số -t hoặc biến môi trường CLOUDFLARE_API_TOKEN_ENV để truyền token."
   exit 1
 fi
 
@@ -134,7 +136,7 @@ fi
 if [ $# -eq 0 ] && [ "$UPDATE_ALL" = false ]; then
   echo "Cách sử dụng: $0 [-d base_domain] [-t cloudflare_api_token] [-r] [-l] [-u] [subdomain1 subdomain2 ...]"
   echo "  -d: Chỉ định base domain (mặc định: n8n.works)"
-  echo "  -t: Chỉ định Cloudflare API token (bắt buộc)"
+  echo "  -t: Chỉ định Cloudflare API token (bắt buộc, hoặc dùng biến môi trường CLOUDFLARE_API_TOKEN_ENV)"
   echo "  -r: Khởi tạo lại instance cho các subdomain chỉ định"
   echo "  -l: Liệt kê tất cả instance đã triển khai"
   echo "  -u: Cập nhật tất cả instance hiện có"
@@ -179,16 +181,6 @@ fi
 # Giải phóng cổng 80 và 443
 check_and_free_ports
 
-# Lấy Zone ID của domain từ Cloudflare
-zone_id=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$BASE_DOMAIN" \
-  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-  -H "Content-Type: application/json" | jq -r '.result[0].id')
-
-if [ -z "$zone_id" ] || [ "$zone_id" = "null" ]; then
-  echo "Lỗi: Không thể lấy Zone ID cho $BASE_DOMAIN. Kiểm tra API token hoặc tên domain."
-  exit 1
-fi
-
 # Tạo chứng chỉ Origin CA cho từng domain
 for subdomain in "${subdomains[@]}"; do
   domain="$subdomain.$BASE_DOMAIN"
@@ -197,7 +189,7 @@ for subdomain in "${subdomains[@]}"; do
 
   if [ ! -f "$cert_file" ] || [ ! -f "$key_file" ]; then
     echo "Tạo chứng chỉ Origin CA cho $domain..."
-    response=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$zone_id/origin_ca_certificates" \
+    response=$(curl -s -X POST "https://api.cloudflare.com/client/v4/origin_ca_certificates" \
       -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
       -H "Content-Type: application/json" \
       --data '{"hostnames":["'"$domain"'"],"request_type":"origin-rsa","requested_validity":5475}')
@@ -207,7 +199,7 @@ for subdomain in "${subdomains[@]}"; do
     key=$(echo "$response" | jq -r '.result.private_key')
 
     if [ -z "$cert" ] || [ "$cert" = "null" ] || [ -z "$key" ] || [ "$key" = "null" ]; then
-      echo "Lỗi: Không thể tạo chứng chỉ Origin CA cho $domain. Kiểm tra API token hoặc quyền truy cập."
+      echo "Lỗi: Không thể tạo chứng chỉ Origin CA cho $domain. Kiểm tra API token hoặc quyền truy cập (cần quyền SSL and Certificates:Edit)."
       exit 1
     fi
 
