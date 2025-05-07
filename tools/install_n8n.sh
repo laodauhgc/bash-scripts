@@ -21,10 +21,9 @@ check_dns() {
   local subdomain=$1
   local base_domain=$2
   if ! nslookup "$subdomain.$base_domain" >/dev/null 2>&1; then
-    echo "Cảnh báo: Không thể giải quyết DNS cho $subdomain.$base_domain. Vui lòng kiểm tra cấu hình DNS."
-    return 1
+    echo "Lỗi: Không thể giải quyết DNS cho $subdomain.$base_domain. Vui lòng kiểm tra cấu hình DNS."
+    exit 1
   fi
-  return 0
 }
 
 # Hàm kiểm tra cổng 80 và 443
@@ -159,8 +158,8 @@ fi
 # Xây dựng file docker-compose.yml
 compose_file="services:\n"
 
-# Thêm dịch vụ Traefik
-compose_file+="  traefik:\n    image: traefik:v2.10\n    command:\n      - --api.insecure=true\n      - --providers.docker=true\n      - --entrypoints.web.address=:80\n      - --entrypoints.websecure.address=:443\n      - --certificatesresolvers.myresolver.acme.httpchallenge=true\n      - --certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web\n      - --certificatesresolvers.myresolver.acme.email=$LETSENCRYPT_EMAIL\n      - --certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json\n    ports:\n      - \"80:80\"\n      - \"443:443\"\n      - \"8080:8080\"\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock:ro\n      - $ROOT_DIR/traefik/letsencrypt:/letsencrypt\n    labels:\n      - \"traefik.enable=true\"\n      - \"traefik.http.routers.traefik.rule=Host(\`traefik.$BASE_DOMAIN\`)\"\n      - \"traefik.http.services.traefik.loadbalancer.server.port=8080\"\n      - \"traefik.http.routers.traefik.entrypoints=websecure\"\n      - \"traefik.http.routers.traefik.tls.certresolver=myresolver\"\n\n"
+# Thêm dịch vụ Traefik với cấu hình ACME tối ưu
+compose_file+="  traefik:\n    image: traefik:v2.11\n    command:\n      - --api.insecure=true\n      - --providers.docker=true\n      - --entrypoints.web.address=:80\n      - --entrypoints.websecure.address=:443\n      - --certificatesresolvers.myresolver.acme.httpchallenge=true\n      - --certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web\n      - --certificatesresolvers.myresolver.acme.email=$LETSENCRYPT_EMAIL\n      - --certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json\n      - --certificatesresolvers.myresolver.acme.httpchallenge.timeout=30\n      - --certificatesresolvers.myresolver.acme.caserver=https://acme-v02.api.letsencrypt.org/directory\n    ports:\n      - \"80:80\"\n      - \"443:443\"\n      - \"8080:8080\"\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock:ro\n      - $ROOT_DIR/traefik/letsencrypt:/letsencrypt\n    labels:\n      - \"traefik.enable=true\"\n      - \"traefik.http.routers.traefik.rule=Host(\`traefik.$BASE_DOMAIN\`)\"\n      - \"traefik.http.services.traefik.loadbalancer.server.port=8080\"\n      - \"traefik.http.routers.traefik.entrypoints=websecure\"\n      - \"traefik.http.routers.traefik.tls.certresolver=myresolver\"\n\n"
 
 # Thêm dịch vụ Redis nếu được kích hoạt
 if [ "$INCLUDE_REDIS" = true ]; then
