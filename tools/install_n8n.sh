@@ -217,14 +217,16 @@ for subdomain in "${subdomains[@]}"; do
     echo "Tạo CSR và private key cho $domain..."
     generate_csr "$domain" "$key_file" "$csr_file"
 
-    # Đọc CSR từ file
-    csr_content=$(cat "$csr_file" | tr '\n' '\\n')
+    # Đọc CSR từ file và tạo JSON body bằng jq
+    csr_content=$(cat "$csr_file")
+    body=$(jq -n --arg domain "$domain" --arg csr "$csr_content" \
+      '{hostnames: [$domain], request_type: "origin-rsa", requested_validity: 5475, csr: $csr}')
 
     echo "Tạo chứng chỉ Origin CA cho $domain..."
     response=$(curl -s -X POST "https://api.cloudflare.com/client/v4/certificates" \
       -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
       -H "Content-Type: application/json" \
-      --data "{\"hostnames\":[\"$domain\"],\"request_type\":\"origin-rsa\",\"requested_validity\":5475,\"csr\":\"$csr_content\"}")
+      --data "$body")
 
     # Lấy chứng chỉ từ response
     cert=$(echo "$response" | jq -r '.result.certificate')
