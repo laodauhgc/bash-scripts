@@ -27,6 +27,16 @@ check_dns() {
   return 0
 }
 
+# Hàm kiểm tra cổng 80 và 443
+check_ports() {
+  for port in 80 443; do
+    if ss -tulnp | grep -q ":$port "; then
+      echo "Lỗi: Cổng $port đã được sử dụng. Giải phóng cổng trước khi tiếp tục."
+      exit 1
+    fi
+  done
+}
+
 # Hàm đọc mật khẩu PostgreSQL từ file credentials
 get_postgres_password() {
   local subdomain_dir=$1
@@ -131,7 +141,8 @@ if [ "$UPDATE_ALL" = true ]; then
   fi
 fi
 
-# Kiểm tra DNS và xác nhận trước khi chạy
+# Kiểm tra DNS, cổng, và xác nhận trước khi chạy
+check_ports
 echo "Sẽ triển khai/cập nhật các instance sau: ${subdomains[*]}"
 echo "Base domain: $BASE_DOMAIN"
 echo "Thư mục gốc: $ROOT_DIR"
@@ -146,7 +157,7 @@ if [ "$confirm" != "y" ]; then
 fi
 
 # Xây dựng file docker-compose.yml
-compose_file="version: '3.9'\n\nservices:\n"
+compose_file="services:\n"
 
 # Thêm dịch vụ Traefik
 compose_file+="  traefik:\n    image: traefik:v2.10\n    command:\n      - --api.insecure=true\n      - --providers.docker=true\n      - --entrypoints.web.address=:80\n      - --entrypoints.websecure.address=:443\n      - --certificatesresolvers.myresolver.acme.httpchallenge=true\n      - --certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web\n      - --certificatesresolvers.myresolver.acme.email=$LETSENCRYPT_EMAIL\n      - --certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json\n    ports:\n      - \"80:80\"\n      - \"443:443\"\n      - \"8080:8080\"\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock:ro\n      - $ROOT_DIR/traefik/letsencrypt:/letsencrypt\n    labels:\n      - \"traefik.enable=true\"\n      - \"traefik.http.routers.traefik.rule=Host(\`traefik.$BASE_DOMAIN\`)\"\n      - \"traefik.http.services.traefik.loadbalancer.server.port=8080\"\n      - \"traefik.http.routers.traefik.entrypoints=websecure\"\n      - \"traefik.http.routers.traefik.tls.certresolver=myresolver\"\n\n"
