@@ -5,6 +5,17 @@ generate_password() {
   tr -dc A-Za-z0-9 </dev/urandom | head -c 12
 }
 
+# Hàm kiểm tra và yêu cầu email nếu LETSENCRYPT_EMAIL không tồn tại
+prompt_email() {
+  if [ -z "$LETSENCRYPT_EMAIL" ]; then
+    read -p "Nhập email cho Let's Encrypt: " LETSENCRYPT_EMAIL
+    if [ -z "$LETSENCRYPT_EMAIL" ]; then
+      echo "Lỗi: Email không được để trống."
+      exit 1
+    fi
+  fi
+}
+
 # Hàm kiểm tra DNS cho subdomain (chỉ kiểm tra xem có giải quyết được hay không)
 check_dns() {
   local subdomain=$1
@@ -55,14 +66,16 @@ fi
 
 # Xử lý đối số dòng lệnh
 BASE_DOMAIN="n8n.works"  # Mặc định base domain
-INCLUDE_REDIS=true  # Đặt thành false nếu không muốn sử dụng Redis
-REINIT=false  # Tùy chọn khởi tạo lại
-LIST=false  # Tùy chọn liệt kê instance
-UPDATE_ALL=false  # Tùy chọn cập nhật tất cả instance
+LETSENCRYPT_EMAIL=""    # Email Let's Encrypt mặc định là rỗng
+INCLUDE_REDIS=true      # Đặt thành false nếu không muốn sử dụng Redis
+REINIT=false            # Tùy chọn khởi tạo lại
+LIST=false              # Tùy chọn liệt kê instance
+UPDATE_ALL=false        # Tùy chọn cập nhật tất cả instance
 
-while getopts "d:rlu" opt; do
+while getopts "d:e:rlu" opt; do
   case $opt in
     d) BASE_DOMAIN="$OPTARG" ;;
+    e) LETSENCRYPT_EMAIL="$OPTARG" ;;
     r) REINIT=true ;;
     l) LIST=true ;;
     u) UPDATE_ALL=true ;;
@@ -73,6 +86,12 @@ shift $((OPTIND-1))
 
 # Kiểm tra biến môi trường BASE_DOMAIN_ENV, ưu tiên hơn giá trị mặc định
 BASE_DOMAIN=${BASE_DOMAIN_ENV:-$BASE_DOMAIN}
+
+# Kiểm tra biến môi trường LETSENCRYPT_EMAIL nếu không được truyền qua tham số
+LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL:-$LETSENCRYPT_EMAIL_ENV}
+
+# Yêu cầu nhập email nếu không có giá trị
+prompt_email
 
 # Tạo thư mục gốc dựa trên base domain
 ROOT_DIR="/root/$(echo $BASE_DOMAIN | tr '.' '-')"
@@ -96,8 +115,9 @@ fi
 
 # Kiểm tra danh sách subdomain
 if [ $# -eq 0 ] && [ "$UPDATE_ALL" = false ]; then
-  echo "Cách sử dụng: $0 [-d base_domain] [-r] [-l] [-u] [subdomain1 subdomain2 ...]"
+  echo "Cách sử dụng: $0 [-d base_domain] [-e letsencrypt_email] [-r] [-l] [-u] [subdomain1 subdomain2 ...]"
   echo "  -d: Chỉ định base domain (mặc định: n8n.works)"
+  echo "  -e: Chỉ định email cho Let's Encrypt (có thể dùng biến môi trường LETSENCRYPT_EMAIL_ENV)"
   echo "  -r: Khởi tạo lại instance cho các subdomain chỉ định"
   echo "  -l: Liệt kê tất cả instance đã triển khai"
   echo "  -u: Cập nhật tất cả instance hiện có"
@@ -148,6 +168,14 @@ if [ "$INCLUDE_REDIS" = true ]; then
   compose_file+="  redis:\n    image: redis:7.2\n    volumes:\n      - $ROOT_DIR/redis:/data\n\n"
 fi
 
+# Gán cổng động cho mỗi instance n8n
+port=5678
+declare -A port_mapping
+for subdomain in "${subdomains[@]}"; do
+  port_mapping[$subdomain]=$port
+  ((port++))
+done
+
 # Thêm dịch vụ n8n và PostgreSQL cho mỗi subdomain
 for subdomain in "${subdomains[@]}"; do
   SUBDOMAIN_DIR="$ROOT_DIR/$subdomain-$(echo $BASE_DOMAIN | tr '.' '-')"
@@ -167,8 +195,9 @@ for subdomain in "${subdomains[@]}"; do
 
   n8n_service_name="n8n-${subdomain}"
   postgres_service_name="postgres-${subdomain}"
+  n8n_port=${port_mapping[$subdomain]}
 
-  compose_file+="  $n8n_service_name:\n    image: $N8N_IMAGE\n    ports:\n      - \"5678:5678\"\n    environment:\n      - DB_TYPE=postgresdb\n      - DB_POSTGRESDB_HOST=$postgres_service_name\n      - DB_POSTGRESDB_PORT=5432\n      - DB_POSTGRESDB_USER=n8n-$subdomain\n      - DB_POSTGRESDB_PASSWORD=$POSTGRES_PASSWORD\n      - DB_POSTGRESDB_DATABASE=db-n8n-$subdomain"
+  compose_file+="  $n8n_service_name:\n    image: $N8N_IMAGE\n    ports:\n      - \"$n8n_port:5678\"\n    environment:\n      - DB_TYPE=postgresdb\n      - DB_POSTGRESDB_HOST=$postgres_service_name\n      - DB_POSTGRESDB_PORT=5432\n      - DB_POSTGRESDB_USER=n8n-$subdomain\n      - DB_POSTGRESDB_PASSWORD=$POSTGRES_PASSWORD\n      - DB_POSTGRESDB_DATABASE=db-n8n-$subdomain"
   if [ "$INCLUDE_REDIS" = true ]; then
     compose_file+="\n      - REDIS_HOST=redis\n      - REDIS_PORT=6379\n      - REDIS_KEY_PREFIX=$subdomain"
   fi
@@ -193,6 +222,7 @@ for subdomain in "${subdomains[@]}"; do
 - **Docker Compose file**: $ROOT_DIR/docker-compose.yml
 - **Kiến trúc**: $ARCH
 - **Hình ảnh n8n**: $N8N_IMAGE
+- **Cổng nội bộ**: $n8n_port
 
 ## Cấu hình PostgreSQL
 - **Database**: db-n8n-$subdomain
@@ -228,10 +258,49 @@ fi
 docker compose up -d
 cd - >/dev/null
 
-# Cấu hình Nginx
+# Tạo file cấu hình Nginx tạm thời để lấy chứng chỉ
 for subdomain in "${subdomains[@]}"; do
   nginx_conf="/etc/nginx/sites-available/$subdomain.$BASE_DOMAIN"
   nginx_link="/etc/nginx/sites-enabled/$subdomain.$BASE_DOMAIN"
+
+  cat << EOF > "$nginx_conf"
+server {
+    listen 80;
+    server_name $subdomain.$BASE_DOMAIN;
+
+    location / {
+        return 200 'Temporary server for Certbot';
+    }
+}
+EOF
+
+  ln -sf "$nginx_conf" "$nginx_link"
+done
+
+# Kiểm tra cấu hình Nginx
+nginx -t
+if [ $? -ne 0 ]; then
+  echo "Lỗi: Cấu hình Nginx không hợp lệ. Vui lòng kiểm tra lại."
+  exit 1
+fi
+
+# Khởi động lại Nginx để áp dụng cấu hình tạm thời
+systemctl restart nginx
+
+# Tải chứng chỉ Let's Encrypt bằng Certbot
+for subdomain in "${subdomains[@]}"; do
+  certbot certonly --nginx -d "$subdomain.$BASE_DOMAIN" --non-interactive --agree-tos --email "$LETSENCRYPT_EMAIL"
+  if [ $? -ne 0 ]; then
+    echo "Lỗi: Không thể lấy chứng chỉ Let's Encrypt cho $subdomain.$BASE_DOMAIN. Vui lòng kiểm tra cổng 80 và DNS."
+    exit 1
+  fi
+done
+
+# Cấu hình Nginx với chứng chỉ
+for subdomain in "${subdomains[@]}"; do
+  nginx_conf="/etc/nginx/sites-available/$subdomain.$BASE_DOMAIN"
+  nginx_link="/etc/nginx/sites-enabled/$subdomain.$BASE_DOMAIN"
+  n8n_port=${port_mapping[$subdomain]}
 
   cat << EOF > "$nginx_conf"
 server {
@@ -251,7 +320,7 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/$subdomain.$BASE_DOMAIN/privkey.pem;
 
     location / {
-        proxy_pass http://localhost:5678;
+        proxy_pass http://localhost:$n8n_port;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -270,11 +339,6 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-# Tải chứng chỉ Let's Encrypt bằng Certbot
-for subdomain in "${subdomains[@]}"; do
-  certbot --nginx -d "$subdomain.$BASE_DOMAIN" --non-interactive --agree-tos --email hi.qn8n@gmail.com
-done
-
 # Khởi động lại Nginx
 systemctl restart nginx
 
@@ -282,6 +346,7 @@ systemctl restart nginx
 for subdomain in "${subdomains[@]}"; do
   SUBDOMAIN_DIR="$ROOT_DIR/$subdomain-$(echo $BASE_DOMAIN | tr '.' '-')"
   POSTGRES_PASSWORD=$(get_postgres_password "$SUBDOMAIN_DIR")
+  n8n_port=${port_mapping[$subdomain]}
   echo "Đã cài đặt/khởi tạo lại n8n cho $subdomain.$BASE_DOMAIN"
   echo "- URL: https://$subdomain.$BASE_DOMAIN"
   echo "- PostgreSQL Database: db-n8n-$subdomain"
@@ -291,5 +356,6 @@ for subdomain in "${subdomains[@]}"; do
   echo "- File info: $SUBDOMAIN_DIR/info-$(date +%F-%H%M%S).md"
   echo "- Kiến trúc: $ARCH"
   echo "- Hình ảnh n8n: $N8N_IMAGE"
+  echo "- Cổng nội bộ: $n8n_port"
   echo
 done
