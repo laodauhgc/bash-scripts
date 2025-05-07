@@ -1,20 +1,8 @@
-# Version v1.8
 #!/bin/bash
 
 # Hàm tạo mật khẩu ngẫu nhiên
 generate_password() {
   tr -dc A-Za-z0-9 </dev/urandom | head -c 12
-}
-
-# Hàm kiểm tra và yêu cầu email nếu LETSENCRYPT_EMAIL không tồn tại
-prompt_email() {
-  if [ -z "$LETSENCRYPT_EMAIL" ]; then
-    read -p "Nhập email cho Let's Encrypt: " LETSENCRYPT_EMAIL
-    if [ -z "$LETSENCRYPT_EMAIL" ]; then
-      echo "Lỗi: Email không được để trống."
-      exit 1
-    fi
-  fi
 }
 
 # Hàm kiểm tra DNS cho subdomain (chỉ kiểm tra xem có giải quyết được hay không)
@@ -67,16 +55,14 @@ fi
 
 # Xử lý đối số dòng lệnh
 BASE_DOMAIN="n8n.works"  # Mặc định base domain
-CLOUDFLARE_API_TOKEN=""  # Token Cloudflare mặc định là rỗng
 INCLUDE_REDIS=true  # Đặt thành false nếu không muốn sử dụng Redis
 REINIT=false  # Tùy chọn khởi tạo lại
 LIST=false  # Tùy chọn liệt kê instance
 UPDATE_ALL=false  # Tùy chọn cập nhật tất cả instance
 
-while getopts "d:t:rlu" opt; do
+while getopts "d:rlu" opt; do
   case $opt in
     d) BASE_DOMAIN="$OPTARG" ;;
-    t) CLOUDFLARE_API_TOKEN="$OPTARG" ;;
     r) REINIT=true ;;
     l) LIST=true ;;
     u) UPDATE_ALL=true ;;
@@ -87,13 +73,6 @@ shift $((OPTIND-1))
 
 # Kiểm tra biến môi trường BASE_DOMAIN_ENV, ưu tiên hơn giá trị mặc định
 BASE_DOMAIN=${BASE_DOMAIN_ENV:-$BASE_DOMAIN}
-
-# Kiểm tra Cloudflare API token
-if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-  echo "Lỗi: Cloudflare API token không được cung cấp. Sử dụng tham số -t để truyền token."
-  echo "Ví dụ: $0 -d qn8n.com -t your_cloudflare_api_token laodau"
-  exit 1
-fi
 
 # Tạo thư mục gốc dựa trên base domain
 ROOT_DIR="/root/$(echo $BASE_DOMAIN | tr '.' '-')"
@@ -117,9 +96,8 @@ fi
 
 # Kiểm tra danh sách subdomain
 if [ $# -eq 0 ] && [ "$UPDATE_ALL" = false ]; then
-  echo "Cách sử dụng: $0 [-d base_domain] [-t cloudflare_api_token] [-r] [-l] [-u] [subdomain1 subdomain2 ...]"
+  echo "Cách sử dụng: $0 [-d base_domain] [-r] [-l] [-u] [subdomain1 subdomain2 ...]"
   echo "  -d: Chỉ định base domain (mặc định: n8n.works)"
-  echo "  -t: Chỉ định Cloudflare API token (bắt buộc)"
   echo "  -r: Khởi tạo lại instance cho các subdomain chỉ định"
   echo "  -l: Liệt kê tất cả instance đã triển khai"
   echo "  -u: Cập nhật tất cả instance hiện có"
@@ -128,17 +106,10 @@ fi
 
 subdomains=("$@")
 
-# Kiểm tra hoặc yêu cầu email
-prompt_email
-
 # Tạo thư mục gốc và thư mục con
-mkdir -p "$ROOT_DIR/traefik/letsencrypt"
 if [ "$INCLUDE_REDIS" = true ]; then
   mkdir -p "$ROOT_DIR/redis"
 fi
-
-# Xóa file acme.json nếu tồn tại để tránh dữ liệu lỗi
-rm -f "$ROOT_DIR/traefik/letsencrypt/acme.json"
 
 # Xử lý tùy chọn cập nhật tất cả instance
 if [ "$UPDATE_ALL" = true ]; then
@@ -172,9 +143,6 @@ fi
 # Xây dựng file docker-compose.yml
 compose_file="services:\n"
 
-# Thêm dịch vụ Traefik với cấu hình ACME sử dụng DNS-01 challenge qua Cloudflare
-compose_file+="  traefik:\n    image: traefik:v2.11\n    command:\n      - --log.level=DEBUG\n      - --api.insecure=true\n      - --providers.docker=true\n      - --providers.docker.exposedbydefault=false\n      - --entrypoints.web.address=:80\n      - --entrypoints.web.http.redirections.entryPoint.to=websecure\n      - --entrypoints.web.http.redirections.entrypoint.scheme=https\n      - --entrypoints.websecure.address=:443\n      - --entrypoints.websecure.http.tls.certresolver=myresolver\n      - --certificatesresolvers.myresolver.acme.dnschallenge=true\n      - --certificatesresolvers.myresolver.acme.dnschallenge.provider=cloudflare\n      - --certificatesresolvers.myresolver.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53\n      - --certificatesresolvers.myresolver.acme.dnschallenge.delayBeforeCheck=60\n      - --certificatesresolvers.myresolver.acme.email=$LETSENCRYPT_EMAIL\n      - --certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json\n      - --certificatesresolvers.myresolver.acme.caserver=https://acme-v02.api.letsencrypt.org/directory\n    environment:\n      - CLOUDFLARE_DNS_API_TOKEN=$CLOUDFLARE_API_TOKEN\n      - CLOUDFLARE_ZONE_API_TOKEN=$CLOUDFLARE_API_TOKEN\n    ports:\n      - \"80:80\"\n      - \"443:443\"\n      - \"8080:8080\"\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock:ro\n      - $ROOT_DIR/traefik/letsencrypt:/letsencrypt\n    labels:\n      - \"traefik.enable=true\"\n      - \"traefik.http.routers.traefik.rule=Host(\`traefik.$BASE_DOMAIN\`)\"\n      - \"traefik.http.services.traefik.loadbalancer.server.port=8080\"\n      - \"traefik.http.routers.traefik.entrypoints=websecure\"\n      - \"traefik.http.routers.traefik.tls.certresolver=myresolver\"\n      - \"traefik.http.routers.traefik.service=api@internal\"\n\n"
-
 # Thêm dịch vụ Redis nếu được kích hoạt
 if [ "$INCLUDE_REDIS" = true ]; then
   compose_file+="  redis:\n    image: redis:7.2\n    volumes:\n      - $ROOT_DIR/redis:/data\n\n"
@@ -199,13 +167,12 @@ for subdomain in "${subdomains[@]}"; do
 
   n8n_service_name="n8n-${subdomain}"
   postgres_service_name="postgres-${subdomain}"
-  host_rule="Host(\`$subdomain.$BASE_DOMAIN\`)"
 
-  compose_file+="  $n8n_service_name:\n    image: $N8N_IMAGE\n    environment:\n      - DB_TYPE=postgresdb\n      - DB_POSTGRESDB_HOST=$postgres_service_name\n      - DB_POSTGRESDB_PORT=5432\n      - DB_POSTGRESDB_USER=n8n-$subdomain\n      - DB_POSTGRESDB_PASSWORD=$POSTGRES_PASSWORD\n      - DB_POSTGRESDB_DATABASE=db-n8n-$subdomain"
+  compose_file+="  $n8n_service_name:\n    image: $N8N_IMAGE\n    ports:\n      - \"5678:5678\"\n    environment:\n      - DB_TYPE=postgresdb\n      - DB_POSTGRESDB_HOST=$postgres_service_name\n      - DB_POSTGRESDB_PORT=5432\n      - DB_POSTGRESDB_USER=n8n-$subdomain\n      - DB_POSTGRESDB_PASSWORD=$POSTGRES_PASSWORD\n      - DB_POSTGRESDB_DATABASE=db-n8n-$subdomain"
   if [ "$INCLUDE_REDIS" = true ]; then
     compose_file+="\n      - REDIS_HOST=redis\n      - REDIS_PORT=6379\n      - REDIS_KEY_PREFIX=$subdomain"
   fi
-  compose_file+="\n    labels:\n      - \"traefik.enable=true\"\n      - \"traefik.http.routers.$n8n_service_name.rule=$host_rule\"\n      - \"traefik.http.services.$n8n_service_name.loadbalancer.server.port=5678\"\n      - \"traefik.http.routers.$n8n_service_name.entrypoints=websecure\"\n      - \"traefik.http.routers.$n8n_service_name.tls.certresolver=myresolver\"\n\n"
+  compose_file+="\n\n"
 
   compose_file+="  $postgres_service_name:\n    image: postgres:16.8\n    environment:\n      - POSTGRES_USER=n8n-$subdomain\n      - POSTGRES_PASSWORD=$POSTGRES_PASSWORD\n      - POSTGRES_DB=db-n8n-$subdomain\n    volumes:\n      - $SUBDOMAIN_DIR/postgres:/var/lib/postgresql/data\n\n"
 
@@ -222,7 +189,6 @@ for subdomain in "${subdomains[@]}"; do
 ## Thông tin chung
 - **Subdomain**: $subdomain.$BASE_DOMAIN
 - **URL truy cập**: https://$subdomain.$BASE_DOMAIN
-- **Traefik Dashboard**: https://traefik.$BASE_DOMAIN
 - **Thư mục dữ liệu**: $SUBDOMAIN_DIR
 - **Docker Compose file**: $ROOT_DIR/docker-compose.yml
 - **Kiến trúc**: $ARCH
@@ -261,6 +227,56 @@ if [ "$REINIT" = true ]; then
 fi
 docker compose up -d
 cd - >/dev/null
+
+# Cấu hình Nginx
+for subdomain in "${subdomains[@]}"; do
+  nginx_conf="/etc/nginx/sites-available/$subdomain.$BASE_DOMAIN"
+  nginx_link="/etc/nginx/sites-enabled/$subdomain.$BASE_DOMAIN"
+
+  cat << EOF > "$nginx_conf"
+server {
+    listen 80;
+    server_name $subdomain.$BASE_DOMAIN;
+
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name $subdomain.$BASE_DOMAIN;
+
+    ssl_certificate /etc/letsencrypt/live/$subdomain.$BASE_DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$subdomain.$BASE_DOMAIN/privkey.pem;
+
+    location / {
+        proxy_pass http://localhost:5678;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+
+  ln -sf "$nginx_conf" "$nginx_link"
+done
+
+# Kiểm tra cấu hình Nginx
+nginx -t
+if [ $? -ne 0 ]; then
+  echo "Lỗi: Cấu hình Nginx không hợp lệ. Vui lòng kiểm tra lại."
+  exit 1
+fi
+
+# Tải chứng chỉ Let's Encrypt bằng Certbot
+for subdomain in "${subdomains[@]}"; do
+  certbot --nginx -d "$subdomain.$BASE_DOMAIN" --non-interactive --agree-tos --email hi.qn8n@gmail.com
+done
+
+# Khởi động lại Nginx
+systemctl restart nginx
 
 # In thông tin ra màn hình
 for subdomain in "${subdomains[@]}"; do
