@@ -30,12 +30,14 @@ check_dns() {
 check_ports() {
   for port in 80 443; do
     if ss -tulnp 2>/dev/null | grep -q ":$port "; then
-      # Kiểm tra xem tiến trình đang sử dụng cổng có phải là nginx không
-      pid=$(ss -tulnp 2>/dev/null | grep ":$port " | awk '{print $NF}' | grep -oP 'pid=\K\d+')
-      if [ -n "$pid" ]; then
-        process_name=$(ps -p "$pid" -o comm=)
-        if [ "$process_name" != "nginx" ]; then
-          echo "Lỗi: Cổng $port đã được sử dụng bởi tiến trình $process_name (PID: $pid). Giải phóng cổng trước khi tiếp tục."
+      # Lấy danh sách PID của các tiến trình đang sử dụng cổng
+      pids=$(ss -tulnp 2>/dev/null | grep ":$port " | awk '{print $NF}' | grep -oP 'pid=\K\d+' | sort -u | tr '\n' ',' | sed 's/,$//')
+      if [ -n "$pids" ]; then
+        # Kiểm tra xem tất cả các tiến trình có phải là nginx không
+        process_names=$(ps -p "$pids" -o comm= 2>/dev/null | sort -u)
+        non_nginx=$(echo "$process_names" | grep -v "^nginx$" || true)
+        if [ -n "$non_nginx" ]; then
+          echo "Lỗi: Cổng $port đã được sử dụng bởi các tiến trình không phải nginx: $non_nginx (PIDs: $pids). Giải phóng cổng trước khi tiếp tục."
           exit 1
         fi
       else
