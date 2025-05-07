@@ -38,6 +38,20 @@ check_and_free_ports() {
   done
 }
 
+# Hàm tạo CSR và private key bằng openssl
+generate_csr() {
+  local domain=$1
+  local key_file=$2
+  local csr_file=$3
+
+  # Tạo private key và CSR
+  openssl req -new -newkey rsa:2048 -nodes -keyout "$key_file" -out "$csr_file" -subj "/C=US/ST=California/L=San Francisco/O=MyOrg/OU=MyUnit/CN=$domain" >/dev/null 2>&1
+  if [ $? -ne 0 ]; then
+    echo "Lỗi: Không thể tạo CSR cho $domain."
+    exit 1
+  fi
+}
+
 # Hàm đọc mật khẩu PostgreSQL từ file credentials
 get_postgres_password() {
   local subdomain_dir=$1
@@ -73,6 +87,17 @@ if ! command -v jq >/dev/null 2>&1; then
   apt install -y jq
   if [ $? -ne 0 ]; then
     echo "Lỗi: Không thể cài đặt jq. Vui lòng kiểm tra kết nối mạng hoặc cài đặt thủ công."
+    exit 1
+  fi
+fi
+
+# Kiểm tra openssl để tạo CSR
+if ! command -v openssl >/dev/null 2>&1; then
+  echo "Cài đặt openssl để tạo CSR..."
+  apt update
+  apt install -y openssl
+  if [ $? -ne 0 ]; then
+    echo "Lỗi: Không thể cài đặt openssl. Vui lòng kiểm tra kết nối mạng hoặc cài đặt thủ công."
     exit 1
   fi
 fi
@@ -186,27 +211,36 @@ for subdomain in "${subdomains[@]}"; do
   domain="$subdomain.$BASE_DOMAIN"
   cert_file="$ROOT_DIR/ssl/$domain.crt"
   key_file="$ROOT_DIR/ssl/$domain.key"
+  csr_file="$ROOT_DIR/ssl/$domain.csr"
 
   if [ ! -f "$cert_file" ] || [ ! -f "$key_file" ]; then
+    echo "Tạo CSR và private key cho $domain..."
+    generate_csr "$domain" "$key_file" "$csr_file"
+
+    # Đọc CSR từ file
+    csr_content=$(cat "$csr_file" | tr '\n' '\\n')
+
     echo "Tạo chứng chỉ Origin CA cho $domain..."
-    response=$(curl -s -X POST "https://api.cloudflare.com/client/v4/origin_ca_certificates" \
+    response=$(curl -s -X POST "https://api.cloudflare.com/client/v4/certificates" \
       -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
       -H "Content-Type: application/json" \
-      --data '{"hostnames":["'"$domain"'"],"request_type":"origin-rsa","requested_validity":5475}')
+      --data "{\"hostnames\":[\"$domain\"],\"request_type\":\"origin-rsa\",\"requested_validity\":5475,\"csr\":\"$csr_content\"}")
 
-    # Lấy chứng chỉ và private key từ response
+    # Lấy chứng chỉ từ response
     cert=$(echo "$response" | jq -r '.result.certificate')
-    key=$(echo "$response" | jq -r '.result.private_key')
 
-    if [ -z "$cert" ] || [ "$cert" = "null" ] || [ -z "$key" ] || [ "$key" = "null" ]; then
+    if [ -z "$cert" ] || [ "$cert" = "null" ]; then
       echo "Lỗi: Không thể tạo chứng chỉ Origin CA cho $domain. Kiểm tra API token hoặc quyền truy cập (cần quyền SSL and Certificates:Edit)."
+      echo "Response: $response"
       exit 1
     fi
 
-    # Lưu chứng chỉ và private key
+    # Lưu chứng chỉ
     echo "$cert" > "$cert_file"
-    echo "$key" > "$key_file"
-    chmod 600 "$cert_file" "$key_file"
+    chmod 600 "$cert_file"
+
+    # Xóa file CSR tạm thời
+    rm "$csr_file"
   fi
 done
 
