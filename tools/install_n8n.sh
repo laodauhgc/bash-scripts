@@ -16,7 +16,7 @@ prompt_email() {
   fi
 }
 
-# Hàm kiểm tra DNS cho subdomain (chỉ kiểm tra xem có giải quyết được hay không)
+# Hàm kiểm tra DNS cho subdomain
 check_dns() {
   local subdomain=$1
   local base_domain=$2
@@ -29,11 +29,19 @@ check_dns() {
 # Hàm kiểm tra cổng 80 và 443
 check_ports() {
   for port in 80 443; do
-    if ss -tulnp | grep -q ":$port "; then
+    if ss -tulnp 2>/dev/null | grep -q ":$port "; then
       echo "Lỗi: Cổng $port đã được sử dụng. Giải phóng cổng trước khi tiếp tục."
       exit 1
     fi
   done
+}
+
+# Hàm kiểm tra cổng có thể truy cập từ bên ngoài
+check_port_access() {
+  local port=$1
+  if ! nc -zv 127.0.0.1 $port >/dev/null 2>&1; then
+    echo "Cảnh báo: Cổng $port không thể truy cập. Certbot có thể thất bại nếu cổng không mở từ bên ngoài."
+  fi
 }
 
 # Hàm đọc mật khẩu PostgreSQL từ file credentials
@@ -49,8 +57,40 @@ get_postgres_password() {
 
 # Kiểm tra lệnh docker compose
 if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
-  echo "Lỗi: Yêu cầu Docker và Docker Compose V2. Cài đặt bằng: sudo apt install docker.io docker-compose-plugin"
+  echo "Lỗi: Yêu cầu Docker và Docker Compose V2. Cài đặt bằng: sudo apt update && sudo apt install -y docker.io docker-compose-plugin"
   exit 1
+fi
+
+# Kiểm tra và cài đặt nginx nếu chưa có
+if ! command -v nginx >/dev/null 2>&1; then
+  echo "Cài đặt Nginx..."
+  apt update
+  apt install -y nginx
+  if [ $? -ne 0 ]; then
+    echo "Lỗi: Không thể cài đặt Nginx. Vui lòng kiểm tra kết nối mạng hoặc cài đặt thủ công."
+    exit 1
+  fi
+fi
+
+# Kiểm tra và cài đặt certbot nếu chưa có
+if ! command -v certbot >/dev/null 2>&1; then
+  echo "Cài đặt Certbot..."
+  apt update
+  apt install -y certbot python3-certbot-nginx
+  if [ $? -ne 0 ]; then
+    echo "Lỗi: Không thể cài đặt Certbot. Vui lòng kiểm tra kết nối mạng hoặc cài đặt thủ công."
+    exit 1
+  fi
+fi
+
+# Kiểm tra netcat (nc) để kiểm tra cổng
+if ! command -v nc >/dev/null 2>&1; then
+  echo "Cài đặt netcat để kiểm tra cổng..."
+  apt update
+  apt install -y netcat-openbsd
+  if [ $? -ne 0 ]; then
+    echo "Cảnh báo: Không thể cài đặt netcat. Script sẽ tiếp tục nhưng không thể kiểm tra cổng."
+  fi
 fi
 
 # Xác định kiến trúc và chọn hình ảnh n8n phù hợp
@@ -160,14 +200,6 @@ if [ "$confirm" != "y" ]; then
   exit 0
 fi
 
-# Xây dựng file docker-compose.yml
-compose_file="services:\n"
-
-# Thêm dịch vụ Redis nếu được kích hoạt
-if [ "$INCLUDE_REDIS" = true ]; then
-  compose_file+="  redis:\n    image: redis:7.2\n    volumes:\n      - $ROOT_DIR/redis:/data\n\n"
-fi
-
 # Gán cổng động cho mỗi instance n8n
 port=5678
 declare -A port_mapping
@@ -175,6 +207,14 @@ for subdomain in "${subdomains[@]}"; do
   port_mapping[$subdomain]=$port
   ((port++))
 done
+
+# Xây dựng file docker-compose.yml
+compose_file="services:\n"
+
+# Thêm dịch vụ Redis nếu được kích hoạt
+if [ "$INCLUDE_REDIS" = true ]; then
+  compose_file+="  redis:\n    image: redis:7.2\n    volumes:\n      - $ROOT_DIR/redis:/data\n\n"
+fi
 
 # Thêm dịch vụ n8n và PostgreSQL cho mỗi subdomain
 for subdomain in "${subdomains[@]}"; do
@@ -287,11 +327,18 @@ fi
 # Khởi động lại Nginx để áp dụng cấu hình tạm thời
 systemctl restart nginx
 
+# Kiểm tra cổng 80
+check_port_access 80
+
 # Tải chứng chỉ Let's Encrypt bằng Certbot
 for subdomain in "${subdomains[@]}"; do
   certbot certonly --nginx -d "$subdomain.$BASE_DOMAIN" --non-interactive --agree-tos --email "$LETSENCRYPT_EMAIL"
   if [ $? -ne 0 ]; then
-    echo "Lỗi: Không thể lấy chứng chỉ Let's Encrypt cho $subdomain.$BASE_DOMAIN. Vui lòng kiểm tra cổng 80 và DNS."
+    echo "Lỗi: Không thể lấy chứng chỉ Let's Encrypt cho $subdomain.$BASE_DOMAIN."
+    echo "Kiểm tra:"
+    echo "  - Cổng 80 có mở và truy cập được từ bên ngoài không? (ufw allow 80/tcp)"
+    echo "  - DNS của $subdomain.$BASE_DOMAIN có trỏ đúng về IP máy chủ không? (dig $subdomain.$BASE_DOMAIN)"
+    echo "  - Có thể cần liên hệ nhà cung cấp VPS để mở cổng 80."
     exit 1
   fi
 done
