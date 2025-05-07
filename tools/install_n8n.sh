@@ -26,28 +26,6 @@ check_dns() {
   fi
 }
 
-# Hàm kiểm tra cổng 80 và 443
-check_ports() {
-  for port in 80 443; do
-    if ss -tulnp 2>/dev/null | grep -q ":$port "; then
-      # Lấy danh sách PID của các tiến trình đang sử dụng cổng
-      pids=$(ss -tulnp 2>/dev/null | grep ":$port " | awk '{print $NF}' | grep -oP 'pid=\K\d+' | sort -u | tr '\n' ',' | sed 's/,$//')
-      if [ -n "$pids" ]; then
-        # Kiểm tra xem tất cả các tiến trình có phải là nginx không
-        process_names=$(ps -p "$pids" -o comm= 2>/dev/null | sort -u)
-        non_nginx=$(echo "$process_names" | grep -v "^nginx$" || true)
-        if [ -n "$non_nginx" ]; then
-          echo "Lỗi: Cổng $port đã được sử dụng bởi các tiến trình không phải nginx: $non_nginx (PIDs: $pids). Giải phóng cổng trước khi tiếp tục."
-          exit 1
-        fi
-      else
-        echo "Lỗi: Cổng $port đã được sử dụng nhưng không thể xác định tiến trình. Giải phóng cổng trước khi tiếp tục."
-        exit 1
-      fi
-    fi
-  done
-}
-
 # Hàm kiểm tra cổng có thể truy cập từ bên ngoài
 check_port_access() {
   local port=$1
@@ -199,8 +177,7 @@ if [ "$UPDATE_ALL" = true ]; then
   fi
 fi
 
-# Kiểm tra DNS và cổng, và xác nhận trước khi chạy
-check_ports
+# Kiểm tra DNS và xác nhận trước khi chạy
 echo "Sẽ triển khai/cập nhật các instance sau: ${subdomains[*]}"
 echo "Base domain: $BASE_DOMAIN"
 echo "Thư mục gốc: $ROOT_DIR"
