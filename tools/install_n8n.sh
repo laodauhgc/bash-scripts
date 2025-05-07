@@ -38,6 +38,12 @@ get_postgres_password() {
   fi
 }
 
+# Kiểm tra lệnh docker compose
+if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
+  echo "Lỗi: Yêu cầu Docker và Docker Compose V2. Cài đặt bằng: sudo apt install docker.io docker-compose-plugin"
+  exit 1
+fi
+
 # Xác định kiến trúc và chọn hình ảnh n8n phù hợp
 ARCH=$(uname -m)
 if [ "$ARCH" = "x86_64" ]; then
@@ -204,15 +210,15 @@ for subdomain in "${subdomains[@]}"; do
 - **Password**: $POSTGRES_PASSWORD
 
 ## Cách quản lý
-- Khởi động: \`cd $ROOT_DIR && docker-compose up -d\`
-- Dừng: \`cd $ROOT_DIR && docker-compose stop $n8n_service_name $postgres_service_name\`
-- Xóa container (giữ dữ liệu): \`cd $ROOT_DIR && docker-compose rm -f $n8n_service_name $postgres_service_name\`
+- Khởi động: \`cd $ROOT_DIR && docker compose up -d\`
+- Dừng: \`cd $ROOT_DIR && docker compose stop $n8n_service_name $postgres_service_name\`
+- Xóa container (giữ dữ liệu): \`cd $ROOT_DIR && docker compose rm -f $n8n_service_name $postgres_service_name\`
 - Sao lưu dữ liệu: \`tar -czf $subdomain-backup.tar.gz $SUBDOMAIN_DIR\`
 
 ## Lưu ý
 - Đảm bảo DNS được cấu hình đúng cho $subdomain.$BASE_DOMAIN.
 - Sao lưu thư mục $SUBDOMAIN_DIR định kỳ để tránh mất dữ liệu.
-- Để cập nhật n8n, chạy: \`cd $ROOT_DIR && docker-compose pull && docker-compose up -d\`.
+- Để cập nhật n8n, chạy: \`cd $ROOT_DIR && docker compose pull && docker compose up -d\`.
 EOF
 done
 
@@ -225,11 +231,11 @@ if [ "$REINIT" = true ]; then
   for subdomain in "${subdomains[@]}"; do
     n8n_service_name="n8n-${subdomain}"
     postgres_service_name="postgres-${subdomain}"
-    docker-compose stop "$n8n_service_name" "$postgres_service_name"
-    docker-compose rm -f "$n8n_service_name" "$postgres_service_name"
+    docker compose stop "$n8n_service_name" "$postgres_service_name"
+    docker compose rm -f "$n8n_service_name" "$postgres_service_name"
   done
 fi
-docker-compose up -d
+docker compose up -d
 cd - >/dev/null
 
 # In thông tin ra màn hình
