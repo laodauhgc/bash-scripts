@@ -30,8 +30,18 @@ check_dns() {
 check_ports() {
   for port in 80 443; do
     if ss -tulnp 2>/dev/null | grep -q ":$port "; then
-      echo "Lỗi: Cổng $port đã được sử dụng. Giải phóng cổng trước khi tiếp tục."
-      exit 1
+      # Kiểm tra xem tiến trình đang sử dụng cổng có phải là nginx không
+      pid=$(ss -tulnp 2>/dev/null | grep ":$port " | awk '{print $NF}' | grep -oP 'pid=\K\d+')
+      if [ -n "$pid" ]; then
+        process_name=$(ps -p "$pid" -o comm=)
+        if [ "$process_name" != "nginx" ]; then
+          echo "Lỗi: Cổng $port đã được sử dụng bởi tiến trình $process_name (PID: $pid). Giải phóng cổng trước khi tiếp tục."
+          exit 1
+        fi
+      else
+        echo "Lỗi: Cổng $port đã được sử dụng nhưng không thể xác định tiến trình. Giải phóng cổng trước khi tiếp tục."
+        exit 1
+      fi
     fi
   done
 }
@@ -39,8 +49,10 @@ check_ports() {
 # Hàm kiểm tra cổng có thể truy cập từ bên ngoài
 check_port_access() {
   local port=$1
-  if ! nc -zv 127.0.0.1 $port >/dev/null 2>&1; then
-    echo "Cảnh báo: Cổng $port không thể truy cập. Certbot có thể thất bại nếu cổng không mở từ bên ngoài."
+  if command -v nc >/dev/null 2>&1; then
+    if ! nc -zv 127.0.0.1 $port >/dev/null 2>&1; then
+      echo "Cảnh báo: Cổng $port không thể truy cập. Certbot có thể thất bại nếu cổng không mở từ bên ngoài."
+    fi
   fi
 }
 
