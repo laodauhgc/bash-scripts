@@ -5,17 +5,6 @@ generate_password() {
   tr -dc A-Za-z0-9 </dev/urandom | head -c 12
 }
 
-# Hàm kiểm tra và yêu cầu email nếu LETSENCRYPT_EMAIL không tồn tại
-prompt_email() {
-  if [ -z "$LETSENCRYPT_EMAIL" ]; then
-    read -p "Nhập email cho Let's Encrypt: " LETSENCRYPT_EMAIL
-    if [ -z "$LETSENCRYPT_EMAIL" ]; then
-      echo "Lỗi: Email không được để trống."
-      exit 1
-    fi
-  fi
-}
-
 # Hàm kiểm tra DNS cho subdomain
 check_dns() {
   local subdomain=$1
@@ -23,16 +12,6 @@ check_dns() {
   if ! nslookup "$subdomain.$base_domain" 8.8.8.8 >/dev/null 2>&1; then
     echo "Lỗi: Không thể giải quyết DNS cho $subdomain.$base_domain. Vui lòng kiểm tra cấu hình DNS và đợi truyền bá."
     exit 1
-  fi
-}
-
-# Hàm kiểm tra cổng có thể truy cập từ bên ngoài
-check_port_access() {
-  local port=$1
-  if command -v nc >/dev/null 2>&1; then
-    if ! nc -zv 127.0.0.1 $port >/dev/null 2>&1; then
-      echo "Cảnh báo: Cổng $port không thể truy cập. Certbot có thể thất bại nếu cổng không mở từ bên ngoài."
-    fi
   fi
 }
 
@@ -53,39 +32,29 @@ if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>
   exit 1
 fi
 
-# Kiểm tra netcat (nc) để kiểm tra cổng
-if ! command -v nc >/dev/null 2>&1; then
-  echo "Cài đặt netcat để kiểm tra cổng..."
+# Kiểm tra curl để gọi API Cloudflare
+if ! command -v curl >/dev/null 2>&1; then
+  echo "Cài đặt curl để gọi API Cloudflare..."
   apt update
-  apt install -y netcat-openbsd
+  apt install -y curl
   if [ $? -ne 0 ]; then
-    echo "Cảnh báo: Không thể cài đặt netcat. Script sẽ tiếp tục nhưng không thể kiểm tra cổng."
+    echo "Lỗi: Không thể cài đặt curl. Vui lòng kiểm tra kết nối mạng hoặc cài đặt thủ công."
+    exit 1
   fi
-fi
-
-# Xác định kiến trúc và chọn hình ảnh n8n phù hợp
-ARCH=$(uname -m)
-if [ "$ARCH" = "x86_64" ]; then
-  N8N_IMAGE="n8nio/n8n:latest"
-elif [ "$ARCH" = "aarch64" ]; then
-  N8N_IMAGE="n8nio/n8n:latest-rpi"
-else
-  echo "Lỗi: Kiến trúc không được hỗ trợ: $ARCH"
-  exit 1
 fi
 
 # Xử lý đối số dòng lệnh
 BASE_DOMAIN="n8n.works"  # Mặc định base domain
-LETSENCRYPT_EMAIL=""    # Email Let's Encrypt mặc định là rỗng
+CLOUDFLARE_API_TOKEN="sZBXpphLFS1oc46OPnu1Xhp7XhvFbZX-PnsA5HPr"  # API token của Cloudflare
 INCLUDE_REDIS=true      # Đặt thành false nếu không muốn sử dụng Redis
 REINIT=false            # Tùy chọn khởi tạo lại
 LIST=false              # Tùy chọn liệt kê instance
 UPDATE_ALL=false        # Tùy chọn cập nhật tất cả instance
 
-while getopts "d:e:rlu" opt; do
+while getopts "d:t:rlu" opt; do
   case $opt in
     d) BASE_DOMAIN="$OPTARG" ;;
-    e) LETSENCRYPT_EMAIL="$OPTARG" ;;
+    t) CLOUDFLARE_API_TOKEN="$OPTARG" ;;
     r) REINIT=true ;;
     l) LIST=true ;;
     u) UPDATE_ALL=true ;;
@@ -94,14 +63,14 @@ while getopts "d:e:rlu" opt; do
 done
 shift $((OPTIND-1))
 
+# Kiểm tra API token Cloudflare
+if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+  echo "Lỗi: Cloudflare API token không được cung cấp. Sử dụng tham số -t để truyền token."
+  exit 1
+fi
+
 # Kiểm tra biến môi trường BASE_DOMAIN_ENV, ưu tiên hơn giá trị mặc định
 BASE_DOMAIN=${BASE_DOMAIN_ENV:-$BASE_DOMAIN}
-
-# Kiểm tra biến môi trường LETSENCRYPT_EMAIL nếu không được truyền qua tham số
-LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL:-$LETSENCRYPT_EMAIL_ENV}
-
-# Yêu cầu nhập email nếu không có giá trị
-prompt_email
 
 # Tạo thư mục gốc dựa trên base domain
 ROOT_DIR="/root/$(echo $BASE_DOMAIN | tr '.' '-')"
@@ -114,7 +83,7 @@ fi
 
 # Tạo thư mục cho Nginx và chứng chỉ
 mkdir -p "$ROOT_DIR/nginx/conf.d"
-mkdir -p "$ROOT_DIR/letsencrypt"
+mkdir -p "$ROOT_DIR/ssl"
 
 # Xử lý tùy chọn liệt kê instance
 if [ "$LIST" = true ]; then
@@ -129,9 +98,9 @@ fi
 
 # Kiểm tra danh sách subdomain
 if [ $# -eq 0 ] && [ "$UPDATE_ALL" = false ]; then
-  echo "Cách sử dụng: $0 [-d base_domain] [-e letsencrypt_email] [-r] [-l] [-u] [subdomain1 subdomain2 ...]"
+  echo "Cách sử dụng: $0 [-d base_domain] [-t cloudflare_api_token] [-r] [-l] [-u] [subdomain1 subdomain2 ...]"
   echo "  -d: Chỉ định base domain (mặc định: n8n.works)"
-  echo "  -e: Chỉ định email cho Let's Encrypt (có thể dùng biến môi trường LETSENCRYPT_EMAIL_ENV)"
+  echo "  -t: Chỉ định Cloudflare API token (bắt buộc)"
   echo "  -r: Khởi tạo lại instance cho các subdomain chỉ định"
   echo "  -l: Liệt kê tất cả instance đã triển khai"
   echo "  -u: Cập nhật tất cả instance hiện có"
@@ -172,6 +141,45 @@ if [ "$confirm" != "y" ]; then
   echo "Đã hủy."
   exit 0
 fi
+
+# Lấy Zone ID của domain từ Cloudflare
+zone_id=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$BASE_DOMAIN" \
+  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  -H "Content-Type: application/json" | jq -r '.result[0].id')
+
+if [ -z "$zone_id" ] || [ "$zone_id" = "null" ]; then
+  echo "Lỗi: Không thể lấy Zone ID cho $BASE_DOMAIN. Kiểm tra API token hoặc tên domain."
+  exit 1
+fi
+
+# Tạo chứng chỉ Origin CA cho từng domain
+for subdomain in "${subdomains[@]}"; do
+  domain="$subdomain.$BASE_DOMAIN"
+  cert_file="$ROOT_DIR/ssl/$domain.crt"
+  key_file="$ROOT_DIR/ssl/$domain.key"
+
+  if [ ! -f "$cert_file" ] || [ ! -f "$key_file" ]; then
+    echo "Tạo chứng chỉ Origin CA cho $domain..."
+    response=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$zone_id/origin_ca_certificates" \
+      -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+      -H "Content-Type: application/json" \
+      --data '{"hostnames":["'"$domain"'"],"request_type":"origin-rsa","requested_validity":5475}')
+
+    # Lấy chứng chỉ và private key từ response
+    cert=$(echo "$response" | jq -r '.result.certificate')
+    key=$(echo "$response" | jq -r '.result.private_key')
+
+    if [ -z "$cert" ] || [ "$cert" = "null" ] || [ -z "$key" ] || [ "$key" = "null" ]; then
+      echo "Lỗi: Không thể tạo chứng chỉ Origin CA cho $domain. Kiểm tra API token hoặc quyền truy cập."
+      exit 1
+    fi
+
+    # Lưu chứng chỉ và private key
+    echo "$cert" > "$cert_file"
+    echo "$key" > "$key_file"
+    chmod 600 "$cert_file" "$key_file"
+  fi
+done
 
 # Gán cổng động cho mỗi instance n8n
 port=5678
@@ -220,7 +228,7 @@ for subdomain in "${subdomains[@]}"; do
 done
 
 # Thêm dịch vụ Nginx
-compose_file+="  nginx:\n    image: nginx:latest\n    ports:\n      - \"80:80\"\n      - \"443:443\"\n    volumes:\n      - $ROOT_DIR/nginx/conf.d:/etc/nginx/conf.d\n      - $ROOT_DIR/letsencrypt:/etc/letsencrypt\n"
+compose_file+="  nginx:\n    image: nginx:latest\n    ports:\n      - \"80:80\"\n      - \"443:443\"\n    volumes:\n      - $ROOT_DIR/nginx/conf.d:/etc/nginx/conf.d\n      - $ROOT_DIR/ssl:/etc/nginx/ssl\n"
 
 # Ghi file docker-compose.yml vào thư mục gốc
 echo -e "$compose_file" > "$ROOT_DIR/docker-compose.yml"
@@ -238,52 +246,15 @@ fi
 docker compose up -d
 cd - >/dev/null
 
-# Tạo file cấu hình Nginx tạm thời để lấy chứng chỉ
-for subdomain in "${subdomains[@]}"; do
-  nginx_conf="$ROOT_DIR/nginx/conf.d/$subdomain.$BASE_DOMAIN.conf"
-
-  cat << EOF > "$nginx_conf"
-server {
-    listen 80;
-    server_name $subdomain.$BASE_DOMAIN;
-
-    location / {
-        return 200 'Temporary server for Certbot';
-    }
-}
-EOF
-done
-
-# Khởi động lại container Nginx để áp dụng cấu hình
-cd "$ROOT_DIR"
-docker compose restart nginx
-cd - >/dev/null
-
-# Kiểm tra cổng 80
-check_port_access 80
-
-# Tải chứng chỉ Let's Encrypt bằng Certbot
-for subdomain in "${subdomains[@]}"; do
-  docker run --rm -v "$ROOT_DIR/letsencrypt:/etc/letsencrypt" certbot/certbot certonly --standalone --non-interactive --agree-tos --email "$LETSENCRYPT_EMAIL" -d "$subdomain.$BASE_DOMAIN"
-  if [ $? -ne 0 ]; then
-    echo "Lỗi: Không thể lấy chứng chỉ Let's Encrypt cho $subdomain.$BASE_DOMAIN."
-    echo "Kiểm tra:"
-    echo "  - Cổng 80 có mở và truy cập được từ bên ngoài không? (ufw allow 80/tcp)"
-    echo "  - DNS của $subdomain.$BASE_DOMAIN có trỏ đúng về IP máy chủ không? (dig $subdomain.$BASE_DOMAIN)"
-    echo "  - Có thể cần liên hệ nhà cung cấp VPS để mở cổng 80."
-    exit 1
-  fi
-done
-
 # Cấu hình Nginx với chứng chỉ
 for subdomain in "${subdomains[@]}"; do
-  nginx_conf="$ROOT_DIR/nginx/conf.d/$subdomain.$BASE_DOMAIN.conf"
-  n8n_port=${port_mapping[$subdomain]}
-
+  domain="$subdomain.$BASE_DOMAIN"
+  nginx_conf="$ROOT_DIR/nginx/conf.d/$domain.conf"
+  n8n_service_name="n8n-${subdomain}"
   cat << EOF > "$nginx_conf"
 server {
     listen 80;
-    server_name $subdomain.$BASE_DOMAIN;
+    server_name $domain;
 
     location / {
         return 301 https://\$host\$request_uri;
@@ -292,10 +263,10 @@ server {
 
 server {
     listen 443 ssl;
-    server_name $subdomain.$BASE_DOMAIN;
+    server_name $domain;
 
-    ssl_certificate /etc/letsencrypt/live/$subdomain.$BASE_DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$subdomain.$BASE_DOMAIN/privkey.pem;
+    ssl_certificate /etc/nginx/ssl/$domain.crt;
+    ssl_certificate_key /etc/nginx/ssl/$domain.key;
 
     location / {
         proxy_pass http://$n8n_service_name:5678;
