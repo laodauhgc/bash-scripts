@@ -20,8 +20,13 @@ prompt_email() {
 check_dns() {
   local subdomain=$1
   local base_domain=$2
-  if ! nslookup "$subdomain.$base_domain" >/dev/null 2>&1; then
-    echo "Lỗi: Không thể giải quyết DNS cho $subdomain.$base_domain. Vui lòng kiểm tra cấu hình DNS."
+  local dns_result=$(nslookup "$subdomain.$base_domain" 8.8.8.8 2>/dev/null | grep "Address:" | tail -n 1 | awk '{print $2}')
+  if [ -z "$dns_result" ]; then
+    echo "Lỗi: Không thể giải quyết DNS cho $subdomain.$base_domain. Vui lòng kiểm tra cấu hình DNS và đợi truyền bá."
+    exit 1
+  fi
+  if [ "$dns_result" != "152.53.81.98" ]; then
+    echo "Lỗi: DNS cho $subdomain.$base_domain trỏ về $dns_result, nhưng cần trỏ về 152.53.81.98."
     exit 1
   fi
 }
@@ -66,14 +71,16 @@ fi
 
 # Xử lý đối số dòng lệnh
 BASE_DOMAIN="n8n.works"  # Mặc định base domain
+CLOUDFLARE_API_TOKEN=""  # Token Cloudflare mặc định là rỗng
 INCLUDE_REDIS=true  # Đặt thành false nếu không muốn sử dụng Redis
 REINIT=false  # Tùy chọn khởi tạo lại
 LIST=false  # Tùy chọn liệt kê instance
 UPDATE_ALL=false  # Tùy chọn cập nhật tất cả instance
 
-while getopts "d:rlu" opt; do
+while getopts "d:t:rlu" opt; do
   case $opt in
     d) BASE_DOMAIN="$OPTARG" ;;
+    t) CLOUDFLARE_API_TOKEN="$OPTARG" ;;
     r) REINIT=true ;;
     l) LIST=true ;;
     u) UPDATE_ALL=true ;;
@@ -84,6 +91,13 @@ shift $((OPTIND-1))
 
 # Kiểm tra biến môi trường BASE_DOMAIN_ENV, ưu tiên hơn giá trị mặc định
 BASE_DOMAIN=${BASE_DOMAIN_ENV:-$BASE_DOMAIN}
+
+# Kiểm tra Cloudflare API token
+if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+  echo "Lỗi: Cloudflare API token không được cung cấp. Sử dụng tham số -t để truyền token."
+  echo "Ví dụ: $0 -d qn8n.com -t your_cloudflare_api_token laodau"
+  exit 1
+fi
 
 # Tạo thư mục gốc dựa trên base domain
 ROOT_DIR="/root/$(echo $BASE_DOMAIN | tr '.' '-')"
@@ -107,8 +121,9 @@ fi
 
 # Kiểm tra danh sách subdomain
 if [ $# -eq 0 ] && [ "$UPDATE_ALL" = false ]; then
-  echo "Cách sử dụng: $0 [-d base_domain] [-r] [-l] [-u] [subdomain1 subdomain2 ...]"
+  echo "Cách sử dụng: $0 [-d base_domain] [-t cloudflare_api_token] [-r] [-l] [-u] [subdomain1 subdomain2 ...]"
   echo "  -d: Chỉ định base domain (mặc định: n8n.works)"
+  echo "  -t: Chỉ định Cloudflare API token (bắt buộc)"
   echo "  -r: Khởi tạo lại instance cho các subdomain chỉ định"
   echo "  -l: Liệt kê tất cả instance đã triển khai"
   echo "  -u: Cập nhật tất cả instance hiện có"
@@ -143,7 +158,7 @@ if [ "$UPDATE_ALL" = true ]; then
   fi
 fi
 
-# Kiểm tra DNS, cổng, và xác nhận trước khi chạy
+# Kiểm tra DNS và cổng, và xác nhận trước khi chạy
 check_ports
 echo "Sẽ triển khai/cập nhật các instance sau: ${subdomains[*]}"
 echo "Base domain: $BASE_DOMAIN"
@@ -161,8 +176,8 @@ fi
 # Xây dựng file docker-compose.yml
 compose_file="services:\n"
 
-# Thêm dịch vụ Traefik với cấu hình ACME tối ưu
-compose_file+="  traefik:\n    image: traefik:v2.11\n    command:\n      - --log.level=DEBUG\n      - --api.insecure=true\n      - --providers.docker=true\n      - --entrypoints.web.address=:80\n      - --entrypoints.web.transport.respondingTimeouts.readTimeout=60s\n      - --entrypoints.websecure.address=:443\n      - --certificatesresolvers.myresolver.acme.httpchallenge=true\n      - --certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web\n      - --certificatesresolvers.myresolver.acme.email=$LETSENCRYPT_EMAIL\n      - --certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json\n      - --certificatesresolvers.myresolver.acme.caserver=https://acme-v02.api.letsencrypt.org/directory\n    ports:\n      - \"80:80\"\n      - \"443:443\"\n      - \"8080:8080\"\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock:ro\n      - $ROOT_DIR/traefik/letsencrypt:/letsencrypt\n    labels:\n      - \"traefik.enable=true\"\n      - \"traefik.http.routers.traefik.rule=Host(\`traefik.$BASE_DOMAIN\`)\"\n      - \"traefik.http.services.traefik.loadbalancer.server.port=8080\"\n      - \"traefik.http.routers.traefik.entrypoints=websecure\"\n      - \"traefik.http.routers.traefik.tls.certresolver=myresolver\"\n\n"
+# Thêm dịch vụ Traefik với cấu hình ACME sử dụng DNS-01 challenge qua Cloudflare
+compose_file+="  traefik:\n    image: traefik:v2.11\n    command:\n      - --log.level=DEBUG\n      - --api.insecure=true\n      - --providers.docker=true\n      - --providers.docker.exposedbydefault=false\n      - --entrypoints.web.address=:80\n      - --entrypoints.web.http.redirections.entryPoint.to=websecure\n      - --entrypoints.web.http.redirections.entrypoint.scheme=https\n      - --entrypoints.websecure.address=:443\n      - --entrypoints.websecure.http.tls.certresolver=myresolver\n      - --certificatesresolvers.myresolver.acme.dnschallenge=true\n      - --certificatesresolvers.myresolver.acme.dnschallenge.provider=cloudflare\n      - --certificatesresolvers.myresolver.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53\n      - --certificatesresolvers.myresolver.acme.dnschallenge.delayBeforeCheck=60\n      - --certificatesresolvers.myresolver.acme.email=$LETSENCRYPT_EMAIL\n      - --certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json\n      - --certificatesresolvers.myresolver.acme.caserver=https://acme-v02.api.letsencrypt.org/directory\n    environment:\n      - CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN\n    ports:\n      - \"80:80\"\n      - \"443:443\"\n      - \"8080:8080\"\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock:ro\n      - $ROOT_DIR/traefik/letsencrypt:/letsencrypt\n    labels:\n      - \"traefik.enable=true\"\n      - \"traefik.http.routers.traefik.rule=Host(\`traefik.$BASE_DOMAIN\`)\"\n      - \"traefik.http.services.traefik.loadbalancer.server.port=8080\"\n      - \"traefik.http.routers.traefik.entrypoints=websecure\"\n      - \"traefik.http.routers.traefik.tls.certresolver=myresolver\"\n      - \"traefik.http.routers.traefik.service=api@internal\"\n\n"
 
 # Thêm dịch vụ Redis nếu được kích hoạt
 if [ "$INCLUDE_REDIS" = true ]; then
