@@ -61,6 +61,7 @@ INCLUDE_REDIS=true      # Đặt thành false nếu không muốn sử dụng Re
 REINIT=false            # Tùy chọn khởi tạo lại
 LIST=false              # Tùy chọn liệt kê instance
 UPDATE_ALL=false        # Tùy chọn cập nhật tất cả instance
+N8N_IMAGE=${N8N_IMAGE:-"docker.n8n.io/n8nio/n8n:latest"}  # Giá trị mặc định cho image n8n
 
 while getopts "d:rlu" opt; do
   case $opt in
@@ -212,6 +213,10 @@ fi
 docker compose up -d
 cd - >/dev/null
 
+# Kiểm tra trạng thái container
+echo "Kiểm tra trạng thái container sau khi khởi động..."
+docker ps
+
 # Cấu hình Nginx để proxy đến n8n (chỉ HTTP, vì Cloudflare xử lý HTTPS)
 for subdomain in "${subdomains[@]}"; do
   domain="$subdomain.$BASE_DOMAIN"
@@ -269,8 +274,6 @@ for subdomain in "${subdomains[@]}"; do
 - **URL truy cập**: https://$subdomain.$BASE_DOMAIN
 - **Thư mục dữ liệu**: $SUBDOMAIN_DIR
 - **Docker Compose file**: $ROOT_DIR/docker-compose.yml
-- **Kiến trúc**: $ARCH
-- **Hình ảnh n8n**: $N8N_IMAGE
 - **Cổng nội bộ**: $n8n_port
 
 ## Cấu hình PostgreSQL
@@ -303,8 +306,6 @@ for subdomain in "${subdomains[@]}"; do
   echo "- PostgreSQL Password: $POSTGRES_PASSWORD"
   echo "- Thư mục dữ liệu: $SUBDOMAIN_DIR"
   echo "- File info: $SUBDOMAIN_DIR/info-$(date +%F-%H%M%S).md"
-  echo "- Kiến trúc: $ARCH"
-  echo "- Hình ảnh n8n: $N8N_IMAGE"
   echo "- Cổng nội bộ: $n8n_port"
   echo
 done
