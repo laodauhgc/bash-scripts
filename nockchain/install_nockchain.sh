@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Script to automate Nockchain installation with Systemd service (nockchaind)
+# Script to automate Nockchain installation with Systemd service
 # Usage: ./install_nockchain.sh [--branch BRANCH] [--node-type TYPE] [--mining-pubkey PUBKEY]
 
 # Default values
-BRANCH="main"
+BRANCH="master"  # Sử dụng nhánh master theo thông tin từ GitHub
 NODE_TYPE="leader"
 MINING_PUBKEY=""
 INSTALL_DIR="$HOME/nockchain"
@@ -13,7 +13,7 @@ REPO_URL="https://github.com/zorp-corp/nockchain.git"
 # Function to display usage
 usage() {
     echo "Usage: $0 [--branch BRANCH] [--node-type TYPE] [--mining-pubkey PUBKEY]"
-    echo "  --branch: Git branch to clone (default: main)"
+    echo "  --branch: Git branch to clone (default: master)"
     echo "  --node-type: Node type (leader or follower, default: leader)"
     echo "  --mining-pubkey: Public key for mining (optional)"
     exit 1
@@ -46,7 +46,14 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
-# Step 1: Update system
+# Step 1: Check network connectivity
+log "Checking network connectivity..."
+if ! ping -c 1 github.com >/dev/null 2>&1; then
+    log "Error: Cannot connect to GitHub. Check your network."
+    exit 1
+fi
+
+# Step 2: Update system
 log "Updating system packages..."
 sudo apt-get update && sudo apt-get upgrade -y
 if [ $? -ne 0 ]; then
@@ -54,7 +61,7 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Step 2: Install dependencies
+# Step 3: Install dependencies
 log "Installing dependencies..."
 sudo apt install -y curl iptables build-essential git wget lz4 jq make gcc nano automake autoconf tmux htop nvme-cli libgbm1 pkg-config libssl-dev libleveldb-dev tar clang bsdmainutils ncdu unzip
 if [ $? -ne 0 ]; then
@@ -62,24 +69,43 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Step 3: Install Rust
+# Step 4: Install Rust
 if ! command_exists rustc; then
     log "Installing Rust..."
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    source $HOME/.cargo/env
     if [ $? -ne 0 ]; then
         log "Error: Failed to install Rust."
+        exit 1
+    fi
+    # Kiểm tra và thêm Rust vào PATH
+    if [ -f "$HOME/.cargo/env" ]; then
+        . "$HOME/.cargo/env"
+    else
+        log "Error: Rust environment file not found at $HOME/.cargo/env."
+        exit 1
+    fi
+    export PATH="$HOME/.cargo/bin:$PATH"
+    # Xác nhận Rust được cài đặt
+    if ! command_exists rustc; then
+        log "Error: Rust is not properly installed."
         exit 1
     fi
 else
     log "Rust is already installed."
 fi
 
-# Step 4: Clone Nockchain repository
+# Step 5: Verify repository and branch
+log "Verifying repository and branch..."
+if ! git ls-remote --heads "$REPO_URL" "$BRANCH" | grep -q "$BRANCH"; then
+    log "Error: Branch $BRANCH not found in $REPO_URL."
+    exit 1
+fi
+
+# Step 6: Clone Nockchain repository
 log "Cloning Nockchain repository (branch: $BRANCH)..."
 if [ -d "$INSTALL_DIR" ]; then
     log "Directory $INSTALL_DIR already exists. Pulling latest changes..."
-    cd "$INSTALL_DIR" && git pull origin "$BRANCH"
+    cd "$INSTALL_DIR" && git fetch origin && git checkout "$BRANCH" && git pull origin "$BRANCH"
 else
     git clone --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
 fi
@@ -89,9 +115,8 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Step 5: Check and attempt to build
+# Step 7: Check and attempt to build
 log "Building Nockchain..."
-# Try install-choo if available, otherwise skip
 if grep -q "install-choo" Makefile; then
     make install-choo
     if [ $? -ne 0 ]; then
@@ -101,7 +126,6 @@ else
     log "Note: 'make install-choo' not found in Makefile. Skipping..."
 fi
 
-# Build Hoon files and project
 make build-hoon-all
 if [ $? -ne 0 ]; then
     log "Error: Failed to run 'make build-hoon-all'."
@@ -114,9 +138,13 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Step 6: Generate wallet
+# Step 8: Generate wallet
 log "Generating wallet..."
 export PATH="$PATH:$(pwd)/target/release"
+if ! command_exists wallet; then
+    log "Error: Wallet command not found. Ensure build was successful."
+    exit 1
+fi
 wallet keygen > wallet_output.txt
 if [ $? -ne 0 ]; then
     log "Error: Failed to generate wallet."
@@ -125,7 +153,7 @@ fi
 log "Wallet generated. Details saved in wallet_output.txt."
 cat wallet_output.txt
 
-# Step 7: Configure mining public key
+# Step 9: Configure mining public key
 if [ -n "$MINING_PUBKEY" ]; then
     log "Configuring mining public key in Makefile..."
     sed -i "s/MINING_PUBKEY =.*/MINING_PUBKEY = $MINING_PUBKEY/" Makefile
@@ -137,7 +165,7 @@ else
     log "Warning: No mining public key provided. You need to manually set MINING_PUBKEY in Makefile."
 fi
 
-# Step 8: Create Systemd service
+# Step 10: Create Systemd service
 log "Creating Systemd service for Nockchain $NODE_TYPE node..."
 cat << EOF | sudo tee /etc/systemd/system/nockchaind.service
 [Unit]
