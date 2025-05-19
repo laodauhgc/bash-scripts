@@ -144,27 +144,36 @@ else
 
     # Debug: Kiểm tra target/release
     log "Checking build output..."
-    ls -l target-pocket/release
+    ls -l target/release
     if [ ! -f "target/release/nockchain-wallet" ]; then
         log "Error: nockchain-wallet binary not found in target/release."
         exit 1
     fi
 fi
 
-# Step 8: Generate wallet
-log "Generating wallet..."
-export PATH="$PATH:$(pwd)/target/release"
-if ! command_exists nockchain-wallet; then
-    log "Error: nockchain-wallet command not found. Ensure build was successful."
-    exit 1
+# Step 8: Generate or reuse wallet
+log "Checking for existing wallet..."
+if [ -f "wallet_output.txt" ]; then
+    log "Existing wallet found at wallet_output.txt. Skipping wallet generation to preserve it."
+    log "Wallet details:"
+    cat wallet_output.txt
+    log "Please ensure MINING_PUBKEY matches the public key in wallet_output.txt."
+else
+    log "No existing wallet found. Generating new wallet..."
+    export PATH="$PATH:$(pwd)/target/release"
+    if ! command_exists nockchain-wallet; then
+        log "Error: nockchain-wallet command not found. Ensure build was successful."
+        exit 1
+    fi
+    nockchain-wallet keygen > wallet_output.txt
+    if [ $? -ne 0 ]; then
+        log "Error: Failed to generate wallet."
+        exit 1
+    fi
+    log "New wallet generated. Details saved in wallet_output.txt."
+    cat wallet_output.txt
 fi
-nockchain-wallet keygen > wallet_output.txt
-if [ $? -ne 0 ]; then
-    log "Error: Failed to generate wallet."
-    exit 1
-fi
-log "Wallet generated. Details saved in wallet_output.txt."
-cat wallet_output.txt
+log "Important: Back up wallet_output.txt securely, as it contains your private key."
 
 # Step 9: Configure mining public key
 if [ -n "$MINING_PUBKEY" ]; then
