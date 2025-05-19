@@ -4,7 +4,7 @@
 # Usage: ./install_nockchain.sh [--branch BRANCH] [--node-type TYPE] [--mining-pubkey PUBKEY]
 
 # Default values
-BRANCH="master"  # Sử dụng nhánh master theo thông tin từ GitHub
+BRANCH="master"
 NODE_TYPE="leader"
 MINING_PUBKEY=""
 INSTALL_DIR="$HOME/nockchain"
@@ -115,37 +115,50 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Step 7: Check and attempt to build
-log "Building Nockchain..."
-if grep -q "install-choo" Makefile; then
-    make install-choo
-    if [ $? -ne 0 ]; then
-        log "Warning: Failed to run 'make install-choo'. Continuing..."
-    fi
+# Step 7: Check if build is needed
+log "Checking if build is needed..."
+if [ -f "target/release/nockchain-wallet" ]; then
+    log "nockchain-wallet binary found. Skipping build to save time."
 else
-    log "Note: 'make install-choo' not found in Makefile. Skipping..."
-fi
+    log "Building Nockchain (this may take a while)..."
+    if grep -q "install-choo" Makefile; then
+        make install-choo
+        if [ $? -ne 0 ]; then
+            log "Warning: Failed to run 'make install-choo'. Continuing..."
+        fi
+    else
+        log "Note: 'make install-choo' not found in Makefile. Skipping..."
+    fi
 
-make build-hoon-all
-if [ $? -ne 0 ]; then
-    log "Error: Failed to run 'make build-hoon-all'."
-    exit 1
-fi
+    make build-hoon-all
+    if [ $? -ne 0 ]; then
+        log "Error: Failed to run 'make build-hoon-all'."
+        exit 1
+    fi
 
-make build
-if [ $? -ne 0 ]; then
-    log "Error: Failed to run 'make build'."
-    exit 1
+    make build
+    if [ $? -ne 0 ]; then
+        log "Error: Failed to run 'make build'."
+        exit 1
+    fi
+
+    # Debug: Kiểm tra target/release
+    log "Checking build output..."
+    ls -l target-pocket/release
+    if [ ! -f "target/release/nockchain-wallet" ]; then
+        log "Error: nockchain-wallet binary not found in target/release."
+        exit 1
+    fi
 fi
 
 # Step 8: Generate wallet
 log "Generating wallet..."
 export PATH="$PATH:$(pwd)/target/release"
-if ! command_exists wallet; then
-    log "Error: Wallet command not found. Ensure build was successful."
+if ! command_exists nockchain-wallet; then
+    log "Error: nockchain-wallet command not found. Ensure build was successful."
     exit 1
 fi
-wallet keygen > wallet_output.txt
+nockchain-wallet keygen > wallet_output.txt
 if [ $? -ne 0 ]; then
     log "Error: Failed to generate wallet."
     exit 1
