@@ -1,30 +1,46 @@
-# Tập lệnh Cài đặt Nockchain
+# Nockchain Installation Script
 
-Tập lệnh Bash tự động cài đặt node Nockchain trên Linux VPS hoặc WSL, chạy dưới dạng dịch vụ `nockchaind`.
+Tập lệnh Bash tự động cài đặt node Nockchain miner trên Ubuntu, sử dụng Systemd để chạy liên tục.
 
 ## Yêu cầu
-- Hệ điều hành: Ubuntu (hoặc WSL trên Windows)
-- Phần cứng: 16GB RAM, 6 lõi CPU, 50-200GB SSD
-- Mạng: Cổng 3005, 3006 mở
-- Quyền: Root hoặc `sudo`
+- **Hệ điều hành**: Ubuntu
+- **Phần cứng**: 16GB RAM, 8 lõi CPU, 50-200GB SSD
+- **Mạng**: Cổng 3005, 3006 (TCP) mở
+- **Quyền**: Root hoặc `sudo`
 
 ## Cài đặt
-
 Chạy lệnh sau để tải và cài đặt:
 ```bash
 curl -O https://raw.githubusercontent.com/laodauhgc/bash-scripts/main/nockchain/install_nockchain.sh && chmod +x install_nockchain.sh && ./install_nockchain.sh
 ```
 
 ### Tùy chọn
-- Thêm `--node-type follower` để chạy node follower.
-- Thêm `--mining-pubkey <khóa>` để cấu hình khóa khai thác.
-- Ví dụ: `./install_nockchain.sh --node-type follower --mining-pubkey 0x1234567890abcdef`
+- `--mining-pubkey <khóa>`: Đặt khóa công khai khai thác (khớp với ví).
+- Ví dụ: `./install_nockchain.sh --mining-pubkey 3UF4KcSJ...`
 
 ## Kiểm tra
-- Trạng thái: `sudo systemctl status nockchaind`
-- Log: `journalctl -u nockchaind -f`
-- Ví: Kiểm tra `~/nockchain/wallet_output.txt` (sao lưu an toàn)
+- **Trạng thái dịch vụ**:
+  ```bash
+  sudo systemctl status nockchaind
+  ```
+- **Log**:
+  ```bash
+  journalctl -u nockchaind -f
+  ```
+- **Ví**:
+  ```bash
+  cat ~/nockchain/wallet_output.txt
+  ```
+- **Sao lưu**:
+  ```bash
+  cat ~/nockchain_backup/keys.export
+  ```
+  - Lưu `~/nockchain_backup/*` an toàn.
 
 ## Lưu ý
-- Nếu gặp lỗi, kiểm tra log hoặc liên hệ [Telegram](https://t.me/nockchainproject) hoặc [GitHub](https://github.com/zorp-corp/nockchain).
-- Cập nhật node: `sudo systemctl stop nockchaind && cd ~/nockchain && git pull origin main && make build-hoon-all && make build && sudo systemctl start nockchaind`
+- **Cổng**: Đảm bảo cổng 3005, 3006 mở:
+  ```bash
+  sudo ufw status
+  ```
+- **Mainnet**: Chạy trong thư mục sạch (tập lệnh tự xóa `.data.nockchain` nếu có).
+- **Hỗ trợ**: [Telegram](https://t.me/nockchainproject), [GitHub](https://github.com/zorp-corp/nockchain)
