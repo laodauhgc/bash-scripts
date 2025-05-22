@@ -5,7 +5,7 @@ Tập lệnh Bash tự động cài đặt node Nockchain miner trên Ubuntu, s�
 ## Yêu cầu
 - **Hệ điều hành**: Ubuntu
 - **Phần cứng**: 16GB RAM, 8 lõi CPU, 50-200GB SSD
-- **Mạng**: Cổng 3005, 3006 (TCP) mở
+- **Mạng**: Cổng 3005, 3006 (TCP/UDP) mở
 - **Quyền**: Root hoặc `sudo`
 
 ## Cài đặt
@@ -15,8 +15,8 @@ curl -O https://raw.githubusercontent.com/laodauhgc/bash-scripts/main/nockchain/
 ```
 
 ### Tùy chọn
-- `--mining-pubkey <khóa>`: Đặt khóa công khai khai thác (khớp với ví).
-- Ví dụ: `./install_nockchain.sh --mining-pubkey 3UF4KcSJ...`
+- `-m`: Chạy ở chế độ menu để chọn từng bước.
+- Ví dụ: `./install_nockchain.sh -m`
 
 ## Kiểm tra
 - **Trạng thái dịch vụ**:
@@ -33,14 +33,14 @@ curl -O https://raw.githubusercontent.com/laodauhgc/bash-scripts/main/nockchain/
   ```
 - **Sao lưu**:
   ```bash
-  cat ~/nockchain_backup/keys.export
+  ls -l ~/nockchain_backup
   ```
-  - Lưu `~/nockchain_backup/*` an toàn.
+  - Lưu `~/nockchain_backup/wallet_output.txt` và `keys.export` an toàn.
 
 ## Lưu ý
-- **Cổng**: Đảm bảo cổng 3005, 3006 mở:
+- **Cổng**: Đảm bảo cổng 3005, 3006 (TCP/UDP) mở:
   ```bash
   sudo ufw status
   ```
-- **Mainnet**: Chạy trong thư mục sạch (tập lệnh tự xóa `.data.nockchain` nếu có).
 - **Hỗ trợ**: [Telegram](https://t.me/nockchainproject), [GitHub](https://github.com/zorp-corp/nockchain)
+- **Sao lưu ví**: Giữ `~/nockchain_backup/*` an toàn, chứa khóa riêng.
