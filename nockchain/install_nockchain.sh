@@ -193,9 +193,9 @@ generate_wallet() {
       [ "$MENU_MODE" = true ] && pause_and_return || exit 1
       return
     fi
-    nockchain-wallet keygen > wallet_output.txt 2>&1
+    nockchain-wallet keygen > wallet_output.txt 2> wallet_error.log
     if [ $? -ne 0 ]; then
-      log "${RED}Lỗi: Không thể tạo ví. Kiểm tra wallet_output.txt!${RESET}"
+      log "${RED}Lỗi: Không thể tạo ví. Kiểm tra wallet_error.log!${RESET}"
       [ "$MENU_MODE" = true ] && pause_and_return || exit 1
       return
     fi
@@ -226,12 +226,12 @@ configure_mining_key() {
   fi
   cd "$NCK_DIR"
   log "${BLUE}Cấu hình khóa khai thác...${RESET}"
-  if [ -f "wallet_output.txt" ]; then
-    PUBLIC_KEY=$(grep -i "public key" wallet_output.txt | awk '{print $NF}' | tail -1)
+  if [ -f "wallet_output.txt" ] && file wallet_output.txt | grep -q "text"; then
+    PUBLIC_KEY=$(grep -A1 "New Public Key" wallet_output.txt | tail -n1 | tr -d '"' | tr -d ' ')
     if [ -n "$PUBLIC_KEY" ]; then
       log "${YELLOW}Khóa công khai từ ví: $PUBLIC_KEY${RESET}"
-      log "${YELLOW}Có muốn dùng khóa này cho MINING_PUBKEY? (y/n)${RESET}"
       if [ "$MENU_MODE" = true ]; then
+        log "${YELLOW}Có muốn dùng khóa này cho MINING_PUBKEY? (y/n)${RESET}"
         read -r use_wallet_key
         if [[ "$use_wallet_key" =~ ^[Yy]$ ]]; then
           MINING_PUBKEY="$PUBLIC_KEY"
@@ -247,34 +247,31 @@ configure_mining_key() {
       if [ "$MENU_MODE" = true ]; then
         read -r MINING_PUBKEY
       else
-        log "${RED}Lỗi: Không có MINING_PUBKEY tự động trong chế độ không tương tác!${RESET}"
-        exit 1
+        log "${YELLOW}Cảnh báo: Không thể trích xuất MINING_PUBKEY từ ví. Cấu hình .env để bỏ qua bước này.${RESET}"
       fi
     fi
   else
-    log "${YELLOW}Nhập MINING_PUBKEY:${RESET}"
+    log "${YELLOW}Ví không tồn tại hoặc không phải text. Nhập MINING_PUBKEY:${RESET}"
     if [ "$MENU_MODE" = true ]; then
       read -r MINING_PUBKEY
     else
-      log "${RED}Lỗi: Không có ví hoặc MINING_PUBKEY trong chế độ không tương tác!${RESET}"
-      exit 1
+      log "${YELLOW}Cảnh báo: Không có ví. Cấu hình MINING_PUBKEY trong .env thủ công sau khi cài đặt.${RESET}"
     fi
   fi
-  if [ -z "$MINING_PUBKEY" ]; then
-    log "${RED}Lỗi: Không nhập MINING_PUBKEY!${RESET}"
-    [ "$MENU_MODE" = true ] && pause_and_return || exit 1
-    return
-  fi
-  if grep -q "^MINING_PUBKEY=" "$ENV_FILE"; then
-    sed -i "s|^MINING_PUBKEY=.*|MINING_PUBKEY=$MINING_PUBKEY|" "$ENV_FILE"
+  if [ -n "$MINING_PUBKEY" ]; then
+    if grep -q "^MINING_PUBKEY=" "$ENV_FILE"; then
+      sed -i "s|^MINING_PUBKEY=.*|MINING_PUBKEY=$MINING_PUBKEY|" "$ENV_FILE"
+    else
+      echo "MINING_PUBKEY=$MINING_PUBKEY" >> "$ENV_FILE"
+    fi
+    if [ $? -eq 0 ] && grep -q "^MINING_PUBKEY=$MINING_PUBKEY$" "$ENV_FILE"; then
+      log "${GREEN}Đã cấu hình MINING_PUBKEY: $MINING_PUBKEY${RESET}"
+    else
+      log "${RED}Lỗi: Không thể cập nhật .env!${RESET}"
+      [ "$MENU_MODE" = true ] && pause_and_return || exit 1
+    fi
   else
-    echo "MINING_PUBKEY=$MINING_PUBKEY" >> "$ENV_FILE"
-  fi
-  if [ $? -eq 0 ] && grep -q "^MINING_PUBKEY=$MINING_PUBKEY$" "$ENV_FILE"; then
-    log "${GREEN}Đã cấu hình MINING_PUBKEY: $MINING_PUBKEY${RESET}"
-  else
-    log "${RED}Lỗi: Không thể cập nhật .env!${RESET}"
-    [ "$MENU_MODE" = true ] && pause_and_return || exit 1
+    log "${YELLOW}Cảnh báo: Không cấu hình MINING_PUBKEY. Sửa .env thủ công để khai thác!${RESET}"
   fi
   [ "$MENU_MODE" = true ] && pause_and_return
 }
@@ -288,8 +285,8 @@ start_miner_node() {
     return
   fi
   cd "$NCK_DIR"
-  if [ ! -f ".env" ] || ! grep -q "^MINING_PUBKEY=" .env; then
-    log "${RED}Lỗi: Thiếu .env hoặc MINING_PUBKEY. Chạy tùy chọn 6 trước!${RESET}"
+  if [ ! -f ".env" ]; then
+    log "${RED}Lỗi: Thiếu .env. Chạy tùy chọn 3 trước!${RESET}"
     [ "$MENU_MODE" = true ] && pause_and_return || exit 1
     return
   fi
@@ -298,27 +295,6 @@ start_miner_node() {
     log "${YELLOW}.data.nockchain tồn tại. Sao lưu và xóa để chạy mainnet...${RESET}"
     mv .data.nockchain "$BACKUP_DIR/data.nockchain.bak-$(date +%F-%H%M%S)"
   fi
-  log "${BLUE}Kiểm tra cổng 3005, 3006...${RESET}"
-  PORTS=(3005 3006)
-  for PORT in "${PORTS[@]}"; do
-    if lsof -i :$PORT >/dev/null 2>&1; then
-      log "${YELLOW}Cổng $PORT đang bị chiếm. Có muốn giết tiến trình? (y/n)${RESET}"
-      if [ "$MENU_MODE" = true ]; then
-        read -r confirm_kill
-        if [[ "$confirm_kill" =~ ^[Yy]$ ]]; then
-          sudo fuser -k $PORT/tcp
-          sudo fuser -k $PORT/udp
-        else
-          log "${RED}Lỗi: Cổng $PORT bị chiếm, không thể chạy node!${RESET}"
-          [ "$MENU_MODE" = true ] && pause_and_return || exit 1
-          return
-        fi
-      else
-        sudo fuser -k $PORT/tcp
-        sudo fuser -k $PORT/udp
-      fi
-    fi
-  done
   log "${BLUE}Mở cổng 3005, 3006 (TCP/UDP)...${RESET}"
   sudo ufw allow 22/tcp && sudo ufw allow 3005:3006/tcp && sudo ufw allow 3005:3006/udp && sudo ufw --force enable
   if [ $? -ne 0 ]; then
