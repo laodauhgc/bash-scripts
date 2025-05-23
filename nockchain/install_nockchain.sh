@@ -285,8 +285,14 @@ start_miner_node() {
     return
   fi
   cd "$NCK_DIR"
-  if [ ! -f ".env" ]; then
-    log "${RED}Lỗi: Thiếu .env. Chạy tùy chọn 3 trước!${RESET}"
+  if [ ! -f ".env" ] || ! grep -q "^MINING_PUBKEY=" .env; then
+    log "${RED}Lỗi: Thiếu .env hoặc MINING_PUBKEY. Chạy tùy chọn 6 trước!${RESET}"
+    [ "$MENU_MODE" = true ] && pause_and_return || exit 1
+    return
+  fi
+  MINING_PUBKEY=$(grep "^MINING_PUBKEY=" .env | cut -d'=' -f2-)
+  if [ -z "$MINING_PUBKEY" ]; then
+    log "${RED}Lỗi: MINING_PUBKEY không được cấu hình trong .env!${RESET}"
     [ "$MENU_MODE" = true ] && pause_and_return || exit 1
     return
   fi
@@ -295,8 +301,8 @@ start_miner_node() {
     log "${YELLOW}.data.nockchain tồn tại. Sao lưu và xóa để chạy mainnet...${RESET}"
     mv .data.nockchain "$BACKUP_DIR/data.nockchain.bak-$(date +%F-%H%M%S)"
   fi
-  log "${BLUE}Mở cổng 3005, 3006 (TCP/UDP)...${RESET}"
-  sudo ufw allow 22/tcp && sudo ufw allow 3005:3006/tcp && sudo ufw allow 3005:3006/udp && sudo ufw --force enable
+  log "${BLUE}Mở cổng 3005, 3006, 30000 (TCP/UDP)...${RESET}"
+  sudo ufw allow 22/tcp && sudo ufw allow 3005:3006/tcp && sudo ufw allow 3005:3006/udp && sudo ufw allow 30000/udp && sudo ufw --force enable
   if [ $? -ne 0 ]; then
     log "${YELLOW}Cảnh báo: Không thể mở cổng. Kiểm tra firewall!${RESET}"
   fi
@@ -309,7 +315,7 @@ After=network.target
 [Service]
 User=root
 WorkingDirectory=$NCK_DIR
-ExecStart=/usr/bin/make run-nockchain
+ExecStart=/root/nockchain/target/release/nockchain --mining-pubkey $MINING_PUBKEY --mine --peer /ip4/95.216.102.60/udp/3006/quic-v1 --peer /ip4/65.108.123.225/udp/3006/quic-v1 --peer /ip4/65.109.156.108/udp/3006/quic-v1 --peer /ip4/65.21.67.175/udp/3006/quic-v1 --peer /ip4/65.109.156.172/udp/3006/quic-v1 --peer /ip4/34.174.22.166/udp/3006/quic-v1 --peer /ip4/34.95.155.151/udp/30000/quic-v1 --peer /ip4/34.18.98.38/udp/30000/quic-v1
 Restart=always
 RestartSec=10
 Environment="PATH=/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$NCK_DIR/target/release"
