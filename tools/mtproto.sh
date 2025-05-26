@@ -1,8 +1,6 @@
-
 #!/bin/bash
 
-# Script tự động cài đặt MTProto Proxy trên Ubuntu 24.04 bằng Docker
-
+# Script tự động cài đặt MTProto Proxy trên Ubuntu bằng Docker
 # Màu sắc cho output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -101,9 +99,9 @@ version: '3'
 services:
 EOF
 
-# Tạo dịch vụ proxy
+# Tạo dịch vụ proxy (sửa vòng lặp để tương thích với dash)
 START_PORT=8000
-for ((i=1; i<=PROXY_COUNT; i++)); do
+for i in $(seq 1 $PROXY_COUNT); do
     PORT=$((START_PORT + i - 1))
     SECRET=$(openssl rand -hex 16)
     echo "  mtproto-proxy-$i:" >> docker-compose.yml
