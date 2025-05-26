@@ -1,6 +1,9 @@
+
 #!/bin/bash
 
 # Script tự động cài đặt MTProto Proxy trên Ubuntu bằng Docker
+# Ngày: 26/05/2025
+
 # Màu sắc cho output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -10,12 +13,40 @@ NC='\033[0m' # No Color
 # File lưu thông tin proxy
 OUTPUT_FILE="/root/mtproxy.txt"
 
+# Cổng mặc định
+START_PORT=10000
+
 # Địa chỉ IP công cộng
 PUBLIC_IP=$(curl -s ifconfig.me)
 if [ -z "$PUBLIC_IP" ]; then
     echo -e "${RED}Lỗi: Không thể lấy IP công cộng. Kiểm tra kết nối mạng!${NC}"
     exit 1
 fi
+
+# Hàm hiển thị hướng dẫn sử dụng
+usage() {
+    echo -e "${YELLOW}Cách sử dụng: $0 [-p <start_port>]${NC}"
+    echo -e "  -p <start_port>: Chỉ định cổng bắt đầu (mặc định: 10000)"
+    echo -e "Ví dụ: $0 -p 8000"
+    exit 1
+}
+
+# Xử lý tùy chọn dòng lệnh
+while getopts "p:" opt; do
+    case $opt in
+        p)
+            START_PORT=$OPTARG
+            # Kiểm tra xem cổng có phải là số hợp lệ
+            if ! [[ "$START_PORT" =~ ^[0-9]+$ ]] || [ "$START_PORT" -lt 1024 ] || [ "$START_PORT" -gt 65535 ]; then
+                echo -e "${RED}Lỗi: Cổng phải là số từ 1024 đến 65535!${NC}"
+                exit 1
+            fi
+            ;;
+        \?)
+            usage
+            ;;
+    esac
+done
 
 # Hàm kiểm tra lệnh
 command_exists() {
@@ -75,7 +106,7 @@ elif [ "$TOTAL_RAM" -lt 2048 ]; then
 else
     PROXY_COUNT=10
 fi
-echo -e "${YELLOW}Tổng RAM: ${TOTAL_RAM}MB. Sẽ tạo $PROXY_COUNT proxy.${NC}"
+echo -e "${YELLOW}Tổng RAM: ${TOTAL_RAM}MB. Sẽ tạo $PROXY_COUNT proxy với cổng bắt đầu từ $START_PORT.${NC}"
 
 # Kiểm tra và cài đặt ufw nếu chưa có
 if ! command_exists ufw; then
@@ -99,8 +130,7 @@ version: '3'
 services:
 EOF
 
-# Tạo dịch vụ proxy (sửa vòng lặp để tương thích với dash)
-START_PORT=8000
+# Tạo dịch vụ proxy
 for i in $(seq 1 $PROXY_COUNT); do
     PORT=$((START_PORT + i - 1))
     SECRET=$(openssl rand -hex 16)
