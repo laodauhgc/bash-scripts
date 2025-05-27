@@ -1,457 +1,240 @@
 #!/bin/bash
 
-# ========= Màu sắc =========
-RESET='\033[0m'
-BOLD='\033[1m'
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
+# Đường dẫn backup ví
+BACKUP_DIR="/root/nockchain_backup"
+KEYS_FILE="$BACKUP_DIR/keys.export"
+WALLET_OUTPUT="$BACKUP_DIR/wallet_output.txt"
 
-# ========= Đường dẫn =========
-NCK_DIR="$HOME/nockchain"
-BACKUP_DIR="$HOME/nockchain_backup"
-REPO_URL="https://github.com/zorp-corp/nockchain.git"
-ENV_FILE="$NCK_DIR/.env"
+# Danh sách peer
+PEER_NODES="/ip4/95.216.102.60/udp/3006/quic-v1,/ip4/65.108.123.225/udp/3006/quic-v1,/ip4/65.109.156.108/udp/3006/quic-v1,/ip4/65.21.67.175/udp/3006/quic-v1,/ip4/65.109.156.172/udp/3006/quic-v1,/ip4/34.174.22.166/udp/3006/quic-v1,/ip4/34.95.155.151/udp/30000/quic-v1,/ip4/34.18.98.38/udp/30000/quic-v1"
 
-# ========= Kiểm tra lệnh =========
-command_exists() {
-  command -v "$1" >/dev/null 2>&1
-}
-
-# ========= Ghi log =========
-log() {
-  echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
-}
-
-# ========= Tiêu đề =========
-show_header() {
-  clear
-  echo -e "${BOLD}${BLUE}Nockchain Installation Script${RESET}"
-  echo -e "${BLUE}GitHub: github.com/laodauhgc${RESET}"
-  echo -e "${BLUE}-----------------------------------------------${RESET}"
-  echo ""
-}
-
-# ========= Cài phụ thuộc =========
-install_dependencies() {
-  show_header
-  log "${BLUE}Cài đặt phụ thuộc...${RESET}"
-  sudo apt-get update && sudo apt-get upgrade -y
-  sudo apt install -y curl git make clang llvm-dev libclang-dev
-  if [ $? -eq 0 ]; then
-    log "${GREEN}Phụ thuộc đã được cài đặt.${RESET}"
-  else
-    log "${RED}Lỗi: Không thể cài phụ thuộc. Kiểm tra mạng hoặc quyền!${RESET}"
-    [ "$MENU_MODE" = true ] && pause_and_return || exit 1
-  fi
-  [ "$MENU_MODE" = true ] && pause_and_return
-}
-
-# ========= Cài Rust =========
-install_rust() {
-  show_header
-  if command_exists rustc; then
-    log "${YELLOW}Rust đã được cài đặt, bỏ qua.${RESET}"
-    [ "$MENU_MODE" = true ] && pause_and_return
-    return
-  fi
-  log "${BLUE}Cài đặt Rust...${RESET}"
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-  if [ $? -eq 0 ]; then
-    . "$HOME/.cargo/env"
-    export PATH="$HOME/.cargo/bin:$PATH"
-    rustup default stable
-    if command_exists rustc; then
-      log "${GREEN}Rust đã được cài đặt.${RESET}"
-    else
-      log "${RED}Lỗi: Rust không được cài đúng. Kiểm tra môi trường!${RESET}"
-      [ "$MENU_MODE" = true ] && pause_and_return || exit 1
-    fi
-  else
-    log "${RED}Lỗi: Không thể cài Rust. Kiểm tra mạng!${RESET}"
-    [ "$MENU_MODE" = true ] && pause_and_return || exit 1
-  fi
-  [ "$MENU_MODE" = true ] && pause_and_return
-}
-
-# ========= Thiết lập kho =========
-setup_repository() {
-  show_header
-  log "${BLUE}Thiết lập kho Nockchain...${RESET}"
-  if ! git ls-remote --heads "$REPO_URL" "master" | grep -q "master"; then
-    log "${RED}Lỗi: Nhánh master không tồn tại trong $REPO_URL.${RESET}"
-    [ "$MENU_MODE" = true ] && pause_and_return || exit 1
-    return
-  fi
-  if [ -d "$NCK_DIR" ]; then
-    log "${YELLOW}Thư mục $NCK_DIR đã tồn tại. Có muốn xóa và clone lại? (y/n)${RESET}"
-    if [ "$MENU_MODE" = true ]; then
-      read -r confirm
-      if [[ "$confirm" =~ ^[Yy]$ ]]; then
-        rm -rf "$NCK_DIR" "$HOME/.nockapp"
-        git clone --branch master "$REPO_URL" "$NCK_DIR"
-      else
-        cd "$NCK_DIR" && git fetch origin && git checkout master && git pull origin master
-      fi
-    else
-      rm -rf "$NCK_DIR" "$HOME/.nockapp"
-      git clone --branch master "$REPO_URL" "$NCK_DIR"
-    fi
-  else
-    git clone --branch master "$REPO_URL" "$NCK_DIR"
-  fi
-  if [ $? -ne 0 ]; then
-    log "${RED}Lỗi: Không thể clone hoặc cập nhật kho.${RESET}"
-    [ "$MENU_MODE" = true ] && pause_and_return || exit 1
-    return
-  fi
-  cd "$NCK_DIR"
-  if [ -f ".env" ]; then
-    cp .env .env.bak
-    log "${GREEN}Đã sao lưu .env thành .env.bak.${RESET}"
-  fi
-  if [ -f ".env_example" ]; then
-    cp .env_example .env
-    log "${GREEN}Đã tạo .env từ .env_example.${RESET}"
-  else
-    log "${RED}Lỗi: Không tìm thấy .env_example.${RESET}"
-    [ "$MENU_MODE" = true ] && pause_and_return || exit 1
-  fi
-  log "${GREEN}Kho đã được thiết lập.${RESET}"
-  [ "$MENU_MODE" = true ] && pause_and_return
-}
-
-# ========= Biên dịch dự án =========
-build_project() {
-  show_header
-  if [ ! -d "$NCK_DIR" ]; then
-    log "${RED}Lỗi: Thư mục $NCK_DIR không tồn tại. Chạy tùy chọn 3 trước!${RESET}"
-    [ "$MENU_MODE" = true ] && pause_and_return || exit 1
-    return
-  fi
-  cd "$NCK_DIR"
-  log "${BLUE}Kiểm tra binary...${RESET}"
-  if [ -f "target/release/nockchain-wallet" ] && [ -f "target/release/nockchain" ]; then
-    log "${YELLOW}nockchain-wallet và nockchain đã có. Bỏ qua build để tiết kiệm thời gian.${RESET}"
-  else
-    log "${BLUE}Biên dịch Nockchain (có thể mất vài phút)...${RESET}"
-    make install-hoonc > hoonc.log 2>&1
+# Hàm kiểm tra lỗi
+check_error() {
     if [ $? -ne 0 ]; then
-      log "${YELLOW}Cảnh báo: make install-hoonc thất bại. Kiểm tra hoonc.log.${RESET}"
+        echo "Lỗi: $1"
+        exit 1
     fi
-    make build > build.log 2>&1
-    if [ $? -ne 0 ]; then
-      log "${RED}Lỗi: make build thất bại. Kiểm tra build.log!${RESET}"
-      [ "$MENU_MODE" = true ] && pause_and_return || exit 1
-      return
-    fi
-    make install-nockchain-wallet
-    if [ $? -ne 0 ]; then
-      log "${RED}Lỗi: Không thể cài nockchain-wallet.${RESET}"
-      [ "$MENU_MODE" = true ] && pause_and_return || exit 1
-      return
-    fi
-    make install-nockchain
-    if [ $? -ne 0 ]; then
-      log "${RED}Lỗi: Không thể cài nockchain.${RESET}"
-      [ "$MENU_MODE" = true ] && pause_and_return || exit 1
-      return
-    fi
-    log "${BLUE}Kiểm tra binary sau build...${RESET}"
-    ls -l target/release
-    if [ ! -f "target/release/nockchain-wallet" ] || [ ! -f "target/release/nockchain" ]; then
-      log "${RED}Lỗi: Không tìm thấy binary nockchain-wallet hoặc nockchain.${RESET}"
-      [ "$MENU_MODE" = true ] && pause_and_return || exit 1
-      return
-    fi
-    log "${GREEN}Biên dịch hoàn tất.${RESET}"
-  fi
-  [ "$MENU_MODE" = true ] && pause_and_return
 }
 
-# ========= Tạo ví =========
-generate_wallet() {
-  show_header
-  if [ ! -d "$NCK_DIR" ] || [ ! -f "$NCK_DIR/target/release/nockchain-wallet" ]; then
-    log "${RED}Lỗi: Thư mục $NCK_DIR hoặc nockchain-wallet không tồn tại. Chạy tùy chọn 3 và 4 trước!${RESET}"
-    [ "$MENU_MODE" = true ] && pause_and_return || exit 1
-    return
-  fi
-  cd "$NCK_DIR"
-  log "${BLUE}Kiểm tra ví...${RESET}"
-  if [ -f "wallet_output.txt" ]; then
-    log "${YELLOW}Ví đã tồn tại tại wallet_output.txt. Bỏ qua để giữ ví cũ.${RESET}"
-    log "${BLUE}Chi tiết ví:${RESET}"
-    cat wallet_output.txt
-    log "${YELLOW}Đảm bảo MINING_PUBKEY khớp với khóa công khai trong ví!${RESET}"
-  else
-    log "${BLUE}Tạo ví mới...${RESET}"
-    export PATH="$PATH:$NCK_DIR/target/release"
-    if ! command_exists nockchain-wallet; then
-      log "${RED}Lỗi: Không tìm thấy lệnh nockchain-wallet. Kiểm tra build!${RESET}"
-      [ "$MENU_MODE" = true ] && pause_and_return || exit 1
-      return
-    fi
-    nockchain-wallet keygen > wallet_output.txt 2> wallet_error.log
-    if [ $? -ne 0 ]; then
-      log "${RED}Lỗi: Không thể tạo ví. Kiểm tra wallet_error.log!${RESET}"
-      [ "$MENU_MODE" = true ] && pause_and_return || exit 1
-      return
-    fi
-    log "${GREEN}Ví mới đã được tạo. Chi tiết lưu tại wallet_output.txt:${RESET}"
-    cat wallet_output.txt
-  fi
-  log "${GREEN}Sao lưu ví...${RESET}"
-  mkdir -p "$BACKUP_DIR"
-  nockchain-wallet export-keys > keys.export 2>&1
-  if [ $? -eq 0 ]; then
-    cp wallet_output.txt keys.export "$BACKUP_DIR/"
-    chmod 600 "$BACKUP_DIR/wallet_output.txt" "$BACKUP_DIR/keys.export"
-    log "${GREEN}Đã sao lưu ví vào $BACKUP_DIR/wallet_output.txt và $BACKUP_DIR/keys.export.${RESET}"
-  else
-    log "${YELLOW}Cảnh báo: Không thể xuất khóa. Kiểm tra keys.export!${RESET}"
-  fi
-  log "${YELLOW}Quan trọng: Lưu $BACKUP_DIR/* an toàn, vì chứa khóa riêng!${RESET}"
-  [ "$MENU_MODE" = true ] && pause_and_return
-}
+# Hàm xóa worker
+remove_workers() {
+    echo "Xóa tất cả worker Nockchain..."
 
-# ========= Cấu hình khóa khai thác =========
-configure_mining_key() {
-  show_header
-  if [ ! -d "$NCK_DIR" ] || [ ! -f "$ENV_FILE" ]; then
-    log "${RED}Lỗi: Thư mục $NCK_DIR hoặc .env không tồn tại. Chạy tùy chọn 3 trước!${RESET}"
-    [ "$MENU_MODE" = true ] && pause_and_return || exit 1
-    return
-  fi
-  cd "$NCK_DIR"
-  log "${BLUE}Cấu hình khóa khai thác...${RESET}"
-  if [ -f "wallet_output.txt" ] && file wallet_output.txt | grep -q "text"; then
-    PUBLIC_KEY=$(grep -A1 "New Public Key" wallet_output.txt | tail -n1 | tr -d '"' | tr -d ' ')
-    if [ -n "$PUBLIC_KEY" ]; then
-      log "${YELLOW}Khóa công khai từ ví: $PUBLIC_KEY${RESET}"
-      if [ "$MENU_MODE" = true ]; then
-        log "${YELLOW}Có muốn dùng khóa này cho MINING_PUBKEY? (y/n)${RESET}"
-        read -r use_wallet_key
-        if [[ "$use_wallet_key" =~ ^[Yy]$ ]]; then
-          MINING_PUBKEY="$PUBLIC_KEY"
-        else
-          log "${YELLOW}Nhập MINING_PUBKEY:${RESET}"
-          read -r MINING_PUBKEY
+    # Dừng các tiến trình nockchain
+    echo "Dừng các tiến trình nockchain..."
+    pkill -f nockchain 2>/dev/null || echo "Không có tiến trình nockchain đang chạy"
+
+    # Xóa thư mục worker, trừ thư mục backup
+    for dir in /root/nockchain-worker-*; do
+        if [ -d "$dir" ]; then
+            echo "Xóa thư mục $dir..."
+            rm -rf "$dir"
+            check_error "Xóa thư mục $dir thất bại"
         fi
-      else
-        MINING_PUBKEY="$PUBLIC_KEY"
-      fi
-    else
-      log "${YELLOW}Không tìm thấy khóa công khai trong ví. Nhập MINING_PUBKEY:${RESET}"
-      if [ "$MENU_MODE" = true ]; then
-        read -r MINING_PUBKEY
-      else
-        log "${YELLOW}Cảnh báo: Không thể trích xuất MINING_PUBKEY từ ví. Cấu hình .env để bỏ qua bước này.${RESET}"
-      fi
+    done
+
+    # Xóa cổng P2P trong ufw, giữ cổng 22 và các cổng khác
+    if command -v ufw >/dev/null 2>&1; then
+        echo "Xóa các cổng P2P trong ufw..."
+        for port in $(ufw status | grep -o '303[0-9]\{2\}'); do
+            ufw delete allow $port/udp 2>/dev/null
+            ufw delete allow $port/tcp 2>/dev/null
+            echo "Đã xóa cổng $port (UDP/TCP)"
+        done
+        ufw status | grep -q "22/tcp" || {
+            ufw allow 22/tcp
+            check_error "Mở lại cổng SSH thất bại"
+        }
     fi
-  else
-    log "${YELLOW}Ví không tồn tại hoặc không phải text. Nhập MINING_PUBKEY:${RESET}"
-    if [ "$MENU_MODE" = true ]; then
-      read -r MINING_PUBKEY
-    else
-      log "${YELLOW}Cảnh báo: Không có ví. Cấu hình MINING_PUBKEY trong .env thủ công sau khi cài đặt.${RESET}"
-    fi
-  fi
-  if [ -n "$MINING_PUBKEY" ]; then
-    if grep -q "^MINING_PUBKEY=" "$ENV_FILE"; then
-      sed -i "s|^MINING_PUBKEY=.*|MINING_PUBKEY=$MINING_PUBKEY|" "$ENV_FILE"
-    else
-      echo "MINING_PUBKEY=$MINING_PUBKEY" >> "$ENV_FILE"
-    fi
-    if [ $? -eq 0 ] && grep -q "^MINING_PUBKEY=$MINING_PUBKEY$" "$ENV_FILE"; then
-      log "${GREEN}Đã cấu hình MINING_PUBKEY: $MINING_PUBKEY${RESET}"
-    else
-      log "${RED}Lỗi: Không thể cập nhật .env!${RESET}"
-      [ "$MENU_MODE" = true ] && pause_and_return || exit 1
-    fi
-  else
-    log "${YELLOW}Cảnh báo: Không cấu hình MINING_PUBKEY. Sửa .env thủ công để khai thác!${RESET}"
-  fi
-  [ "$MENU_MODE" = true ] && pause_and_return
+
+    echo "Đã xóa tất cả worker và cấu hình tường lửa (giữ cổng 22, 3005:3006, 30000 và thư mục $BACKUP_DIR)"
+    exit 0
 }
 
-# ========= Chạy node miner =========
-start_miner_node() {
-  show_header
-  if [ ! -d "$NCK_DIR" ] || [ ! -f "$NCK_DIR/target/release/nockchain" ]; then
-    log "${RED}Lỗi: Thư mục $NCK_DIR hoặc nockchain không tồn tại. Chạy tùy chọn 3 và 4 trước!${RESET}"
-    [ "$MENU_MODE" = true ] && pause_and_return || exit 1
-    return
-  fi
-  cd "$NCK_DIR"
-  if [ ! -f ".env" ] || ! grep -q "^MINING_PUBKEY=" .env; then
-    log "${RED}Lỗi: Thiếu .env hoặc MINING_PUBKEY. Chạy tùy chọn 6 trước!${RESET}"
-    [ "$MENU_MODE" = true ] && pause_and_return || exit 1
-    return
-  fi
-  MINING_PUBKEY=$(grep "^MINING_PUBKEY=" .env | cut -d'=' -f2-)
-  if [ -z "$MINING_PUBKEY" ]; then
-    log "${RED}Lỗi: MINING_PUBKEY không được cấu hình trong .env!${RESET}"
-    [ "$MENU_MODE" = true ] && pause_and_return || exit 1
-    return
-  fi
-  log "${BLUE}Kiểm tra .data.nockchain...${RESET}"
-  if [ -f ".data.nockchain" ]; then
-    log "${YELLOW}.data.nockchain tồn tại. Sao lưu và xóa để chạy mainnet...${RESET}"
-    mv .data.nockchain "$BACKUP_DIR/data.nockchain.bak-$(date +%F-%H%M%S)"
-  fi
-  log "${BLUE}Mở cổng 3005, 3006, 30000 (TCP/UDP)...${RESET}"
-  sudo ufw allow 22/tcp && sudo ufw allow 3005:3006/tcp && sudo ufw allow 3005:3006/udp && sudo ufw allow 30000/udp && sudo ufw --force enable
-  if [ $? -ne 0 ]; then
-    log "${YELLOW}Cảnh báo: Không thể mở cổng. Kiểm tra firewall!${RESET}"
-  fi
-  log "${BLUE}Tạo dịch vụ Systemd cho node miner...${RESET}"
-  cat << EOF | sudo tee /etc/systemd/system/nockchaind.service
-[Unit]
-Description=Nockchain Miner Service
-After=network.target
-
-[Service]
-User=root
-WorkingDirectory=$NCK_DIR
-ExecStart=/root/nockchain/target/release/nockchain --mining-pubkey $MINING_PUBKEY --mine --peer /ip4/95.216.102.60/udp/3006/quic-v1 --peer /ip4/65.108.123.225/udp/3006/quic-v1 --peer /ip4/65.109.156.108/udp/3006/quic-v1 --peer /ip4/65.21.67.175/udp/3006/quic-v1 --peer /ip4/65.109.156.172/udp/3006/quic-v1 --peer /ip4/34.174.22.166/udp/3006/quic-v1 --peer /ip4/34.95.155.151/udp/30000/quic-v1 --peer /ip4/34.18.98.38/udp/30000/quic-v1
-Restart=always
-RestartSec=10
-Environment="PATH=/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$NCK_DIR/target/release"
-SyslogIdentifier=nockchaind
-LimitNOFILE=65535
-
-[Install]
-WantedBy=multi-user.target
-EOF
-  sudo chmod 644 /etc/systemd/system/nockchaind.service
-  sudo systemctl daemon-reload
-  sudo systemctl enable nockchaind
-  sudo systemctl start nockchaind
-  if [ $? -eq 0 ]; then
-    log "${GREEN}Node miner đã khởi động qua Systemd.${RESET}"
-    sudo systemctl status nockchaind --no-pager
-  else
-    log "${RED}Lỗi: Không thể khởi động node!${RESET}"
-    [ "$MENU_MODE" = true ] && pause_and_return || exit 1
-  fi
-  log "${YELLOW}Xem log: journalctl -u nockchaind -f${RESET}"
-  [ "$MENU_MODE" = true ] && pause_and_return
-}
-
-# ========= Sao lưu khóa =========
-backup_keys() {
-  show_header
-  if [ ! -d "$NCK_DIR" ] || [ ! -f "$NCK_DIR/target/release/nockchain-wallet" ]; then
-    log "${RED}Lỗi: Thư mục $NCK_DIR hoặc nockchain-wallet không tồn tại. Chạy tùy chọn 3 và 4 trước!${RESET}"
-    pause_and_return
-    return
-  fi
-  cd "$NCK_DIR"
-  log "${BLUE}Sao lưu khóa ví...${RESET}"
-  mkdir -p "$BACKUP_DIR"
-  export PATH="$PATH:$NCK_DIR/target/release"
-  nockchain-wallet export-keys > keys.export 2>&1
-  if [ $? -eq 0 ]; then
-    cp wallet_output.txt keys.export "$BACKUP_DIR/"
-    chmod 600 "$BACKUP_DIR/wallet_output.txt" "$BACKUP_DIR/keys.export"
-    log "${GREEN}Đã sao lưu vào $BACKUP_DIR/wallet_output.txt và $BACKUP_DIR/keys.export.${RESET}"
-  else
-    log "${RED}Lỗi: Không thể xuất khóa. Kiểm tra keys.export!${RESET}"
-  fi
-  log "${YELLOW}Quan trọng: Lưu $BACKUP_DIR/* an toàn!${RESET}"
-  pause_and_return
-}
-
-# ========= Xem log =========
-view_logs() {
-  show_header
-  log "${BLUE}Xem log node miner:${RESET}"
-  journalctl -u nockchaind -f
-  pause_and_return
-}
-
-# ========= Gỡ cài đặt =========
-uninstall_nockchain() {
-  show_header
-  log "${BLUE}Gỡ cài đặt Nockchain...${RESET}"
-  sudo systemctl stop nockchaind 2>/dev/null
-  sudo systemctl disable nockchaind 2>/dev/null
-  sudo rm /etc/systemd/system/nockchaind.service 2>/dev/null
-  sudo systemctl daemon-reload 2>/dev/null
-  sudo systemctl reset-failed 2>/dev/null
-  rm -rf "$NCK_DIR" "$HOME/.nockapp"
-  log "${GREEN}Đã gỡ cài đặt Nockchain. Sao lưu ví vẫn ở $BACKUP_DIR.${RESET}"
-  pause_and_return
-}
-
-# ========= Chờ nhấn phím =========
-pause_and_return() {
-  echo ""
-  read -n1 -r -p "${YELLOW}Nhấn phím bất kỳ để quay lại menu...${RESET}" key
-  main_menu
-}
-
-# ========= Menu chính =========
-main_menu() {
-  show_header
-  echo -e "${BOLD}${BLUE}Chọn thao tác:${RESET}"
-  echo "  1) Cài đặt phụ thuộc"
-  echo "  2) Cài đặt Rust"
-  echo "  3) Thiết lập kho Nockchain"
-  echo "  4) Biên dịch dự án"
-  echo "  5) Tạo hoặc kiểm tra ví"
-  echo "  6) Cấu hình khóa khai thác"
-  echo "  7) Chạy node miner"
-  echo "  8) Sao lưu khóa ví"
-  echo "  9) Xem log node"
-  echo "  10) Gỡ cài đặt Nockchain"
-  echo "  0) Thoát"
-  echo ""
-  read -p "Nhập số: " choice
-  case "$choice" in
-    1) install_dependencies ;;
-    2) install_rust ;;
-    3) setup_repository ;;
-    4) build_project ;;
-    5) generate_wallet ;;
-    6) configure_mining_key ;;
-    7) start_miner_node ;;
-    8) backup_keys ;;
-    9) view_logs ;;
-    10) uninstall_nockchain ;;
-    0) log "${GREEN}Đã thoát.${RESET}"; exit 0 ;;
-    *) log "${RED}Lựa chọn không hợp lệ!${RESET}"; pause_and_return ;;
-  esac
-}
-
-# ========= Chạy tự động tất cả bước =========
-auto_install() {
-  show_header
-  log "${BLUE}Bắt đầu cài đặt tự động Nockchain...${RESET}"
-  install_dependencies
-  install_rust
-  setup_repository
-  build_project
-  generate_wallet
-  configure_mining_key
-  start_miner_node
-  log "${GREEN}Cài đặt tự động hoàn tất!${RESET}"
-}
-
-# ========= Xử lý tham số dòng lệnh =========
-MENU_MODE=false
-while getopts "m" opt; do
-  case $opt in
-    m) MENU_MODE=true ;;
-    *) echo "Usage: $0 [-m]"; exit 1 ;;
-  esac
+# Kiểm tra tùy chọn
+while getopts "c:r" opt; do
+    case $opt in
+        c) NUM_WORKERS="$OPTARG" ;;
+        r) remove_workers ;;
+        *) echo "Tùy chọn không hợp lệ. Dùng: $0 [-c <số_worker>] [-rm]" && exit 1 ;;
+    esac
 done
 
-# ========= Khởi động =========
-if [ "$MENU_MODE" = true ]; then
-  main_menu
-else
-  auto_install
+# Lấy số CPU hoặc số worker từ tùy chọn -c
+NUM_WORKERS=${NUM_WORKERS:-$(nproc)}
+# Đảm bảo tối thiểu 1 worker
+[ "$NUM_WORKERS" -lt 1 ] && NUM_WORKERS=1
+
+# Cài đặt và cấu hình ufw
+echo "Kiểm tra và cấu hình tường lửa (ufw)..."
+if ! command -v ufw >/dev/null 2>&1; then
+    echo "ufw chưa được cài đặt, đang cài..."
+    apt update && apt install -y ufw
+    check_error "Cài đặt ufw thất bại"
 fi
+
+# Kích hoạt ufw nếu chưa bật
+ufw status | grep -q "Status: active" || {
+    echo "Kích hoạt ufw..."
+    ufw --force enable
+    check_error "Kích hoạt ufw thất bại"
+}
+
+# Kiểm tra và mở cổng cần thiết
+echo "Kiểm tra và mở các cổng cần thiết..."
+# Mở cổng 22/tcp nếu chưa có
+ufw status | grep -q "22/tcp.*ALLOW" || {
+    ufw allow 22/tcp
+    check_error "Mở cổng SSH thất bại"
+}
+# Mở cổng 3005:3006/tcp nếu chưa có
+ufw status | grep -q "3005:3006/tcp.*ALLOW" || {
+    ufw allow 3005:3006/tcp
+    check_error "Mở cổng 3005:3006/tcp thất bại"
+}
+# Mở cổng 3005:3006/udp nếu chưa có
+ufw status | grep -q "3005:3006/udp.*ALLOW" || {
+    ufw allow 3005:3006/udp
+    check_error "Mở cổng 3005:3006/udp thất bại"
+}
+# Mở cổng 30000/udp nếu chưa có
+ufw status | grep -q "30000/udp.*ALLOW" || {
+    ufw allow 30000/udp
+    check_error "Mở cổng 30000/udp thất bại"
+}
+# Mở cổng P2P cho các worker
+for ((i=1; i<=NUM_WORKERS; i++)); do
+    PORT=$((30300 + i))
+    ufw status | grep -q "$PORT/udp.*ALLOW" || {
+        ufw allow $PORT/udp
+        check_error "Mở cổng $PORT/udp thất bại"
+    }
+    ufw status | grep -q "$PORT/tcp.*ALLOW" || {
+        ufw allow $PORT/tcp
+        check_error "Mở cổng $PORT/tcp thất bại"
+    }
+done
+echo "Đã mở cổng 22 (SSH), 3005:3006 (TCP/UDP), 30000 (UDP) và cổng P2P (30301-$((30300 + NUM_WORKERS))) cho UDP và TCP"
+
+# Tạo thư mục backup nếu chưa có
+mkdir -p "$BACKUP_DIR"
+check_error "Tạo thư mục backup thất bại"
+
+# Cài đặt môi trường
+echo "Cài đặt môi trường..."
+if ! command -v rustc >/dev/null 2>&1; then
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    check_error "Cài đặt Rust thất bại"
+fi
+source $HOME/.cargo/env
+
+apt update && apt install -y clang llvm-dev libclang-dev
+check_error "Cài đặt phụ thuộc thất bại"
+
+# Tải và build trong nockchain-worker-01
+echo "Tải và build Nockchain..."
+if [ ! -d "/root/nockchain-worker-01" ]; then
+    git clone https://github.com/zorp-corp/nockchain.git /root/nockchain-worker-01
+    check_error "Tải repository thất bại"
+fi
+cd /root/nockchain-worker-01
+
+# Tạo .env trước khi chạy make
+cp .env_example .env
+check_error "Tạo .env cho nockchain-worker-01 thất bại"
+
+# Build chỉ khi chưa có nockchain
+if ! command -v nockchain >/dev/null 2>&1; then
+    make install-hoonc
+    check_error "Cài hoonc thất bại"
+    make build
+    check_error "Build Nockchain thất bại"
+    make install-nockchain-wallet
+    check_error "Cài ví thất bại"
+    make install-nockchain
+    check_error "Cài Nockchain thất bại"
+fi
+export PATH="$HOME/.cargo/bin:$PATH"
+
+# Kiểm tra và nhập ví
+echo "Kiểm tra ví backup..."
+if [ -f "$KEYS_FILE" ]; then
+    echo "Tìm thấy ví backup, đang nhập..."
+    nockchain-wallet import-keys --input "$KEYS_FILE"
+    check_error "Nhập ví thất bại"
+    if [ -f "$WALLET_OUTPUT" ]; then
+        PUBKEY=$(awk '/New Public Key/{getline; print $1}' "$WALLET_OUTPUT" | tr -d '"' | tr -d '\0')
+        if [ -z "$PUBKEY" ]; then
+            echo "Lỗi: Không tìm thấy khóa công khai trong $WALLET_OUTPUT"
+            cat "$WALLET_OUTPUT"
+            exit 1
+        fi
+    else
+        echo "Lỗi: Tệp $WALLET_OUTPUT không tồn tại"
+        exit 1
+    fi
+else
+    echo "Không tìm thấy ví backup, tạo ví mới..."
+    KEYGEN_OUTPUT=$(nockchain-wallet keygen 2>&1)
+    check_error "Tạo ví thất bại"
+    echo "$KEYGEN_OUTPUT" > "$WALLET_OUTPUT"
+    nockchain-wallet export-keys
+    check_error "Backup ví thất bại"
+    mv keys.export "$KEYS_FILE"
+    PUBKEY=$(echo "$KEYGEN_OUTPUT" | awk '/New Public Key/{getline; print $1}' | tr -d '"' | tr -d '\0')
+    if [ -z "$PUBKEY" ]; then
+        echo "Lỗi: Không tìm thấy khóa công khai trong đầu ra của keygen"
+        cat "$WALLET_OUTPUT"
+        exit 1
+    fi
+fi
+
+# Cập nhật .env với MINING_PUBKEY
+echo "MINING_PUBKEY=$PUBKEY" >> .env
+check_error "Cập nhật MINING_PUBKEY cho nockchain-worker-01 thất bại"
+
+# Tạo và cấu hình worker
+echo "Cấu hình $NUM_WORKERS worker..."
+cd /root
+for ((i=1; i<=NUM_WORKERS; i++)); do
+    WORKER_DIR="/root/nockchain-worker-$(printf "%02d" $i)"
+    if [ "$i" -ne 1 ]; then
+        cp -r /root/nockchain-worker-01/scripts "$WORKER_DIR"
+        check_error "Sao chép scripts cho $WORKER_DIR thất bại"
+    fi
+    mkdir -p "$WORKER_DIR"
+    cat > "$WORKER_DIR/.env" << EOF
+MINING_PUBKEY=$PUBKEY
+PEER_PORT=$((30300 + i))
+PEER_NODES=$PEER_NODES
+RUST_LOG=info
+EOF
+    check_error "Tạo .env cho $WORKER_DIR thất bại"
+    # Xóa .data.nockchain nếu tồn tại
+    rm -f "$WORKER_DIR/.data.nockchain"
+    check_error "Xóa .data.nockchain cho $WORKER_DIR thất bại"
+done
+
+# Chạy worker ngầm với nohup
+echo "Khởi động $NUM_WORKERS worker..."
+for ((i=1; i<=NUM_WORKERS; i++)); do
+    WORKER_DIR="/root/nockchain-worker-$(printf "%02d" $i)"
+    cd "$WORKER_DIR"
+    # Kiểm tra MINING_PUBKEY
+    if ! grep -q "MINING_PUBKEY" .env; then
+        echo "Lỗi: MINING_PUBKEY không được thiết lập trong $WORKER_DIR/.env"
+        cat .env
+        exit 1
+    fi
+    nohup bash "$WORKER_DIR/scripts/run_nockchain_miner.sh" > "$WORKER_DIR/worker-$(printf "%02d" $i).log" 2>&1 &
+    check_error "Khởi động $WORKER_DIR thất bại"
+    echo "$WORKER_DIR đang chạy ngầm, log tại $WORKER_DIR/worker-$(printf "%02d" $i).log"
+    cd /root
+done
+
+echo "Hoàn tất! Kiểm tra log tại /root/nockchain-worker-XX/worker-XX.log"
+echo "Dùng 'tail -f /root/nockchain-worker-XX/worker-XX.log' để xem log"
+echo "Dùng 'ps aux | grep nockchain' để kiểm tra tiến trình"
+echo "Dùng '$0 -rm' để xóa tất cả worker (giữ thư mục $BACKUP_DIR)"
+echo "Tường lửa đã được cấu hình với cổng 22 (SSH), 3005:3006 (TCP/UDP), 30000 (UDP) và 30301-$((30300 + NUM_WORKERS)) (UDP/TCP)"
+echo "Nếu dùng NAT, cấu hình chuyển tiếp cổng 30301-$((30300 + NUM_WORKERS)) trên router"
