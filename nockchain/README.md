@@ -1,46 +1,84 @@
-# Nockchain Installation Script
+# Hướng Dẫn Cài Đặt Nockchain
 
-Tập lệnh Bash tự động cài đặt node Nockchain miner trên Ubuntu, sử dụng Systemd để chạy liên tục.
+Script này tự động hóa việc cài đặt, chạy và xóa các node worker Nockchain trên Ubuntu. Cấu hình tường lửa, biên dịch Nockchain, quản lý ví khóa và chạy worker ở chế độ nền.
 
-## Yêu cầu
-- **Hệ điều hành**: Ubuntu
-- **Phần cứng**: 16GB RAM, 8 lõi CPU, 50-200GB SSD
-- **Mạng**: Cổng 3005, 3006 (TCP/UDP) mở
-- **Quyền**: Root hoặc `sudo`
+## Yêu Cầu
 
-## Cài đặt
-Chạy lệnh sau để tải và cài đặt:
-```bash
-curl -O https://raw.githubusercontent.com/laodauhgc/bash-scripts/main/nockchain/install_nockchain.sh && chmod +x install_nockchain.sh && ./install_nockchain.sh
-```
+- Hệ điều hành Ubuntu
+- CPU: 8 lõi trở lên
+- RAM: 16GB trở lên
+- Quyền root
+- Kết nối internet
 
-### Tùy chọn
-- `-m`: Chạy ở chế độ menu để chọn từng bước.
-- Ví dụ: `./install_nockchain.sh -m`
+## Cài Đặt
 
-## Kiểm tra
-- **Trạng thái dịch vụ**:
+1. **Tải Script**
+
+   Tải và cấp quyền thực thi script:
+   ```bash
+   curl -O https://raw.githubusercontent.com/laodauhgc/bash-scripts/main/nockchain/install_nockchain.sh && chmod +x install_nockchain.sh
+   ```
+
+## Sử Dụng
+
+### Chạy Worker
+
+- **Mặc định (số worker = số lõi CPU)**:
   ```bash
-  sudo systemctl status nockchaind
+  sudo ./install_nockchain.sh
   ```
-- **Log**:
-  ```bash
-  journalctl -u nockchaind -f
-  ```
-- **Ví**:
-  ```bash
-  cat ~/nockchain/wallet_output.txt
-  ```
-- **Sao lưu**:
-  ```bash
-  ls -l ~/nockchain_backup
-  ```
-  - Lưu `~/nockchain_backup/wallet_output.txt` và `keys.export` an toàn.
 
-## Lưu ý
-- **Cổng**: Đảm bảo cổng 3005, 3006 (TCP/UDP) mở:
+- **Chỉ định số worker** (ví dụ: 8):
   ```bash
-  sudo ufw status
+  sudo ./install_nockchain.sh -c 8
   ```
-- **Hỗ trợ**: [Telegram](https://t.me/nockchainproject), [GitHub](https://github.com/zorp-corp/nockchain)
-- **Sao lưu ví**: Giữ `~/nockchain_backup/*` an toàn, chứa khóa riêng.
+  Hoặc trực tiếp:
+   ```bash
+   curl -O https://raw.githubusercontent.com/laodauhgc/bash-scripts/main/nockchain/install_nockchain.sh && chmod +x install_nockchain.sh -c 8
+   ```
+
+  Lệnh này tạo 8 worker (`nockchain-worker-01` đến `nockchain-worker-08`), mở cổng tường lửa (`22/tcp`, `3005:3006/tcp`, `3005:3006/udp`, `30000/udp`, `30301-30308/tcp+udp`), và chạy worker ở chế độ nền.
+  Nếu bạn sử dụng các dịch vụ Cloud, thuê VPS chỉ nên chạy 75-80% số CPU.
+
+### Xóa Worker
+
+- **Xóa tất cả worker** (giữ `/root/nockchain_backup`):
+  ```bash
+  sudo ./install_nockchain.sh -rm
+  ```
+
+  Lệnh này dừng tiến trình Nockchain, xóa thư mục worker và xóa cổng P2P (`30301-30308`) khỏi tường lửa.
+
+## Giám Sát
+
+- **Kiểm tra log**:
+  ```bash
+  tail -f /root/nockchain-worker-01/worker-01.log
+  ```
+  Tìm dòng `[%mining-on ...]` hoặc `block ... added to validated blocks at <height>`.
+
+- **Kiểm tra tiến trình**:
+  ```bash
+  ps aux | grep nockchain
+  ```
+
+- **Kiểm tra tường lửa**:
+  ```bash
+  ufw status
+  ```
+
+## Quản Lý Ví
+
+- Khóa ví được lưu tại `/root/nockchain_backup` (`keys.export`, `wallet_output.txt`).
+- Nếu `keys.export` tồn tại, script sẽ nhập ví; nếu không, tạo ví mới.
+- Xem khóa công khai:
+  ```bash
+  cat /root/nockchain_backup/wallet_output.txt
+  ```
+
+## Lưu Ý
+
+- **Thời gian biên dịch**: Lần đầu cài đặt có thể mất hơn 30 phút để biên dịch Nockchain.
+- **NAT**: Cần cấu hình chuyển tiếp cổng `30301-<số_worker>` nếu dùng NAT.
+- **Quyền root**: Chạy với `sudo` để cài đặt và quản lý tường lửa.
+- **Thông tin thêm**: Xem [Nockchain GitHub](https://github.com/zorp-corp/nockchain).
