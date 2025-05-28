@@ -83,7 +83,7 @@ while getopts "c:rn" opt; do
         c) NUM_WORKERS="$OPTARG" ;;
         r) remove_workers ;;
         n) NO_BUILD=1 ;;
-        *) echo "Tùy chọn không hợp lệ. Dùng: $0 [-c <số_worker>] [-rm] [--no-build]" && exit 1 ;;
+        *) echo "Tùy chọn không hợp lệ. Dùng: $0 [-c <số_worker>] [-r] [-n]" && exit 1 ;;
     esac
 done
 
@@ -166,7 +166,7 @@ if [ ! -d "/root/nockchain-worker-01" ]; then
 fi
 cd /root/nockchain-worker-01
 
-# Kiểm tra tùy chọn --no-build
+# Kiểm tra tùy chọn -n
 if [ "$NO_BUILD" -eq 1 ]; then
     if check_worker_dir; then
         echo "Thư mục /root/nockchain-worker-01 hợp lệ, bỏ qua bước build."
@@ -186,7 +186,7 @@ fi
 cp .env_example .env
 check_error "Tạo .env cho nockchain-worker-01 thất bại"
 
-# Build Nockchain nếu không dùng --no-build hoặc thư mục không hợp lệ
+# Build Nockchain nếu không dùng -n hoặc thư mục không hợp lệ
 if [ "$NO_BUILD" -eq 0 ] || ! command -v nockchain >/dev/null 2>&1; then
     make install-hoonc 2>&1 | tee -a /tmp/nockchain_build.log
     check_error "Cài hoonc thất bại. Xem log tại /tmp/nockchain_build.log"
