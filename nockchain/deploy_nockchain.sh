@@ -1,4 +1,3 @@
-```bash
 #!/bin/bash
 
 # Configuration
@@ -171,4 +170,3 @@ deploy_workers "$NUM_WORKERS" "$MINING_KEY"
 echo "Hoàn tất! Kiểm tra log container bằng: docker logs nockchain-worker-XX"
 echo "Dùng 'docker ps' để xem container đang chạy"
 echo "Dùng '$0 -r' để dừng và xóa tất cả container worker"
-```
