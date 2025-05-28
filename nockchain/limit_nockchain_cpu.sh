@@ -11,28 +11,41 @@ if [ "$1" = "reset" ]; then
     CGROUP_PATH="/sys/fs/cgroup/nockchain_limited"
     if [ -d "$CGROUP_PATH" ]; then
         echo "Xóa cgroup nockchain_limited để khôi phục hiệu suất CPU 100%..."
-        # Di chuyển tất cả tiến trình ra khỏi cgroup
+        # Kiểm tra tiến trình trong cgroup
         if [ -s "$CGROUP_PATH/cgroup.procs" ]; then
+            echo "Đang di chuyển các tiến trình ra khỏi cgroup..."
+            # Lặp qua từng PID và kiểm tra trạng thái
             while read -r PID; do
                 if [ -n "$PID" ]; then
-                    # Kiểm tra xem PID còn tồn tại không
+                    # Kiểm tra xem PID có tồn tại không
                     if [ -d "/proc/$PID" ]; then
+                        echo "Di chuyển PID $PID ra khỏi cgroup..."
                         echo "$PID" > /sys/fs/cgroup/cgroup.procs 2>/dev/null || {
-                            echo "Cảnh báo: Không thể di chuyển PID $PID ra khỏi cgroup."
+                            echo "Cảnh báo: Không thể di chuyển PID $PID."
                         }
+                    else
+                        echo "PID $PID không còn tồn tại, bỏ qua..."
                     fi
                 fi
             done < "$CGROUP_PATH/cgroup.procs"
+            # Đợi một chút để hệ thống cập nhật
+            sleep 2
+            # Kiểm tra lại xem còn tiến trình nào không
+            if [ -s "$CGROUP_PATH/cgroup.procs" ]; then
+                echo "Vẫn còn tiến trình trong cgroup, thử buộc di chuyển..."
+                # Buộc di chuyển tất cả tiến trình
+                echo 0 > "$CGROUP_PATH/cgroup.procs" 2>/dev/null || {
+                    echo "Lỗi: Không thể buộc di chuyển các tiến trình."
+                    exit 1
+                }
+                sleep 1
+            fi
         fi
-        # Đợi một chút để đảm bảo tiến trình được di chuyển
-        sleep 1
-        # Kiểm tra lại xem cgroup có trống không
+        # Kiểm tra lại và xóa cgroup
         if [ -s "$CGROUP_PATH/cgroup.procs" ]; then
-            echo "Lỗi: Vẫn còn tiến trình trong cgroup. Thử buộc di chuyển..."
-            # Buộc di chuyển bằng cách ghi 0
-            echo 0 > "$CGROUP_PATH/cgroup.procs" 2>/dev/null
+            echo "Lỗi: Vẫn còn tiến trình trong cgroup sau khi thử di chuyển."
+            exit 1
         fi
-        # Xóa cgroup
         rmdir "$CGROUP_PATH" 2>/dev/null || {
             echo "Lỗi: Không thể xóa cgroup. Kiểm tra trạng thái bằng: cat $CGROUP_PATH/cgroup.procs"
             exit 1
@@ -77,9 +90,10 @@ if [ -d "$CGROUP_PATH" ]; then
                 echo "$PID" > /sys/fs/cgroup/cgroup.procs 2>/dev/null
             fi
         done < "$CGROUP_PATH/cgroup.procs"
-        sleep 1
+        sleep 2
         if [ -s "$CGROUP_PATH/cgroup.procs" ]; then
             echo 0 > "$CGROUP_PATH/cgroup.procs" 2>/dev/null
+            sleep 1
         fi
     fi
     rmdir "$CGROUP_PATH" 2>/dev/null
