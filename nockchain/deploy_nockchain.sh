@@ -1,3 +1,4 @@
+```bash
 #!/bin/bash
 
 # Configuration
@@ -12,6 +13,68 @@ check_error() {
         echo "Lỗi: $1"
         exit 1
     fi
+}
+
+# Hàm cài đặt Docker
+install_docker() {
+    if ! command -v docker >/dev/null 2>&1; then
+        echo "Docker chưa được cài đặt, đang cài..."
+        wget -O /docker.sh https://get.docker.com
+        check_error "Tải script cài đặt Docker thất bại"
+        chmod +x /docker.sh
+        /docker.sh
+        check_error "Cài đặt Docker thất bại"
+        # Thêm người dùng vào nhóm docker
+        usermod -aG docker $USER
+        # Khởi động và bật Docker
+        systemctl start docker
+        check_error "Khởi động Docker thất bại"
+        systemctl enable docker
+        check_error "Bật Docker thất bại"
+        echo "Docker đã được cài đặt và khởi động"
+    else
+        echo "Docker đã được cài đặt"
+    fi
+}
+
+# Hàm cài đặt và cấu hình ufw
+configure_ufw() {
+    local num_workers=$1
+
+    echo "Cài đặt và cấu hình tường lửa (ufw)..."
+    if ! command -v ufw >/dev/null 2>&1; then
+        echo "ufw chưa được cài đặt, đang cài..."
+        apt-get update && apt-get install -y ufw
+        check_error "Cài đặt ufw thất bại"
+    fi
+
+    # Bật ufw nếu chưa bật
+    ufw status | grep -q "Status: active" || {
+        echo "Kích hoạt ufw..."
+        ufw --force enable
+        check_error "Kích hoạt ufw thất bại"
+    }
+
+    # Mở các cổng cần thiết
+    echo "Mở các cổng cần thiết..."
+    ufw allow 22/tcp >/dev/null 2>&1
+    check_error "Mở cổng SSH thất bại"
+    ufw allow 3005:3006/tcp >/dev/null 2>&1
+    check_error "Mở cổng 3005:3006/tcp thất bại"
+    ufw allow 3005:3006/udp >/dev/null 2>&1
+    check_error "Mở cổng 3005:3006/udp thất bại"
+    ufw allow 30000/udp >/dev/null 2>&1
+    check_error "Mở cổng 30000/udp thất bại"
+    
+    # Mở cổng P2P cho các worker
+    for ((i=1; i<=num_workers; i++)); do
+        PORT=$((30300 + i))
+        ufw allow $PORT/tcp >/dev/null 2>&1
+        check_error "Mở cổng $PORT/tcp thất bại"
+        ufw allow $PORT/udp >/dev/null 2>&1
+        check_error "Mở cổng $PORT/udp thất bại"
+    done
+    echo "Đã mở cổng 22 (SSH), 3005:3006 (TCP/UDP), 30000 (UDP) và cổng P2P (30301-$((30300 + num_workers)))"
 }
 
 # Hàm dừng và xóa container
@@ -38,6 +101,9 @@ deploy_workers() {
         echo "Lỗi: Tham số -k <mining_key> là bắt buộc"
         exit 1
     fi
+
+    # Cấu hình ufw
+    configure_ufw "$num_workers"
 
     echo "Triển khai $num_workers container worker..."
     for ((i=1; i<=num_workers; i++)); do
@@ -86,11 +152,8 @@ while getopts "c:k:r" opt; do
     esac
 done
 
-# Kiểm tra Docker
-if ! command -v docker >/dev/null 2>&1; then
-    echo "Lỗi: Docker chưa được cài đặt. Vui lòng cài Docker trước."
-    exit 1
-fi
+# Cài đặt Docker nếu chưa có
+install_docker
 
 # Xóa worker nếu yêu cầu
 if [ "$REMOVE_WORKERS" -eq 1 ]; then
@@ -108,3 +171,4 @@ deploy_workers "$NUM_WORKERS" "$MINING_KEY"
 echo "Hoàn tất! Kiểm tra log container bằng: docker logs nockchain-worker-XX"
 echo "Dùng 'docker ps' để xem container đang chạy"
 echo "Dùng '$0 -r' để dừng và xóa tất cả container worker"
+```
