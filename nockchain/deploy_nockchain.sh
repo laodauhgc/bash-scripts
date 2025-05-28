@@ -2,9 +2,23 @@
 
 # Configuration
 IMAGE_NAME="laodauhgc/nockchain"
-IMAGE_TAG="latest"
 NOCKCHAIN_DIR="/root/nockchain"
 PEER_NODES="/ip4/95.216.102.60/udp/3006/quic-v1,/ip4/65.108.123.225/udp/3006/quic-v1,/ip4/65.109.156.108/udp/3006/quic-v1,/ip4/65.21.67.175/udp/3006/quic-v1,/ip4/65.109.156.172/udp/3006/quic-v1,/ip4/34.174.22.166/udp/3006/quic-v1,/ip4/34.95.155.151/udp/30000/quic-v1,/ip4/34.18.98.38/udp/30000/quic-v1"
+
+# Nhận diện kiến trúc CPU
+ARCH=$(uname -m)
+case $ARCH in
+    aarch64)
+        IMAGE_TAG="arm64"
+        ;;
+    x86_64)
+        IMAGE_TAG="latest"  # Hoặc "amd64" nếu bạn push image riêng cho AMD64
+        ;;
+    *)
+        echo "Lỗi: Kiến trúc CPU $ARCH không được hỗ trợ. Chỉ hỗ trợ ARM64 (aarch64) và AMD64 (x86_64)."
+        exit 1
+        ;;
+esac
 
 # Hàm kiểm tra lỗi
 check_error() {
@@ -104,7 +118,7 @@ deploy_workers() {
     # Cấu hình ufw
     configure_ufw "$num_workers"
 
-    echo "Triển khai $num_workers container worker..."
+    echo "Triển khai $num_workers container worker (kiến trúc: $ARCH, image: $IMAGE_NAME:$IMAGE_TAG)..."
     for ((i=1; i<=num_workers; i++)); do
         WORKER_DIR="$NOCKCHAIN_DIR/worker-$(printf "%02d" $i)"
         WORKER_NAME="nockchain-worker-$(printf "%02d" $i)"
