@@ -143,24 +143,11 @@ cd /root/nockchain-worker-01
 cp .env_example .env
 check_error "Tạo .env cho nockchain-worker-01 thất bại"
 
-# Build chỉ khi chưa có nockchain
-if ! command -v nockchain >/dev/null 2>&1; then
-    make install-hoonc
-    check_error "Cài hoonc thất bại"
-    make build
-    check_error "Build Nockchain thất bại"
-    make install-nockchain-wallet
-    check_error "Cài ví thất bại"
-    make install-nockchain
-    check_error "Cài Nockchain thất bại"
-fi
-export PATH="$HOME/.cargo/bin:$PATH"
-
-# Kiểm tra và nhập ví
+# Kiểm tra ví trước khi build
 echo "Kiểm tra ví backup..."
 if [ -f "$KEYS_FILE" ]; then
     echo "Tìm thấy ví backup, đang nhập..."
-    nockchain-wallet import-keys --input "$KEYS_FILE"
+    nockchain-wallet import-keys --input "$KEYS_FILE" 2>&1 | tee -a /tmp/nockchain_wallet.log
     check_error "Nhập ví thất bại"
     if [ -f "$WALLET_OUTPUT" ]; then
         PUBKEY=$(awk '/New Public Key/{getline; print $1}' "$WALLET_OUTPUT" | tr -d '"' | tr -d '\0')
@@ -175,13 +162,13 @@ if [ -f "$KEYS_FILE" ]; then
     fi
 else
     echo "Không tìm thấy ví backup, tạo ví mới..."
-    KEYGEN_OUTPUT=$(nockchain-wallet keygen 2>&1)
-    check_error "Tạo ví thất bại"
+    KEYGEN_OUTPUT=$(nockchain-wallet keygen 2>&1 | tr -d '\0')
+    check_error "Tạo ví thất bại. Xem log tại /tmp/nockchain_wallet.log"
     echo "$KEYGEN_OUTPUT" > "$WALLET_OUTPUT"
-    nockchain-wallet export-keys
+    nockchain-wallet export-keys 2>&1 | tee -a /tmp/nockchain_wallet.log
     check_error "Backup ví thất bại"
     mv keys.export "$KEYS_FILE"
-    PUBKEY=$(echo "$KEYGEN_OUTPUT" | awk '/New Public Key/{getline; print $1}' | tr -d '"' | tr -d '\0')
+    PUBKEY=$(echo "$KEYGEN_OUTPUT" | awk '/New Public Key/{getline; print $1}' | tr -d '"')
     if [ -z "$PUBKEY" ]; then
         echo "Lỗi: Không tìm thấy khóa công khai trong đầu ra của keygen"
         cat "$WALLET_OUTPUT"
@@ -189,9 +176,28 @@ else
     fi
 fi
 
+# Kiểm tra tính hợp lệ của PUBKEY
+if ! echo "$PUBKEY" | grep -qE '^[0-9a-zA-Z]{100,}$'; then
+    echo "Lỗi: Khóa công khai không hợp lệ: $PUBKEY"
+    exit 1
+fi
+
 # Cập nhật .env với MINING_PUBKEY
 echo "MINING_PUBKEY=$PUBKEY" >> .env
 check_error "Cập nhật MINING_PUBKEY cho nockchain-worker-01 thất bại"
+
+# Build chỉ khi chưa có nockchain
+if ! command -v nockchain >/dev/null 2>&1; then
+    make install-hoonc 2>&1 | tee -a /tmp/nockchain_build.log
+    check_error "Cài hoonc thất bại. Xem log tại /tmp/nockchain_build.log"
+    make build 2>&1 | tee -a /tmp/nockchain_build.log
+    check_error "Build Nockchain thất bại. Xem log tại /tmp/nockchain_build.log"
+    make install-nockchain-wallet 2>&1 | tee -a /tmp/nockchain_build.log
+    check_error "Cài ví thất bại. Xem log tại /tmp/nockchain_build.log"
+    make install-nockchain 2>&1 | tee -a /tmp/nockchain_build.log
+    check_error "Cài Nockchain thất bại. Xem log tại /tmp/nockchain_build.log"
+fi
+export PATH="$HOME/.cargo/bin:$PATH"
 
 # Tạo và cấu hình worker
 echo "Cấu hình $NUM_WORKERS worker..."
@@ -228,6 +234,13 @@ for ((i=1; i<=NUM_WORKERS; i++)); do
     fi
     nohup bash "$WORKER_DIR/scripts/run_nockchain_miner.sh" > "$WORKER_DIR/worker-$(printf "%02d" $i).log" 2>&1 &
     check_error "Khởi động $WORKER_DIR thất bại"
+    sleep 1  # Đợi log được ghi
+    # Kiểm tra log worker
+    if grep -qi "error" "$WORKER_DIR/worker-$(printf "%02d" $i).log"; then
+        echo "Lỗi: Worker $WORKER_DIR gặp vấn đề. Xem log:"
+        cat "$WORKER_DIR/worker-$(printf "%02d" $i).log"
+        exit 1
+    fi
     echo "$WORKER_DIR đang chạy ngầm, log tại $WORKER_DIR/worker-$(printf "%02d" $i).log"
     cd /root
 done
