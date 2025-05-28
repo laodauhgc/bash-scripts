@@ -5,6 +5,9 @@ BACKUP_DIR="/root/nockchain_backup"
 KEYS_FILE="$BACKUP_DIR/keys.export"
 WALLET_OUTPUT="$BACKUP_DIR/wallet_output.txt"
 
+# Đường dẫn thư mục gốc
+NOCKCHAIN_DIR="/root/nockchain"
+
 # Danh sách peer
 PEER_NODES="/ip4/95.216.102.60/udp/3006/quic-v1,/ip4/65.108.123.225/udp/3006/quic-v1,/ip4/65.109.156.108/udp/3006/quic-v1,/ip4/65.21.67.175/udp/3006/quic-v1,/ip4/65.109.156.172/udp/3006/quic-v1,/ip4/34.174.22.166/udp/3006/quic-v1,/ip4/34.95.155.151/udp/30000/quic-v1,/ip4/34.18.98.38/udp/30000/quic-v1"
 
@@ -24,8 +27,8 @@ remove_workers() {
     echo "Dừng các tiến trình nockchain..."
     pkill -f nockchain 2>/dev/null || echo "Không có tiến trình nockchain đang chạy"
 
-    # Xóa thư mục worker, trừ thư mục backup
-    for dir in /root/nockchain-worker-*; do
+    # Xóa thư mục worker
+    for dir in "$NOCKCHAIN_DIR"/worker-*; do
         if [ -d "$dir" ]; then
             echo "Xóa thư mục $dir..."
             rm -rf "$dir"
@@ -51,9 +54,9 @@ remove_workers() {
     exit 0
 }
 
-# Hàm kiểm tra thư mục nockchain-worker-01
+# Hàm kiểm tra thư mục nockchain
 check_worker_dir() {
-    local dir="/root/nockchain-worker-01"
+    local dir="$NOCKCHAIN_DIR"
     local required_files=("Cargo.lock" "Cargo.toml" "LICENSE" "Makefile" "README.md" "rust-toolchain.toml")
     local required_dirs=("assets" "crates" "hoon" "scripts" "target")
 
@@ -158,20 +161,20 @@ source $HOME/.cargo/env
 apt update && apt install -y clang llvm-dev libclang-dev
 check_error "Cài đặt phụ thuộc thất bại"
 
-# Tải và build trong nockchain-worker-01
+# Tải và build trong nockchain
 echo "Tải và build Nockchain..."
-if [ ! -d "/root/nockchain-worker-01" ]; then
-    git clone https://github.com/zorp-corp/nockchain.git /root/nockchain-worker-01
+if [ ! -d "$NOCKCHAIN_DIR" ]; then
+    git clone https://github.com/zorp-corp/nockchain.git "$NOCKCHAIN_DIR"
     check_error "Tải repository thất bại"
 fi
-cd /root/nockchain-worker-01
+cd "$NOCKCHAIN_DIR"
 
 # Kiểm tra tùy chọn -n
 if [ "$NO_BUILD" -eq 1 ]; then
     if check_worker_dir; then
-        echo "Thư mục /root/nockchain-worker-01 hợp lệ, bỏ qua bước build."
+        echo "Thư mục $NOCKCHAIN_DIR hợp lệ, bỏ qua bước build."
     else
-        echo "Thư mục /root/nockchain-worker-01 không hợp lệ hoặc thiếu tệp/thư mục cần thiết."
+        echo "Thư mục $NOCKCHAIN_DIR không hợp lệ hoặc thiếu tệp/thư mục cần thiết."
         read -p "Bạn có muốn bắt đầu quá trình build Nockchain không? (y/N): " response
         if [[ "$response" =~ ^[yY]$ ]]; then
             NO_BUILD=0
@@ -184,7 +187,7 @@ fi
 
 # Tạo .env trước khi chạy make
 cp .env_example .env
-check_error "Tạo .env cho nockchain-worker-01 thất bại"
+check_error "Tạo .env cho nockchain thất bại"
 
 # Build Nockchain nếu không dùng -n hoặc thư mục không hợp lệ
 if [ "$NO_BUILD" -eq 0 ] || ! command -v nockchain >/dev/null 2>&1; then
@@ -247,20 +250,17 @@ fi
 
 # Cập nhật .env với MINING_PUBKEY
 echo "MINING_PUBKEY=$PUBKEY" >> .env
-check_error "Cập nhật MINING_PUBKEY cho nockchain-worker-01 thất bại"
+check_error "Cập nhật MINING_PUBKEY cho nockchain thất bại"
 
 # Tạo và cấu hình worker
 echo "Cấu hình $NUM_WORKERS worker..."
-cd /root
+cd "$NOCKCHAIN_DIR"
 for ((i=1; i<=NUM_WORKERS; i++)); do
-    WORKER_DIR="/root/nockchain-worker-$(printf "%02d" $i)"
-    if [ "$i" -ne 1 ]; then
-        # Xóa thư mục worker cũ nếu tồn tại
+    WORKER_DIR="$NOCKCHAIN_DIR/worker-$(printf "%02d" $i)"
+    # Xóa thư mục worker cũ nếu tồn tại
+    if [ -d "$WORKER_DIR" ]; then
         rm -rf "$WORKER_DIR"
         check_error "Xóa thư mục worker cũ $WORKER_DIR thất bại"
-        # Sao chép toàn bộ nội dung từ nockchain-worker-01
-        rsync -a --exclude 'worker-*.log' /root/nockchain-worker-01/ "$WORKER_DIR/"
-        check_error "Sao chép thư mục cho $WORKER_DIR thất bại"
     fi
     mkdir -p "$WORKER_DIR"
     cat > "$WORKER_DIR/.env" << EOF
@@ -279,7 +279,7 @@ done
 # Chạy worker ngầm với nohup
 echo "Khởi động $NUM_WORKERS worker..."
 for ((i=1; i<=NUM_WORKERS; i++)); do
-    WORKER_DIR="/root/nockchain-worker-$(printf "%02d" $i)"
+    WORKER_DIR="$NOCKCHAIN_DIR/worker-$(printf "%02d" $i)"
     cd "$WORKER_DIR"
     # Kiểm tra MINING_PUBKEY
     if ! grep -q "MINING_PUBKEY" .env; then
@@ -287,7 +287,8 @@ for ((i=1; i<=NUM_WORKERS; i++)); do
         cat .env
         exit 1
     fi
-    nohup bash "$WORKER_DIR/scripts/run_nockchain_miner.sh" > "$WORKER_DIR/worker-$(printf "%02d" $i).log" 2>&1 &
+    # Chạy script từ thư mục scripts của nockchain
+    nohup bash "$NOCKCHAIN_DIR/scripts/run_nockchain_miner.sh" > "$WORKER_DIR/worker-$(printf "%02d" $i).log" 2>&1 &
     check_error "Khởi động $WORKER_DIR thất bại"
     sleep 1  # Đợi log được ghi
     # Kiểm tra log worker
@@ -300,8 +301,8 @@ for ((i=1; i<=NUM_WORKERS; i++)); do
     cd /root
 done
 
-echo "Hoàn tất! Kiểm tra log tại /root/nockchain-worker-XX/worker-XX.log"
-echo "Dùng 'tail -f /root/nockchain-worker-XX/worker-XX.log' để xem log"
+echo "Hoàn tất! Kiểm tra log tại $NOCKCHAIN_DIR/worker-XX/worker-XX.log"
+echo "Dùng 'tail -f $NOCKCHAIN_DIR/worker-XX/worker-XX.log' để xem log"
 echo "Dùng 'ps aux | grep nockchain' để kiểm tra tiến trình"
 echo "Dùng '$0 -rm' để xóa tất cả worker (giữ thư mục $BACKUP_DIR)"
 echo "Tường lửa đã được cấu hình với cổng 22 (SSH), 3005:3006 (TCP/UDP), 30000 (UDP) và 30301-$((30300 + NUM_WORKERS)) (UDP/TCP)"
