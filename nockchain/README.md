@@ -16,7 +16,7 @@ Script này tự động hóa việc cài đặt, chạy và xóa các node work
 
    Tải và cấp quyền thực thi script:
    ```bash
-   curl -O https://raw.githubusercontent.com/laodauhgc/bash-scripts/main/nockchain/install_nockchain.sh && chmod +x install_nockchain.sh
+   curl -O https://raw.githubusercontent.com/laodauhgc/bash-scripts/main/nockchain/install_nockchain.sh && chmod u+x install_nockchain.sh && ./install_nockchain.sh
    ```
 
 ## Sử Dụng
@@ -34,7 +34,7 @@ Script này tự động hóa việc cài đặt, chạy và xóa các node work
   ```
   Hoặc trực tiếp:
    ```bash
-   curl -O https://raw.githubusercontent.com/laodauhgc/bash-scripts/main/nockchain/install_nockchain.sh && chmod +x install_nockchain.sh -c 8
+   curl -O https://raw.githubusercontent.com/laodauhgc/bash-scripts/main/nockchain/install_nockchain.sh && chmod u+x install_nockchain.sh && ./install_nockchain.sh -c 8
    ```
 
   Lệnh này tạo 8 worker (`nockchain-worker-01` đến `nockchain-worker-08`), mở cổng tường lửa (`22/tcp`, `3005:3006/tcp`, `3005:3006/udp`, `30000/udp`, `30301-30308/tcp+udp`), và chạy worker ở chế độ nền.
