@@ -255,10 +255,12 @@ cd /root
 for ((i=1; i<=NUM_WORKERS; i++)); do
     WORKER_DIR="/root/nockchain-worker-$(printf "%02d" $i)"
     if [ "$i" -ne 1 ]; then
-        cp -r /root/nockchain-worker-01 "$WORKER_DIR"
+        # Xóa thư mục worker cũ nếu tồn tại
+        rm -rf "$WORKER_DIR"
+        check_error "Xóa thư mục worker cũ $WORKER_DIR thất bại"
+        # Sao chép toàn bộ nội dung từ nockchain-worker-01
+        rsync -a --exclude 'worker-*.log' /root/nockchain-worker-01/ "$WORKER_DIR/"
         check_error "Sao chép thư mục cho $WORKER_DIR thất bại"
-        # Xóa tệp log cũ trong thư mục worker mới
-        rm -f "$WORKER_DIR"/worker-*.log 2>/dev/null
     fi
     mkdir -p "$WORKER_DIR"
     cat > "$WORKER_DIR/.env" << EOF
@@ -270,7 +272,7 @@ PEER_NODES=$PEER_NODES
 EOF
     check_error "Tạo .env cho $WORKER_DIR thất bại"
     # Xóa .data.nockchain nếu tồn tại
-    rm -f "$WORKER_DIR/.data.nockchain"
+    rm -rf "$WORKER_DIR/.data.nockchain"
     check_error "Xóa .data.nockchain cho $WORKER_DIR thất bại"
 done
 
