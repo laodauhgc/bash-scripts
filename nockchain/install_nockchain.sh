@@ -51,12 +51,39 @@ remove_workers() {
     exit 0
 }
 
+# Hàm kiểm tra thư mục nockchain-worker-01
+check_worker_dir() {
+    local dir="/root/nockchain-worker-01"
+    local required_files=("Cargo.lock" "Cargo.toml" "LICENSE" "Makefile" "README.md" "rust-toolchain.toml")
+    local required_dirs=("assets" "crates" "hoon" "scripts" "target")
+
+    if [ ! -d "$dir" ]; then
+        return 1
+    fi
+
+    for file in "${required_files[@]}"; do
+        if [ ! -f "$dir/$file" ]; then
+            return 1
+        fi
+    done
+
+    for subdir in "${required_dirs[@]}"; do
+        if [ ! -d "$dir/$subdir" ]; then
+            return 1
+        fi
+    done
+
+    return 0
+}
+
 # Kiểm tra tùy chọn
-while getopts "c:r" opt; do
+NO_BUILD=0
+while getopts "c:rn" opt; do
     case $opt in
         c) NUM_WORKERS="$OPTARG" ;;
         r) remove_workers ;;
-        *) echo "Tùy chọn không hợp lệ. Dùng: $0 [-c <số_worker>] [-rm]" && exit 1 ;;
+        n) NO_BUILD=1 ;;
+        *) echo "Tùy chọn không hợp lệ. Dùng: $0 [-c <số_worker>] [-rm] [--no-build]" && exit 1 ;;
     esac
 done
 
@@ -139,12 +166,28 @@ if [ ! -d "/root/nockchain-worker-01" ]; then
 fi
 cd /root/nockchain-worker-01
 
+# Kiểm tra tùy chọn --no-build
+if [ "$NO_BUILD" -eq 1 ]; then
+    if check_worker_dir; then
+        echo "Thư mục /root/nockchain-worker-01 hợp lệ, bỏ qua bước build."
+    else
+        echo "Thư mục /root/nockchain-worker-01 không hợp lệ hoặc thiếu tệp/thư mục cần thiết."
+        read -p "Bạn có muốn bắt đầu quá trình build Nockchain không? (y/N): " response
+        if [[ "$response" =~ ^[yY]$ ]]; then
+            NO_BUILD=0
+        else
+            echo "Lỗi: Mã nguồn Nockchain không hợp lệ, không thể tiếp tục mà không build."
+            exit 1
+        fi
+    fi
+fi
+
 # Tạo .env trước khi chạy make
 cp .env_example .env
 check_error "Tạo .env cho nockchain-worker-01 thất bại"
 
-# Build Nockchain
-if ! command -v nockchain >/dev/null 2>&1; then
+# Build Nockchain nếu không dùng --no-build hoặc thư mục không hợp lệ
+if [ "$NO_BUILD" -eq 0 ] || ! command -v nockchain >/dev/null 2>&1; then
     make install-hoonc 2>&1 | tee -a /tmp/nockchain_build.log
     check_error "Cài hoonc thất bại. Xem log tại /tmp/nockchain_build.log"
     make build 2>&1 | tee -a /tmp/nockchain_build.log
@@ -212,15 +255,18 @@ cd /root
 for ((i=1; i<=NUM_WORKERS; i++)); do
     WORKER_DIR="/root/nockchain-worker-$(printf "%02d" $i)"
     if [ "$i" -ne 1 ]; then
-        cp -r /root/nockchain-worker-01/scripts "$WORKER_DIR"
-        check_error "Sao chép scripts cho $WORKER_DIR thất bại"
+        cp -r /root/nockchain-worker-01 "$WORKER_DIR"
+        check_error "Sao chép thư mục cho $WORKER_DIR thất bại"
+        # Xóa tệp log cũ trong thư mục worker mới
+        rm -f "$WORKER_DIR"/worker-*.log 2>/dev/null
     fi
     mkdir -p "$WORKER_DIR"
     cat > "$WORKER_DIR/.env" << EOF
+RUST_LOG=info,nockchain=info,nockchain_libp2p_io=info,libp2p=info,libp2p_quic=info
+MINIMAL_LOG_FORMAT=true
 MINING_PUBKEY=$PUBKEY
 PEER_PORT=$((30300 + i))
 PEER_NODES=$PEER_NODES
-RUST_LOG=info
 EOF
     check_error "Tạo .env cho $WORKER_DIR thất bại"
     # Xóa .data.nockchain nếu tồn tại
