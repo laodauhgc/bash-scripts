@@ -27,6 +27,15 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# Hàm kiểm tra cổng
+check_port() {
+    local port=$1
+    if netstat -tuln | grep -q ":$port\s"; then
+        echo -e "${RED}Lỗi: Cổng $port đã được sử dụng!${NC}"
+        exit 1
+    fi
+}
+
 # Hàm hiển thị hướng dẫn sử dụng
 usage() {
     echo -e "${YELLOW}Cách sử dụng: $0 [-p <start_port>] [-r]${NC}"
@@ -60,7 +69,7 @@ remove_proxies() {
         echo -e "${GREEN}Đã xóa file $OUTPUT_FILE.${NC}"
     fi
 
-    # Đóng các cổng trong UFW (giả sử cổng từ START_PORT đến START_PORT + 10)
+    # Đóng các cổng trong UFW
     if command_exists ufw; then
         for i in $(seq 0 9); do
             PORT=$((START_PORT + i))
@@ -69,7 +78,7 @@ remove_proxies() {
         echo -e "${GREEN}Đã đóng các cổng UFW (nếu có).${NC}"
     fi
 
-    echo -e "${GREEN}Hoàn tất xóa proxy SOCKS5!${NC}"
+    echo -e "${GREEN}Hoàn tất xóa!${NC}"
     exit 0
 }
 
@@ -79,22 +88,22 @@ while getopts "p:r" opt; do
     case $opt in
         p)
             START_PORT=$OPTARG
-            # Kiểm tra xem cổng có phải là số hợp lệ
+            # Kiểm tra cổng hợp lệ
             if ! [[ "$START_PORT" =~ ^[0-9]+$ ]] || [ "$START_PORT" -lt 1024 ] || [ "$START_PORT" -gt 65535 ]; then
-                echo -e "${RED}Lỗi: Cổng phải là số từ 1024 đến 65535!${NC}"
+                echo -e "${RED}Lỗi: Cổng phải từ 1024 đến 65535!${NC}"
                 exit 1
             fi
             ;;
         r)
             REMOVE_FLAG=1
             ;;
-        \?)
+        *)
             usage
             ;;
     esac
 done
 
-# Thực thi xóa proxy nếu có tùy chọn -r
+# Thực hiện xóa nếu có tùy chọn -r
 if [ "$REMOVE_FLAG" -eq 1 ]; then
     remove_proxies
 fi
@@ -107,27 +116,27 @@ log_and_show() {
 
 # Kiểm tra quyền root
 if [ "$EUID" -ne 0 ]; then
-    echo -e "${RED}Script phải chạy với quyền root. Chạy lại với sudo!${NC}"
+    echo -e "${RED}Script phải chạy với quyền root!${NC}"
     exit 1
 fi
 
 # Cập nhật hệ thống
 echo -e "${YELLOW}Cập nhật hệ thống...${NC}"
-apt update && apt upgrade -y
+sudo apt update && sudo apt upgrade -y
 
 # Kiểm tra và cài đặt các gói phụ thuộc
-echo -e "${YELLOW}Kiểm tra và cài đặt các gói phụ thuộc...${NC}"
-apt install -y apt-transport-https ca-certificates curl software-properties-common
+echo -e "${YELLOW}Cài đặt các gói phụ thuộc...${NC}"
+sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common net-tools
 
 # Kiểm tra và cài đặt Docker
 if ! command_exists docker; then
     echo -e "${YELLOW}Cài đặt Docker...${NC}"
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-    apt update
-    apt install -y docker-ce docker-ce-cli containerd.io
-    systemctl start docker
-    systemctl enable docker
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+    sudo add-apt-repository "deb [arch=$(dpkg --print-architecture)] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+    sudo apt update
+    sudo apt install -y docker-ce docker-ce-cli containerd.io
+    sudo systemctl start docker
+    sudo systemctl enable docker
 else
     echo -e "${GREEN}Docker đã được cài đặt.${NC}"
 fi
@@ -135,8 +144,8 @@ fi
 # Kiểm tra và cài đặt Docker Compose
 if ! command_exists docker-compose; then
     echo -e "${YELLOW}Cài đặt Docker Compose...${NC}"
-    curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-    chmod +x /usr/local/bin/docker-compose
+    sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+    sudo chmod +x /usr/local/bin/docker-compose
 else
     echo -e "${GREEN}Docker Compose đã được cài đặt.${NC}"
 fi
@@ -154,39 +163,46 @@ else
 fi
 echo -e "${YELLOW}Tổng RAM: ${TOTAL_RAM}MB. Sẽ tạo $PROXY_COUNT proxy SOCKS5 với cổng bắt đầu từ $START_PORT.${NC}"
 
+# Kiểm tra cổng trước khi tạo proxy
+for i in $(seq 0 $((PROXY_COUNT - 1))); do
+    PORT=$((START_PORT + i))
+    check_port $PORT
+done
+
 # Kiểm tra và cài đặt ufw nếu chưa có
 if ! command_exists ufw; then
     echo -e "${YELLOW}Cài đặt ufw...${NC}"
-    apt install -y ufw
+    sudo apt install -y ufw
 fi
 
 # Kích hoạt ufw nếu chưa bật
 if ! ufw status | grep -q "Status: active"; then
     echo -e "${YELLOW}Kích hoạt ufw...${NC}"
-    ufw enable
+    sudo ufw enable
 fi
 
 # Tạo thư mục làm việc
-mkdir -p "$WORK_DIR"
+mkdir -p "$WORK_DIR/logs"
 cd "$WORK_DIR"
 
 # Tạo file cấu hình Dante
 mkdir -p config
 cat > config/dante.conf <<EOF
-logoutput: stderr
+logoutput: /var/log/dante.log
 internal: 0.0.0.0 port = 1080
 external: eth0
 socksmethod: username
-user.privileged: root
+user.privileged: proxy
 user.unprivileged: nobody
+user.libwrap: nobody
 
 client pass {
     from: 0.0.0.0/0 to: 0.0.0.0/0
-    log: connect disconnect
+    log: connect disconnect error
 }
 socks pass {
     from: 0.0.0.0/0 to: 0.0.0.0/0
-    log: connect disconnect
+    log: connect disconnect error
 }
 EOF
 
@@ -207,16 +223,18 @@ for i in $(seq 1 $PROXY_COUNT); do
     echo "    ports:" >> docker-compose.yml
     echo "      - \"$PORT:1080\"" >> docker-compose.yml
     echo "    volumes:" >> docker-compose.yml
-    echo "      - ./config/dante.conf:/etc/dante.conf:ro" >> docker-compose.yml
+    echo "      - ./config/dante.conf:/etc/sockd.conf:ro" >> docker-compose.yml
+    echo "      - ./logs:/var/log" >> docker-compose.yml
     echo "    environment:" >> docker-compose.yml
     echo "      - USERNAME=$USERNAME" >> docker-compose.yml
     echo "      - PASSWORD=$PASSWORD" >> docker-compose.yml
+    echo "    command: sh -c 'echo \"$USERNAME:$PASSWORD\" > /etc/sockd.passwd && sockd -f /etc/sockd.conf'" >> docker-compose.yml
     echo "    restart: always" >> docker-compose.yml
     echo "    cap_add:" >> docker-compose.yml
     echo "      - NET_ADMIN" >> docker-compose.yml
 
     # Mở cổng trong ufw
-    ufw allow $PORT/tcp >/dev/null 2>&1
+    sudo ufw allow $PORT/tcp >/dev/null 2>&1
 
     # Lưu thông tin proxy
     PROXY_INFO="Proxy $i: socks5://$PUBLIC_IP:$PORT@$USERNAME:$PASSWORD"
