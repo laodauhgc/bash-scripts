@@ -60,13 +60,13 @@ remove_proxies() {
     # Xóa thư mục làm việc
     if [ -d "$WORK_DIR" ]; then
         rm -rf "$WORK_DIR"
-        echo -e "${GREEN}Đã xóa thư mục $WORK_DIR.${NC}"
+        echo -e "${GREEN}Đã xóa thư mục $WORK_DIR$.${NC}"
     fi
 
     # Xóa file thông tin proxy
     if [ -f "$OUTPUT_FILE" ]; then
         rm -f "$OUTPUT_FILE"
-        echo -e "${GREEN}Đã xóa file $OUTPUT_FILE.${NC}"
+        echo -e "${GREEN}Đã xóa file $OUTPUT_FILE$.${NC}"
     fi
 
     # Đóng các cổng trong UFW
@@ -125,7 +125,7 @@ apt update && apt upgrade -y
 
 # Kiểm tra và cài đặt các gói phụ thuộc
 echo -e "${YELLOW}Cài đặt các gói phụ thuộc...${NC}"
-apt install -y apt-transport-https ca-certificates curl software-properties-common net-tools apache2-utils
+apt install -y apt-transport-https ca-certificates curl software-properties-common net-tools
 
 # Kiểm tra và cài đặt Docker
 if ! command_exists docker; then
@@ -182,28 +182,7 @@ fi
 
 # Tạo thư mục làm việc
 mkdir -p "$WORK_DIR/logs"
-mkdir -p "$WORK_DIR/auth"
 cd "$WORK_DIR"
-
-# Tạo file cấu hình Dante
-cat > config/dante.conf <<EOF
-logoutput: /var/log/dante.log
-internal: 0.0.0.0 port = 1080
-external: eth0
-socksmethod: username
-user.privileged: proxy
-user.unprivileged: nobody
-user.libwrap: nobody
-
-client pass {
-    from: 0.0.0.0/0 to: 0.0.0.0/0
-    log: connect disconnect error
-}
-socks pass {
-    from: 0.0.0.0/0 to: 0.0.0.0/0
-    log: connect disconnect error
-}
-EOF
 
 # Tạo file docker-compose.yml
 cat > docker-compose.yml <<EOF
@@ -216,21 +195,14 @@ for i in $(seq 1 $PROXY_COUNT); do
     PORT=$((START_PORT + i - 1))
     USERNAME=$(openssl rand -hex 4)
     PASSWORD=$(openssl rand -hex 4)
-    # Tạo file passwd cho proxy
-    echo "$PASSWORD" | htpasswd -i -c "$WORK_DIR/auth/passwd-$i" "$USERNAME" >/dev/null 2>&1
     echo "  socks5-proxy-$i:" >> docker-compose.yml
-    echo "    image: vimagick/dante:latest" >> docker-compose.yml
+    echo "    image: serjs/go-socks5-proxy:latest" >> docker-compose.yml
     echo "    container_name: socks5-proxy-$i" >> docker-compose.yml
     echo "    ports:" >> docker-compose.yml
     echo "      - \"$PORT:1080\"" >> docker-compose.yml
-    echo "    volumes:" >> docker-compose.yml
-    echo "      - ./config/dante.conf:/etc/sockd.conf:ro" >> docker-compose.yml
-    echo "      - ./logs:/var/log" >> docker-compose.yml
-    echo "      - ./auth/passwd-$i:/etc/sockd.passwd:ro" >> docker-compose.yml
     echo "    environment:" >> docker-compose.yml
-    echo "      - USERNAME=$USERNAME" >> docker-compose.yml
-    echo "      - PASSWORD=$PASSWORD" >> docker-compose.yml
-    echo "    command: sockd -f /etc/sockd.conf -N 1 -D" >> docker-compose.yml
+    echo "      - SOCKS_USER=$USERNAME" >> docker-compose.yml
+    echo "      - SOCKS_PASS=$PASSWORD" >> docker-compose.yml
     echo "    restart: always" >> docker-compose.yml
     echo "    cap_add:" >> docker-compose.yml
     echo "      - NET_ADMIN" >> docker-compose.yml
