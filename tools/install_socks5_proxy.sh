@@ -22,6 +22,11 @@ if [ -z "$PUBLIC_IP" ]; then
     exit 1
 fi
 
+# Hàm kiểm tra lệnh (di chuyển lên trước remove_proxies)
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
 # Hàm hiển thị hướng dẫn sử dụng
 usage() {
     echo -e "${YELLOW}Cách sử dụng: $0 [-p <start_port>] [-r]${NC}"
@@ -94,11 +99,6 @@ if [ "$REMOVE_FLAG" -eq 1 ]; then
     remove_proxies
 fi
 
-# Hàm kiểm tra lệnh
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
-}
-
 # Hàm ghi log và hiển thị
 log_and_show() {
     echo -e "$1"
@@ -161,7 +161,7 @@ if ! command_exists ufw; then
 fi
 
 # Kích hoạt ufw nếu chưa bật
-if ! ufw status | grep -q "Status: active"; then
+if ! ufw status | grep -q "Status: active"; UFW
     echo -e "${YELLOW}Kích hoạt ufw...${NC}"
     ufw enable
 fi
