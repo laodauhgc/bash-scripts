@@ -1,7 +1,5 @@
 #!/bin/bash
 
-# Script tự động cài đặt SOCKS5 Proxy trên Ubuntu bằng Docker
-
 # Màu sắc cho output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -10,6 +8,9 @@ NC='\033[0m' # No Color
 
 # File lưu thông tin proxy
 OUTPUT_FILE="/root/socks5proxy.txt"
+
+# Thư mục làm việc
+WORK_DIR="/root/socks5-proxy"
 
 # Cổng mặc định
 START_PORT=5000
@@ -23,14 +24,53 @@ fi
 
 # Hàm hiển thị hướng dẫn sử dụng
 usage() {
-    echo -e "${YELLOW}Cách sử dụng: $0 [-p <start_port>]${NC}"
+    echo -e "${YELLOW}Cách sử dụng: $0 [-p <start_port>] [-r]${NC}"
     echo -e "  -p <start_port>: Chỉ định cổng bắt đầu (mặc định: 5000)"
+    echo -e "  -r: Xóa tất cả proxy đã cài đặt"
     echo -e "Ví dụ: $0 -p 8000"
+    echo -e "       $0 -r"
     exit 1
 }
 
+# Hàm xóa tất cả proxy
+remove_proxies() {
+    echo -e "${YELLOW}Đang xóa tất cả proxy SOCKS5...${NC}"
+
+    # Dừng và xóa container
+    if [ -f "$WORK_DIR/docker-compose.yml" ]; then
+        cd "$WORK_DIR"
+        docker-compose down >/dev/null 2>&1
+        echo -e "${GREEN}Đã dừng và xóa các container proxy.${NC}"
+    fi
+
+    # Xóa thư mục làm việc
+    if [ -d "$WORK_DIR" ]; then
+        rm -rf "$WORK_DIR"
+        echo -e "${GREEN}Đã xóa thư mục $WORK_DIR.${NC}"
+    fi
+
+    # Xóa file thông tin proxy
+    if [ -f "$OUTPUT_FILE" ]; then
+        rm -f "$OUTPUT_FILE"
+        echo -e "${GREEN}Đã xóa file $OUTPUT_FILE.${NC}"
+    fi
+
+    # Đóng các cổng trong UFW (giả sử cổng từ START_PORT đến START_PORT + 10)
+    if command_exists ufw; then
+        for i in $(seq 0 9); do
+            PORT=$((START_PORT + i))
+            ufw delete allow $PORT/tcp >/dev/null 2>&1
+        done
+        echo -e "${GREEN}Đã đóng các cổng UFW (nếu có).${NC}"
+    fi
+
+    echo -e "${GREEN}Hoàn tất xóa proxy SOCKS5!${NC}"
+    exit 0
+}
+
 # Xử lý tùy chọn dòng lệnh
-while getopts "p:" opt; do
+REMOVE_FLAG=0
+while getopts "p:r" opt; do
     case $opt in
         p)
             START_PORT=$OPTARG
@@ -40,11 +80,19 @@ while getopts "p:" opt; do
                 exit 1
             fi
             ;;
+        r)
+            REMOVE_FLAG=1
+            ;;
         \?)
             usage
             ;;
     esac
 done
+
+# Thực thi xóa proxy nếu có tùy chọn -r
+if [ "$REMOVE_FLAG" -eq 1 ]; then
+    remove_proxies
+fi
 
 # Hàm kiểm tra lệnh
 command_exists() {
@@ -119,8 +167,8 @@ if ! ufw status | grep -q "Status: active"; then
 fi
 
 # Tạo thư mục làm việc
-mkdir -p /root/socks5-proxy
-cd /root/socks5-proxy
+mkdir -p "$WORK_DIR"
+cd "$WORK_DIR"
 
 # Tạo file cấu hình Dante
 mkdir -p config
@@ -151,8 +199,8 @@ EOF
 # Tạo dịch vụ proxy
 for i in $(seq 1 $PROXY_COUNT); do
     PORT=$((START_PORT + i - 1))
-    USERNAME="user$i"
-    PASSWORD=$(openssl rand -hex 8)
+    USERNAME=$(openssl rand -hex 4)
+    PASSWORD=$(openssl rand -hex 4)
     echo "  socks5-proxy-$i:" >> docker-compose.yml
     echo "    image: vimagick/dante:latest" >> docker-compose.yml
     echo "    container_name: socks5-proxy-$i" >> docker-compose.yml
@@ -171,7 +219,7 @@ for i in $(seq 1 $PROXY_COUNT); do
     ufw allow $PORT/tcp >/dev/null 2>&1
 
     # Lưu thông tin proxy
-    PROXY_INFO="Proxy $i: socks5://$PUBLIC_IP:$PORT (Username: $USERNAME, Password: $PASSWORD)"
+    PROXY_INFO="Proxy $i: socks5://$PUBLIC_IP:$PORT@$USERNAME:$PASSWORD"
     if [ $i -eq 1 ]; then
         echo -e "\nDanh sách proxy SOCKS5:\n" > "$OUTPUT_FILE"
     fi
