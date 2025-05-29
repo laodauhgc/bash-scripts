@@ -22,7 +22,7 @@ if [ -z "$PUBLIC_IP" ]; then
     exit 1
 fi
 
-# Hàm kiểm tra lệnh (di chuyển lên trước remove_proxies)
+# Hàm kiểm tra lệnh
 command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
@@ -161,7 +161,7 @@ if ! command_exists ufw; then
 fi
 
 # Kích hoạt ufw nếu chưa bật
-if ! ufw status | grep -q "Status: active"; UFW
+if ! ufw status | grep -q "Status: active"; then
     echo -e "${YELLOW}Kích hoạt ufw...${NC}"
     ufw enable
 fi
