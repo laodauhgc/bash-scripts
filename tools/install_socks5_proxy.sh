@@ -88,7 +88,6 @@ while getopts "p:r" opt; do
     case $opt in
         p)
             START_PORT=$OPTARG
-            # Kiểm tra cổng hợp lệ
             if ! [[ "$START_PORT" =~ ^[0-9]+$ ]] || [ "$START_PORT" -lt 1024 ] || [ "$START_PORT" -gt 65535 ]; then
                 echo -e "${RED}Lỗi: Cổng phải từ 1024 đến 65535!${NC}"
                 exit 1
@@ -122,21 +121,21 @@ fi
 
 # Cập nhật hệ thống
 echo -e "${YELLOW}Cập nhật hệ thống...${NC}"
-sudo apt update && sudo apt upgrade -y
+apt update && apt upgrade -y
 
 # Kiểm tra và cài đặt các gói phụ thuộc
 echo -e "${YELLOW}Cài đặt các gói phụ thuộc...${NC}"
-sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common net-tools
+apt install -y apt-transport-https ca-certificates curl software-properties-common net-tools apache2-utils
 
 # Kiểm tra và cài đặt Docker
 if ! command_exists docker; then
     echo -e "${YELLOW}Cài đặt Docker...${NC}"
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
-    sudo add-apt-repository "deb [arch=$(dpkg --print-architecture)] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
-    sudo apt update
-    sudo apt install -y docker-ce docker-ce-cli containerd.io
-    sudo systemctl start docker
-    sudo systemctl enable docker
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+    apt update
+    apt install -y docker-ce docker-ce-cli containerd.io
+    systemctl start docker
+    systemctl enable docker
 else
     echo -e "${GREEN}Docker đã được cài đặt.${NC}"
 fi
@@ -144,8 +143,8 @@ fi
 # Kiểm tra và cài đặt Docker Compose
 if ! command_exists docker-compose; then
     echo -e "${YELLOW}Cài đặt Docker Compose...${NC}"
-    sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-    sudo chmod +x /usr/local/bin/docker-compose
+    curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+    chmod +x /usr/local/bin/docker-compose
 else
     echo -e "${GREEN}Docker Compose đã được cài đặt.${NC}"
 fi
@@ -172,21 +171,21 @@ done
 # Kiểm tra và cài đặt ufw nếu chưa có
 if ! command_exists ufw; then
     echo -e "${YELLOW}Cài đặt ufw...${NC}"
-    sudo apt install -y ufw
+    apt install -y ufw
 fi
 
 # Kích hoạt ufw nếu chưa bật
 if ! ufw status | grep -q "Status: active"; then
     echo -e "${YELLOW}Kích hoạt ufw...${NC}"
-    sudo ufw enable
+    ufw enable
 fi
 
 # Tạo thư mục làm việc
 mkdir -p "$WORK_DIR/logs"
+mkdir -p "$WORK_DIR/auth"
 cd "$WORK_DIR"
 
 # Tạo file cấu hình Dante
-mkdir -p config
 cat > config/dante.conf <<EOF
 logoutput: /var/log/dante.log
 internal: 0.0.0.0 port = 1080
@@ -217,6 +216,8 @@ for i in $(seq 1 $PROXY_COUNT); do
     PORT=$((START_PORT + i - 1))
     USERNAME=$(openssl rand -hex 4)
     PASSWORD=$(openssl rand -hex 4)
+    # Tạo file passwd cho proxy
+    echo "$PASSWORD" | htpasswd -i -c "$WORK_DIR/auth/passwd-$i" "$USERNAME" >/dev/null 2>&1
     echo "  socks5-proxy-$i:" >> docker-compose.yml
     echo "    image: vimagick/dante:latest" >> docker-compose.yml
     echo "    container_name: socks5-proxy-$i" >> docker-compose.yml
@@ -225,16 +226,17 @@ for i in $(seq 1 $PROXY_COUNT); do
     echo "    volumes:" >> docker-compose.yml
     echo "      - ./config/dante.conf:/etc/sockd.conf:ro" >> docker-compose.yml
     echo "      - ./logs:/var/log" >> docker-compose.yml
+    echo "      - ./auth/passwd-$i:/etc/sockd.passwd:ro" >> docker-compose.yml
     echo "    environment:" >> docker-compose.yml
     echo "      - USERNAME=$USERNAME" >> docker-compose.yml
     echo "      - PASSWORD=$PASSWORD" >> docker-compose.yml
-    echo "    command: sh -c 'echo \"$USERNAME:$PASSWORD\" > /etc/sockd.passwd && sockd -f /etc/sockd.conf'" >> docker-compose.yml
+    echo "    command: sockd -f /etc/sockd.conf -N 1 -D" >> docker-compose.yml
     echo "    restart: always" >> docker-compose.yml
     echo "    cap_add:" >> docker-compose.yml
     echo "      - NET_ADMIN" >> docker-compose.yml
 
     # Mở cổng trong ufw
-    sudo ufw allow $PORT/tcp >/dev/null 2>&1
+    ufw allow $PORT/tcp >/dev/null 2>&1
 
     # Lưu thông tin proxy
     PROXY_INFO="Proxy $i: socks5://$PUBLIC_IP:$PORT@$USERNAME:$PASSWORD"
@@ -248,9 +250,11 @@ done
 echo -e "${YELLOW}Khởi chạy $PROXY_COUNT proxy SOCKS5...${NC}"
 docker-compose up -d
 
-# Kiểm tra trạng thái
+# Kiểm tra trạng thái và log
 echo -e "${YELLOW}Kiểm tra trạng thái container...${NC}"
 docker ps
+echo -e "${YELLOW}Log của socks5-proxy-1:${NC}"
+docker logs socks5-proxy-1 || echo -e "${RED}Không thể lấy log của socks5-proxy-1${NC}"
 
 # Hiển thị thông tin
 echo -e "${GREEN}Hoàn tất! Thông tin proxy đã được lưu tại $OUTPUT_FILE${NC}"
