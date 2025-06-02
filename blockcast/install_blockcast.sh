@@ -87,6 +87,10 @@ fi
 
 # Clone the Blockcast BEACON docker-compose repository
 echo "Cloning Blockcast BEACON repository..."
+if [ -d "beacon-docker-compose" ]; then
+    echo "Repository already exists. Removing and re-cloning..."
+    rm -rf beacon-docker-compose
+fi
 git clone https://github.com/Blockcast/beacon-docker-compose.git
 cd beacon-docker-compose || { echo "Failed to enter directory"; exit 1; }
 
