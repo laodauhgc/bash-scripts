@@ -1,6 +1,37 @@
 #!/bin/bash
 
-# Script to automate Blockcast BEACON setup with Docker installation check for Ubuntu
+# Script to automate Blockcast BEACON setup with Docker installation check and uninstall option for Ubuntu
+
+# Function to uninstall Blockcast BEACON
+uninstall_blockcast() {
+    echo "Uninstalling Blockcast BEACON..."
+    # Navigate to repository directory if exists
+    if [ -d "beacon-docker-compose" ]; then
+        cd beacon-docker-compose || { echo "Failed to enter directory"; exit 1; }
+        # Stop and remove containers
+        docker-compose down || { echo "Failed to stop Blockcast BEACON"; exit 1; }
+        cd ..
+        # Remove repository directory
+        rm -rf beacon-docker-compose
+        echo "Blockcast BEACON uninstalled successfully."
+    else
+        echo "Blockcast BEACON repository not found. Nothing to uninstall."
+    fi
+    exit 0
+}
+
+# Check for -r flag to uninstall
+while getopts "r" opt; do
+    case $opt in
+        r)
+            uninstall_blockcast
+            ;;
+        *)
+            echo "Usage: $0 [-r]"
+            exit 1
+            ;;
+    esac
+done
 
 # Ensure script runs with sudo privileges
 if [ "$EUID" -ne 0 ]; then
@@ -34,6 +65,16 @@ if ! systemctl is-active --quiet docker; then
     fi
 fi
 
+# Check if docker-compose is installed
+if ! command -v docker-compose &> /dev/null; then
+    echo "Docker Compose not found. Installing Docker Compose..."
+    apt-get update && apt-get install -y docker-compose
+    if [ $? -ne 0 ]; then
+        echo "Error: Failed to install Docker Compose"
+        exit 1
+    fi
+fi
+
 # Install git if not present
 if ! command -v git &> /dev/null; then
     echo "Installing git..."
@@ -51,28 +92,37 @@ cd beacon-docker-compose || { echo "Failed to enter directory"; exit 1; }
 
 # Start Blockcast BEACON
 echo "Starting Blockcast BEACON..."
-docker compose up -d || { echo "Failed to start Blockcast BEACON"; exit 1; }
+docker-compose up -d || { echo "Failed to start Blockcast BEACON"; exit 1; }
 
 # Wait for BEACON to initialize
-sleep 10
+sleep 15
 
 # Generate hardware and challenge key
 echo "Generating hardware and challenge key..."
-INIT_OUTPUT=$(docker compose exec -T blockcastd blockcastd init 2>&1)
+INIT_OUTPUT=$(docker-compose exec -T blockcastd blockcastd init 2>&1)
 if [ $? -ne 0 ]; then
     echo "Error: Failed to generate keys"
+    echo "Init command output:"
     echo "$INIT_OUTPUT"
     exit 1
 fi
 
+# Check if INIT_OUTPUT is empty
+if [ -z "$INIT_OUTPUT" ]; then
+    echo "Error: No output from init command"
+    exit 1
+fi
+
 # Extract Hardware ID, Challenge Key, and Registration URL
-HWID=$(echo "$INIT_OUTPUT" | grep "Hardware ID" | cut -d ':' -f 2 | tr -d '[:space:]')
-CHALLENGE_KEY=$(echo "$INIT_OUTPUT" | grep "Challenge Key" | cut -d ':' -f 2 | tr -d '[:space:]')
-REG_URL=$(echo "$INIT_OUTPUT" | grep "Registration URL" | cut -d ':' -f 2- | tr -d '[:space:]')
+HWID=$(echo "$INIT_OUTPUT" | grep -i "Hardware ID" | cut -d ':' -f 2- | tr -d '[:space:]')
+CHALLENGE_KEY=$(echo "$INIT_OUTPUT" | grep -i "Challenge Key" | cut -d ':' -f 2- | tr -d '[:space:]')
+REG_URL=$(echo "$INIT_OUTPUT" | grep -i "Registration URL" | cut -d ':' -f 2- | tr -d '[:space:]')
 
 # Check if keys were extracted successfully
 if [ -z "$HWID" ] || [ -z "$CHALLENGE_KEY" ] || [ -z "$REG_URL" ]; then
     echo "Error: Failed to extract keys or URL from init output"
+    echo "Init command output:"
+    echo "$INIT_OUTPUT"
     exit 1
 fi
 
