@@ -135,6 +135,11 @@ echo -e "\nBlockcast BEACON Setup Complete!"
 echo "Hardware ID: $HWID"
 echo "Challenge Key: $CHALLENGE_KEY"
 echo "Registration URL: $REG_URL"
+echo -e "\nBuild Info:"
+echo "$INIT_OUTPUT" | grep -i "Commit\|Build" | sed 's/^/        /'
+echo -e "\nPrivate Key:"
+echo "cat ~/.blockcast/certs/gw_challenge.key"
+cat ~/.blockcast/certs/gw_challenge.key
 echo -e "\nNext Steps:"
 echo "1. Visit https://app.blockcast.network/ and log in"
 echo "2. Paste the Registration URL in your browser or manually enter the Hardware ID and Challenge Key at Manage Nodes > Register Node"
