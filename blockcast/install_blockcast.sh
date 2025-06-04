@@ -132,6 +132,7 @@ fi
 
 # Output results
 echo -e "\nBlockcast BEACON Setup Complete!"
+echo -e "====== Backup Blockcast ======"
 echo "Hardware ID: $HWID"
 echo "Challenge Key: $CHALLENGE_KEY"
 echo "Registration URL: $REG_URL"
@@ -140,10 +141,15 @@ echo "$INIT_OUTPUT" | grep -i "Commit\|Build" | sed 's/^/        /'
 echo -e "\nPrivate Key:"
 echo "cat ~/.blockcast/certs/gw_challenge.key"
 cat ~/.blockcast/certs/gw_challenge.key
+echo "cat ~/.blockcast/certs/gateway.key"
+cat ~/.blockcast/certs/gateway.key
+echo "cat ~/.blockcast/certs/gateway.crt"
+cat ~/.blockcast/certs/gateway.crt
+echo -e "====== End ======"
 echo -e "\nNext Steps:"
 echo "1. Visit https://app.blockcast.network/ and log in"
 echo "2. Paste the Registration URL in your browser or manually enter the Hardware ID and Challenge Key at Manage Nodes > Register Node"
-echo "3. Enable location in your browser"
-echo "4. Backup your private key at ~$HOME/certs/gateway.key"
+echo "3. Enter VM Location. Example: US, India, Indonesia..."
+echo "4. Back up the content exported above."
 echo -e "\nNote: Check node status at /manage-nodes after a few minutes. Node should show 'Healthy'."
 echo "First connectivity test runs after 6 hours. Rewards start after 24 hours."
