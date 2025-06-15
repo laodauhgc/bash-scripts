@@ -106,13 +106,7 @@ ensure_n_projects() {
 # Function to create a firewall rule for a project
 create_firewall_rule() {
     local project_id=$1
-    gcloud compute --project="$project_id" firewall-rules create public-network \
-        --direction=INGRESS \
-        --priority=1000 \
-        --network=default \
-        --action=ALLOW \
-        --rules=all \
-        --source-ranges=0.0.0.0/0
+    gcloud compute --project="$project_id" firewall-rules create public-network --direction=INGRESS --priority=1000 --network=default --action=ALLOW --rules=all --source-ranges=0.0.0.0/0
     echo -e "${BLUE}Firewall rule 'public-network' created for project $project_id, allowing all protocols and ports${NC}"
 }
 
