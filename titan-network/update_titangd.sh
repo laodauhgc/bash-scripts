@@ -66,4 +66,10 @@ $TITAN_BINARY -v
 check_error "Failed to check the version"
 echo -e "${GREEN}Update to version ${TITAN_VERSION} completed!${NC}"
 
+# Step 6: Sleep for 5 seconds and reboot the VM
+echo "Waiting for 5 seconds before rebooting the VM..."
+sleep 5
+echo "Rebooting the VM now..."
+reboot
+
 exit 0
