@@ -33,7 +33,7 @@
 #
 # Notes:
 #   - Requires root (sudo) for iftop and package installation.
-#   - Needs internet for installing tools (iftop, bc, speedtest, mtr, nethogs) and speedtest.
+#   - Needs internet for installing tools (iftop, bc, speedtest, mtr, nethogs, ethtool, curl) and speedtest.
 #   - Log (~200 KB/day) stored at /var/log/network_throttle.log.
 #   - Check "Status" column for errors (e.g., "mtr failed", "No traffic").
 
@@ -41,7 +41,7 @@
 LOG_FILE="/var/log/network_throttle.log"
 PID_FILE="/var/run/network_throttle.pid"
 INTERVAL=60  # Default: Check every 1 minute (60 seconds)
-SAMPLE_TIME=20  # Sample network speed for 20 seconds
+SAMPLE_TIME=30  # Sample network speed for 30 seconds
 SPEEDTEST_INTERVAL=$((60*60))  # Run speedtest every 1 hour
 THROTTLE_THRESHOLD=10  # Detect throttling if speed stuck below 10 Mbps for 10 checks
 THROTTLE_COUNT=0  # Counter for throttling detection
@@ -71,8 +71,8 @@ show_help() {
 install_dependencies() {
     echo "Installing dependencies..." >> "$LOG_FILE"
     apt-get update -y >> "$LOG_FILE" 2>&1
-    for pkg in iftop bc speedtest mtr nethogs; do
-        if ! command -v "${pkg/-cli/}" &> /dev/null; then
+    for pkg in iftop bc speedtest mtr nethogs ethtool curl; do
+        if ! command -v "${pkg}" &> /dev/null; then
             echo "Installing $pkg..." >> "$LOG_FILE"
             apt-get install -y "$pkg" >> "$LOG_FILE" 2>&1
             if [[ $? -ne 0 ]]; then
@@ -99,9 +99,9 @@ detect_interface() {
 
 # Function to check network connectivity
 check_connectivity() {
-    ping -c 2 1.1.1.1 >/dev/null 2>&1
+    curl -s --head --connect-timeout 5 http://1.1.1.1 >/dev/null 2>&1
     if [[ $? -ne 0 ]]; then
-        echo "Warning: No internet connectivity detected (ping to 1.1.1.1 failed)." >> "$LOG_FILE"
+        echo "Warning: No internet connectivity detected (curl to 1.1.1.1 failed)." >> "$LOG_FILE"
         return 1
     fi
     return 0
@@ -110,7 +110,20 @@ check_connectivity() {
 # Function to check interface traffic
 check_interface_traffic() {
     local iface="$1"
-    ip -s link show "$iface" 2>/dev/null | grep -A 2 "$iface" | grep -E 'RX.*bytes|TX.*bytes' >> "$LOG_FILE"
+    TRAFFIC=$(ip -s link show "$iface" 2>/dev/null | grep -A 4 "$iface" | grep -E 'RX:.*bytes|TX:.*bytes' | awk '{print $1 " " $2 " " $3}' | tr '\n' '; ')
+    if [[ -n "$TRAFFIC" ]]; then
+        echo "Interface $iface: $TRAFFIC" >> "$LOG_FILE"
+    else
+        echo "Warning: No traffic stats for interface $iface." >> "$LOG_FILE"
+    fi
+}
+
+# Function to check interface status
+check_interface_status() {
+    local iface="$1"
+    if command -v ethtool >/dev/null; then
+        ethtool "$iface" 2>/dev/null | grep -E 'Link detected' >> "$LOG_FILE"
+    fi
 }
 
 # Function to run speedtest (Ookla) and extract results
@@ -119,7 +132,7 @@ run_speedtest() {
         echo "0.00/0.00/0.0"
         return
     fi
-    SPEEDTEST_OUTPUT=$(echo "YES" | speedtest 2>/dev/null)
+    SPEEDTEST_OUTPUT=$(timeout 60s echo "YES" | speedtest 2>/dev/null)
     if [[ -z "$SPEEDTEST_OUTPUT" ]]; then
         echo "Error: speedtest failed at $(date '+%Y-%m-%d %H:%M:%S')." >> "$LOG_FILE"
         echo "0.00/0.00/0.0"
@@ -128,6 +141,9 @@ run_speedtest() {
     DOWNLOAD=$(echo "$SPEEDTEST_OUTPUT" | grep "Download:" | awk '{print $2}' | grep -E '^[0-9.]+$' || echo "0.00")
     UPLOAD=$(echo "$SPEEDTEST_OUTPUT" | grep "Upload:" | awk '{print $2}' | grep -E '^[0-9.]+$' || echo "0.00")
     LOSS=$(echo "$SPEEDTEST_OUTPUT" | grep "Packet Loss:" | awk '{print $3}' | tr -d '%' | grep -E '^[0-9.]+$' || echo "0.0")
+    if [[ "$DOWNLOAD" == "0.00" && "$UPLOAD" == "0.00" ]]; then
+        echo "Warning: speedtest returned zero values at $(date '+%Y-%m-%d %H:%M:%S')." >> "$LOG_FILE"
+    fi
     echo "$DOWNLOAD/$UPLOAD/$LOSS"
 }
 
@@ -169,10 +185,10 @@ stop_process() {
                 rm -f "$PID_FILE"
                 # Generate summary report
                 if [[ -f "$LOG_FILE" ]]; then
-                    TOTAL_LINES=$(grep -v '^-' "$LOG_FILE" | grep -v '^Network' | grep -v '^Generated' | grep -v '^Interval' | grep -v '^Monitoring' | grep -v '^Warning' | wc -l)
+                    TOTAL_LINES=$(grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}' "$LOG_FILE" | wc -l)
                     if [[ $TOTAL_LINES -gt 0 ]]; then
-                        AVG_DOWN=$(awk '{sum+=$2} END {if (NR>0) print sum/NR}' "$LOG_FILE" | grep -v '^-' | grep -v '^Network' | grep -v '^Generated' | grep -v '^Interval' | grep -v '^Monitoring' | grep -v '^Warning')
-                        AVG_UP=$(awk '{sum+=$3} END {if (NR>0) print sum/NR}' "$LOG_FILE" | grep -v '^-' | grep -v '^Network' | grep -v '^Generated' | grep -v '^Interval' | grep -v '^Monitoring' | grep -v '^Warning')
+                        AVG_DOWN=$(awk '/^[0-9]{4}-[0-9]{2}-[0-9]{2}/ {sum+=$2; count++} END {if (count>0) print sum/count}' "$LOG_FILE")
+                        AVG_UP=$(awk '/^[0-9]{4}-[0-9]{2}-[0-9]{2}/ {sum+=$3; count++} END {if (count>0) print sum/count}' "$LOG_FILE")
                         THROTTLE_EVENTS=$(grep "Possible throttling detected" "$LOG_FILE" | wc -l)
                         echo "Summary Report:" > "$SUMMARY_FILE"
                         echo "Monitoring duration: $((TOTAL_LINES * INTERVAL / 3600)) hours" >> "$SUMMARY_FILE"
@@ -181,6 +197,8 @@ stop_process() {
                         echo "Throttling events detected: $THROTTLE_EVENTS" >> "$SUMMARY_FILE"
                         echo "Summary saved to $SUMMARY_FILE"
                         cat "$SUMMARY_FILE"
+                    else
+                        echo "No valid data for summary report." >> "$SUMMARY_FILE"
                     fi
                 fi
             else
@@ -245,8 +263,10 @@ setup_log_rotation
 INTERFACE=$(detect_interface)
 echo "Using network interface: $INTERFACE" >> "$LOG_FILE"
 
-# Check network connectivity and interface traffic
+# Check network connectivity and interface status
 check_connectivity || echo "Starting monitoring despite no internet connectivity." >> "$LOG_FILE"
+echo "Interface status before starting:" >> "$LOG_FILE"
+check_interface_status "$INTERFACE"
 echo "Interface traffic stats before starting:" >> "$LOG_FILE"
 check_interface_traffic "$INTERFACE"
 
@@ -273,8 +293,12 @@ echo "-------------------------------------------------------------" >> "$LOG_FI
         STATUS="OK"
 
         # Check interface traffic
-        echo "Interface traffic at $TIMESTAMP:" >> "$LOG_FILE"
         check_interface_traffic "$INTERFACE"
+
+        # Try generating small traffic if no activity
+        if [[ $CHECK_COUNT -gt 0 && "$LAST_DOWN" == "0" ]]; then
+            curl -s --connect-timeout 5 http://1.1.1.1 >/dev/null 2>&1 &
+        fi
 
         # Run iftop for network speed
         IFTOP_OUTPUT=$(iftop -t -s $SAMPLE_TIME -i "$INTERFACE" 2>/dev/null)
@@ -374,6 +398,9 @@ echo "-------------------------------------------------------------" >> "$LOG_FI
         # Precise sleep to maintain interval
         END_TIME=$(date +%s)
         ELAPSED=$((END_TIME - START_TIME))
+        if [[ $ELAPSED -gt $INTERVAL ]]; then
+            echo "Warning: Loop took $ELAPSED seconds, exceeding interval $INTERVAL seconds at $TIMESTAMP." >> "$LOG_FILE"
+        fi
         SLEEP_TIME=$((INTERVAL - ELAPSED))
         [[ $SLEEP_TIME -gt 0 ]] && sleep $SLEEP_TIME
     done
