@@ -41,7 +41,7 @@
 LOG_FILE="/var/log/network_throttle.log"
 PID_FILE="/var/run/network_throttle.pid"
 INTERVAL=60  # Default: Check every 1 minute (60 seconds)
-SAMPLE_TIME=10  # Sample network speed for 10 seconds
+SAMPLE_TIME=15  # Sample network speed for 15 seconds
 SPEEDTEST_INTERVAL=$((60*60))  # Run speedtest every 1 hour
 THROTTLE_THRESHOLD=10  # Detect throttling if speed stuck below 10 Mbps for 10 checks
 THROTTLE_COUNT=0  # Counter for throttling detection
@@ -95,12 +95,18 @@ detect_interface() {
 
 # Function to check network connectivity
 check_connectivity() {
-    ping -c 2 1.1.1.1 >/dev/null 2>&1
+    mtr -c 2 -r 1.1.1.1 >/dev/null 2>&1
     if [[ $? -ne 0 ]]; then
-        echo "Warning: No internet connectivity detected." >> "$LOG_FILE"
+        echo "Warning: No internet connectivity detected (mtr to 1.1.1.1 failed)." >> "$LOG_FILE"
         return 1
     fi
     return 0
+}
+
+# Function to check interface traffic
+check_interface_traffic() {
+    local iface="$1"
+    ip -s link show "$iface" 2>/dev/null | grep -A 2 "$iface" | grep -E 'RX.*bytes|TX.*bytes' >> "$LOG_FILE"
 }
 
 # Function to run speedtest and extract results
@@ -159,10 +165,10 @@ stop_process() {
                 rm -f "$PID_FILE"
                 # Generate summary report
                 if [[ -f "$LOG_FILE" ]]; then
-                    TOTAL_LINES=$(grep -v '^-' "$LOG_FILE" | grep -v '^Network' | grep -v '^Generated' | grep -v '^Interval' | grep -v '^Monitoring' | grep -v '^Recommendations' | grep -v '^Warning' | wc -l)
+                    TOTAL_LINES=$(grep -v '^-' "$LOG_FILE" | grep -v '^Network' | grep -v '^Generated' | grep -v '^Interval' | grep -v '^Monitoring' | grep -v '^Warning' | wc -l)
                     if [[ $TOTAL_LINES -gt 0 ]]; then
-                        AVG_DOWN=$(awk '{sum+=$2} END {if (NR>0) print sum/NR}' "$LOG_FILE" | grep -v '^-' | grep -v '^Network' | grep -v '^Generated' | grep -v '^Interval' | grep -v '^Monitoring' | grep -v '^Recommendations' | grep -v '^Warning')
-                        AVG_UP=$(awk '{sum+=$3} END {if (NR>0) print sum/NR}' "$LOG_FILE" | grep -v '^-' | grep -v '^Network' | grep -v '^Generated' | grep -v '^Interval' | grep -v '^Monitoring' | grep -v '^Recommendations' | grep -v '^Warning')
+                        AVG_DOWN=$(awk '{sum+=$2} END {if (NR>0) print sum/NR}' "$LOG_FILE" | grep -v '^-' | grep -v '^Network' | grep -v '^Generated' | grep -v '^Interval' | grep -v '^Monitoring' | grep -v '^Warning')
+                        AVG_UP=$(awk '{sum+=$3} END {if (NR>0) print sum/NR}' "$LOG_FILE" | grep -v '^-' | grep -v '^Network' | grep -v '^Generated' | grep -v '^Interval' | grep -v '^Monitoring' | grep -v '^Warning')
                         THROTTLE_EVENTS=$(grep "Possible throttling detected" "$LOG_FILE" | wc -l)
                         echo "Summary Report:" > "$SUMMARY_FILE"
                         echo "Monitoring duration: $((TOTAL_LINES * INTERVAL / 3600)) hours" >> "$SUMMARY_FILE"
@@ -235,8 +241,10 @@ setup_log_rotation
 INTERFACE=$(detect_interface)
 echo "Using network interface: $INTERFACE" >> "$LOG_FILE"
 
-# Check network connectivity
+# Check network connectivity and interface traffic
 check_connectivity || echo "Starting monitoring despite no internet connectivity." >> "$LOG_FILE"
+echo "Interface traffic stats before starting:" >> "$LOG_FILE"
+check_interface_traffic "$INTERFACE"
 
 # Write log header
 echo "Network Throttling Detection Log - Interface: $INTERFACE" > "$LOG_FILE"
@@ -256,6 +264,7 @@ echo "-------------------------------------------------------------" >> "$LOG_FI
     CHECK_COUNT=0
 
     while true; do
+        START_TIME=$(date +%s)
         TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
         STATUS="OK"
 
@@ -354,8 +363,11 @@ echo "-------------------------------------------------------------" >> "$LOG_FI
         printf "%-20s %-15s %-15s %-15s %-10s %-15s %-15s %-30s %-15s\n" \
             "$TIMESTAMP" "$DOWNLOAD" "$UPLOAD" "$LATENCY" "$LOSS" "$SPEEDTEST_DOWN" "$SPEEDTEST_UP" "$TOP_APP" "$STATUS" >> "$LOG_FILE" 2>/dev/null
 
-        # Sleep until next interval
-        sleep $((INTERVAL - SAMPLE_TIME))
+        # Precise sleep to maintain interval
+        END_TIME=$(date +%s)
+        ELAPSED=$((END_TIME - START_TIME))
+        SLEEP_TIME=$((INTERVAL - ELAPSED))
+        [[ $SLEEP_TIME -gt 0 ]] && sleep $SLEEP_TIME
     done
 } &
 
