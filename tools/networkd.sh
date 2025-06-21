@@ -25,7 +25,7 @@
 # Features:
 #   - Monitors continuously until stopped with -r.
 #   - Measures download/upload speed (iftop), latency/loss (mtr) every minute, speedtest every hour.
-#   - Detects throttling (speed stuck low or low vs. speedtest) with notes in log.
+#   - Detects throttling (speed stuck low or low vs. speedtest).
 #   - Logs top bandwidth-consuming app (nethogs) when speed is low.
 #   - Automatic log rotation to manage disk space.
 #   - Summary report (average speed, throttling events) when stopped.
@@ -35,13 +35,13 @@
 #   - Requires root (sudo) for iftop and package installation.
 #   - Needs internet for installing tools (iftop, bc, speedtest-cli, mtr, nethogs) and speedtest.
 #   - Log (~200 KB/day) stored at /var/log/network_throttle.log.
-#   - Analyze log for "Possible throttling detected" or "Low speed vs. speedtest" to identify throttling.
+#   - Check "Status" column for errors (e.g., "mtr failed", "No traffic").
 
 # Configuration
 LOG_FILE="/var/log/network_throttle.log"
 PID_FILE="/var/run/network_throttle.pid"
 INTERVAL=60  # Default: Check every 1 minute (60 seconds)
-SAMPLE_TIME=8  # Sample network speed for 8 seconds
+SAMPLE_TIME=10  # Sample network speed for 10 seconds
 SPEEDTEST_INTERVAL=$((60*60))  # Run speedtest every 1 hour
 THROTTLE_THRESHOLD=10  # Detect throttling if speed stuck below 10 Mbps for 10 checks
 THROTTLE_COUNT=0  # Counter for throttling detection
@@ -93,10 +93,25 @@ detect_interface() {
     echo "$INTERFACES" | head -n 1
 }
 
+# Function to check network connectivity
+check_connectivity() {
+    ping -c 2 1.1.1.1 >/dev/null 2>&1
+    if [[ $? -ne 0 ]]; then
+        echo "Warning: No internet connectivity detected." >> "$LOG_FILE"
+        return 1
+    fi
+    return 0
+}
+
 # Function to run speedtest and extract results
 run_speedtest() {
+    if ! check_connectivity; then
+        echo "0.00/0.00/0.00"
+        return
+    fi
     SPEEDTEST_OUTPUT=$(speedtest-cli --simple 2>/dev/null)
     if [[ -z "$SPEEDTEST_OUTPUT" ]]; then
+        echo "Error: speedtest-cli failed at $(date '+%Y-%m-%d %H:%M:%S')." >> "$LOG_FILE"
         echo "0.00/0.00/0.00"
         return
     fi
@@ -144,10 +159,10 @@ stop_process() {
                 rm -f "$PID_FILE"
                 # Generate summary report
                 if [[ -f "$LOG_FILE" ]]; then
-                    TOTAL_LINES=$(grep -v '^-' "$LOG_FILE" | grep -v '^Network' | grep -v '^Generated' | grep -v '^Interval' | grep -v '^Monitoring' | grep -v '^Recommendations' | wc -l)
+                    TOTAL_LINES=$(grep -v '^-' "$LOG_FILE" | grep -v '^Network' | grep -v '^Generated' | grep -v '^Interval' | grep -v '^Monitoring' | grep -v '^Recommendations' | grep -v '^Warning' | wc -l)
                     if [[ $TOTAL_LINES -gt 0 ]]; then
-                        AVG_DOWN=$(awk '{sum+=$2} END {if (NR>0) print sum/NR}' "$LOG_FILE" | grep -v '^-' | grep -v '^Network' | grep -v '^Generated' | grep -v '^Interval' | grep -v '^Monitoring' | grep -v '^Recommendations')
-                        AVG_UP=$(awk '{sum+=$3} END {if (NR>0) print sum/NR}' "$LOG_FILE" | grep -v '^-' | grep -v '^Network' | grep -v '^Generated' | grep -v '^Interval' | grep -v '^Monitoring' | grep -v '^Recommendations')
+                        AVG_DOWN=$(awk '{sum+=$2} END {if (NR>0) print sum/NR}' "$LOG_FILE" | grep -v '^-' | grep -v '^Network' | grep -v '^Generated' | grep -v '^Interval' | grep -v '^Monitoring' | grep -v '^Recommendations' | grep -v '^Warning')
+                        AVG_UP=$(awk '{sum+=$3} END {if (NR>0) print sum/NR}' "$LOG_FILE" | grep -v '^-' | grep -v '^Network' | grep -v '^Generated' | grep -v '^Interval' | grep -v '^Monitoring' | grep -v '^Recommendations' | grep -v '^Warning')
                         THROTTLE_EVENTS=$(grep "Possible throttling detected" "$LOG_FILE" | wc -l)
                         echo "Summary Report:" > "$SUMMARY_FILE"
                         echo "Monitoring duration: $((TOTAL_LINES * INTERVAL / 3600)) hours" >> "$SUMMARY_FILE"
@@ -218,6 +233,10 @@ setup_log_rotation
 
 # Detect network interface
 INTERFACE=$(detect_interface)
+echo "Using network interface: $INTERFACE" >> "$LOG_FILE"
+
+# Check network connectivity
+check_connectivity || echo "Starting monitoring despite no internet connectivity." >> "$LOG_FILE"
 
 # Write log header
 echo "Network Throttling Detection Log - Interface: $INTERFACE" > "$LOG_FILE"
@@ -225,7 +244,7 @@ echo "Generated on: $(date '+%Y-%m-%d %H:%M:%S %Z')" >> "$LOG_FILE"
 echo "Interval: $INTERVAL seconds" >> "$LOG_FILE"
 echo "-------------------------------------------------------------" >> "$LOG_FILE"
 printf "%-20s %-15s %-15s %-15s %-10s %-15s %-15s %-30s %-15s\n" \
-    "Timestamp" "Down (Mbps)" "Up (Mbps)" "Latency (ms)" "Loss (%)" "Speedtest Down" "Speedtest Up" "Top App" "Notes" >> "$LOG_FILE"
+    "Timestamp" "Down (Mbps)" "Up (Mbps)" "Latency (ms)" "Loss (%)" "Speedtest Down" "Speedtest Up" "Top App" "Status" >> "$LOG_FILE"
 echo "-------------------------------------------------------------" >> "$LOG_FILE"
 
 # Run monitoring in background
@@ -238,11 +257,19 @@ echo "-------------------------------------------------------------" >> "$LOG_FI
 
     while true; do
         TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+        STATUS="OK"
 
         # Run iftop for network speed
         IFTOP_OUTPUT=$(iftop -t -s $SAMPLE_TIME -i "$INTERFACE" 2>/dev/null)
-        DOWNLOAD=$(echo "$IFTOP_OUTPUT" | grep -A 2 "Total send and receive rate" | tail -n 1 | awk '{print $1}' | tr -d '[:alpha:]' | grep -E '^[0-9.]+$' || echo "0")
-        UPLOAD=$(echo "$IFTOP_OUTPUT" | grep -A 2 "Total send rate" | tail -n 1 | awk '{print $1}' | tr -d '[:alpha:]' | grep -E '^[0-9.]+$' || echo "0")
+        if [[ -z "$IFTOP_OUTPUT" ]]; then
+            echo "Warning: iftop failed to retrieve data at $TIMESTAMP" >> "$LOG_FILE"
+            DOWNLOAD="0"
+            UPLOAD="0"
+            STATUS="iftop failed"
+        else
+            DOWNLOAD=$(echo "$IFTOP_OUTPUT" | grep -A 2 "Total send and receive rate" | tail -n 1 | awk '{print $1}' | tr -d '[:alpha:]' | grep -E '^[0-9.]+$' || echo "0")
+            UPLOAD=$(echo "$IFTOP_OUTPUT" | grep -A 2 "Total send rate" | tail -n 1 | awk '{print $1}' | tr -d '[:alpha:]' | grep -E '^[0-9.]+$' || echo "0")
+        fi
 
         # Convert speeds to Mbps
         if [[ -n "$DOWNLOAD" && "$DOWNLOAD" != "0" ]]; then
@@ -253,6 +280,7 @@ echo "-------------------------------------------------------------" >> "$LOG_FI
             fi
         else
             DOWNLOAD="0"
+            [[ "$STATUS" == "OK" && "$DOWNLOAD" == "0" ]] && STATUS="No traffic"
         fi
         if [[ -n "$UPLOAD" && "$UPLOAD" != "0" ]]; then
             if [[ "$IFTOP_OUTPUT" =~ "Kb" ]]; then
@@ -267,11 +295,19 @@ echo "-------------------------------------------------------------" >> "$LOG_FI
         UPLOAD=$(printf "%.2f" "$UPLOAD")
 
         # Run mtr for latency and packet loss
-        MTR_OUTPUT=$(mtr -c 10 -r 8.8.8.8 2>/dev/null | grep -E '^\s*1\.' | head -n 1)
-        LATENCY=$(echo "$MTR_OUTPUT" | awk '{print $6}' | grep -E '^[0-9.]+$' || echo "N/A")
-        LOSS=$(echo "$MTR_OUTPUT" | awk '{print $3}' | tr -d '%' | grep -E '^[0-9.]+$' || echo "N/A")
-        if [[ "$LATENCY" == "N/A" || "$LOSS" == "N/A" ]]; then
-            echo "Warning: mtr failed to retrieve valid latency/loss at $TIMESTAMP" >> "$LOG_FILE"
+        MTR_OUTPUT=$(mtr -c 10 -r 1.1.1.1 2>/dev/null | grep -E '^\s*1\.' | head -n 1)
+        if [[ -z "$MTR_OUTPUT" ]]; then
+            echo "Warning: mtr failed to retrieve data at $TIMESTAMP (tried 1.1.1.1)" >> "$LOG_FILE"
+            LATENCY="N/A"
+            LOSS="N/A"
+            [[ "$STATUS" == "OK" ]] && STATUS="mtr failed"
+        else
+            LATENCY=$(echo "$MTR_OUTPUT" | awk '{print $6}' | grep -E '^[0-9.]+$' || echo "N/A")
+            LOSS=$(echo "$MTR_OUTPUT" | awk '{print $3}' | tr -d '%' | grep -E '^[0-9.]+$' || echo "N/A")
+            if [[ "$LATENCY" == "N/A" || "$LOSS" == "N/A" ]]; then
+                echo "Warning: mtr output invalid at $TIMESTAMP" >> "$LOG_FILE"
+                [[ "$STATUS" == "OK" ]] && STATUS="mtr invalid"
+            fi
         fi
 
         # Run nethogs if speed is low
@@ -283,7 +319,6 @@ echo "-------------------------------------------------------------" >> "$LOG_FI
         # Run speedtest every hour
         SPEEDTEST_DOWN="N/A"
         SPEEDTEST_UP="N/A"
-        NOTES=""
         if [[ $((CHECK_COUNT * INTERVAL)) -ge $LAST_SPEEDTEST ]]; then
             SPEEDTEST_RESULT=$(run_speedtest)
             SPEEDTEST_DOWN=$(echo "$SPEEDTEST_RESULT" | cut -d'/' -f1)
@@ -291,7 +326,7 @@ echo "-------------------------------------------------------------" >> "$LOG_FI
             LAST_SPEEDTEST=$((LAST_SPEEDTEST + SPEEDTEST_INTERVAL))
             # Compare iftop with speedtest
             if [[ "$SPEEDTEST_DOWN" != "0.00" && $(echo "$DOWNLOAD < $SPEEDTEST_DOWN * 0.5" | bc -l) -eq 1 ]]; then
-                NOTES="Low speed vs. speedtest"
+                [[ "$STATUS" == "OK" || "$STATUS" == "No traffic" ]] && STATUS="Low speed vs. speedtest"
             fi
         fi
 
@@ -301,7 +336,7 @@ echo "-------------------------------------------------------------" >> "$LOG_FI
               $(echo "$DOWNLOAD - $LAST_DOWN < 0.5 && $LAST_DOWN - $DOWNLOAD < 0.5" | bc -l) -eq 1 ]]; then
             THROTTLE_COUNT=$((THROTTLE_COUNT + 1))
             if [[ $THROTTLE_COUNT -ge 10 ]]; then
-                NOTES="Possible throttling detected"
+                [[ "$STATUS" == "OK" || "$STATUS" == "No traffic" || "$STATUS" == "Low speed vs. speedtest" ]] && STATUS="Possible throttling detected"
             fi
         else
             THROTTLE_COUNT=0
@@ -317,7 +352,7 @@ echo "-------------------------------------------------------------" >> "$LOG_FI
 
         # Write to log with safe printf
         printf "%-20s %-15s %-15s %-15s %-10s %-15s %-15s %-30s %-15s\n" \
-            "$TIMESTAMP" "$DOWNLOAD" "$UPLOAD" "$LATENCY" "$LOSS" "$SPEEDTEST_DOWN" "$SPEEDTEST_UP" "$TOP_APP" "$NOTES" >> "$LOG_FILE" 2>/dev/null
+            "$TIMESTAMP" "$DOWNLOAD" "$UPLOAD" "$LATENCY" "$LOSS" "$SPEEDTEST_DOWN" "$SPEEDTEST_UP" "$TOP_APP" "$STATUS" >> "$LOG_FILE" 2>/dev/null
 
         # Sleep until next interval
         sleep $((INTERVAL - SAMPLE_TIME))
