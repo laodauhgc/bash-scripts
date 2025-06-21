@@ -33,7 +33,7 @@
 #
 # Notes:
 #   - Requires root (sudo) for iftop and package installation.
-#   - Needs internet for installing tools (iftop, bc, speedtest-cli, mtr, nethogs) and speedtest.
+#   - Needs internet for installing tools (iftop, bc, speedtest, mtr, nethogs) and speedtest.
 #   - Log (~200 KB/day) stored at /var/log/network_throttle.log.
 #   - Check "Status" column for errors (e.g., "mtr failed", "No traffic").
 
@@ -41,7 +41,7 @@
 LOG_FILE="/var/log/network_throttle.log"
 PID_FILE="/var/run/network_throttle.pid"
 INTERVAL=60  # Default: Check every 1 minute (60 seconds)
-SAMPLE_TIME=15  # Sample network speed for 15 seconds
+SAMPLE_TIME=20  # Sample network speed for 20 seconds
 SPEEDTEST_INTERVAL=$((60*60))  # Run speedtest every 1 hour
 THROTTLE_THRESHOLD=10  # Detect throttling if speed stuck below 10 Mbps for 10 checks
 THROTTLE_COUNT=0  # Counter for throttling detection
@@ -71,7 +71,7 @@ show_help() {
 install_dependencies() {
     echo "Installing dependencies..." >> "$LOG_FILE"
     apt-get update -y >> "$LOG_FILE" 2>&1
-    for pkg in iftop bc speedtest-cli mtr nethogs; do
+    for pkg in iftop bc speedtest mtr nethogs; do
         if ! command -v "${pkg/-cli/}" &> /dev/null; then
             echo "Installing $pkg..." >> "$LOG_FILE"
             apt-get install -y "$pkg" >> "$LOG_FILE" 2>&1
@@ -81,6 +81,10 @@ install_dependencies() {
             fi
         fi
     done
+    # Accept speedtest license automatically
+    if [[ ! -f ~/.config/ookla/speedtest-cli.json ]]; then
+        echo "YES" | speedtest >/dev/null 2>&1
+    fi
 }
 
 # Function to detect active network interface
@@ -95,9 +99,9 @@ detect_interface() {
 
 # Function to check network connectivity
 check_connectivity() {
-    mtr -c 2 -r 1.1.1.1 >/dev/null 2>&1
+    ping -c 2 1.1.1.1 >/dev/null 2>&1
     if [[ $? -ne 0 ]]; then
-        echo "Warning: No internet connectivity detected (mtr to 1.1.1.1 failed)." >> "$LOG_FILE"
+        echo "Warning: No internet connectivity detected (ping to 1.1.1.1 failed)." >> "$LOG_FILE"
         return 1
     fi
     return 0
@@ -109,22 +113,22 @@ check_interface_traffic() {
     ip -s link show "$iface" 2>/dev/null | grep -A 2 "$iface" | grep -E 'RX.*bytes|TX.*bytes' >> "$LOG_FILE"
 }
 
-# Function to run speedtest and extract results
+# Function to run speedtest (Ookla) and extract results
 run_speedtest() {
     if ! check_connectivity; then
-        echo "0.00/0.00/0.00"
+        echo "0.00/0.00/0.0"
         return
     fi
-    SPEEDTEST_OUTPUT=$(speedtest-cli --simple 2>/dev/null)
+    SPEEDTEST_OUTPUT=$(echo "YES" | speedtest 2>/dev/null)
     if [[ -z "$SPEEDTEST_OUTPUT" ]]; then
-        echo "Error: speedtest-cli failed at $(date '+%Y-%m-%d %H:%M:%S')." >> "$LOG_FILE"
-        echo "0.00/0.00/0.00"
+        echo "Error: speedtest failed at $(date '+%Y-%m-%d %H:%M:%S')." >> "$LOG_FILE"
+        echo "0.00/0.00/0.0"
         return
     fi
-    DOWNLOAD=$(echo "$SPEEDTEST_OUTPUT" | grep Download | awk '{print $2}' | grep -E '^[0-9.]+$' || echo "0.00")
-    UPLOAD=$(echo "$SPEEDTEST_OUTPUT" | grep Upload | awk '{print $2}' | grep -E '^[0-9.]+$' || echo "0.00")
-    PING=$(echo "$SPEEDTEST_OUTPUT" | grep Ping | awk '{print $2}' | grep -E '^[0-9.]+$' || echo "0.00")
-    echo "$DOWNLOAD/$UPLOAD/$PING"
+    DOWNLOAD=$(echo "$SPEEDTEST_OUTPUT" | grep "Download:" | awk '{print $2}' | grep -E '^[0-9.]+$' || echo "0.00")
+    UPLOAD=$(echo "$SPEEDTEST_OUTPUT" | grep "Upload:" | awk '{print $2}' | grep -E '^[0-9.]+$' || echo "0.00")
+    LOSS=$(echo "$SPEEDTEST_OUTPUT" | grep "Packet Loss:" | awk '{print $3}' | tr -d '%' | grep -E '^[0-9.]+$' || echo "0.0")
+    echo "$DOWNLOAD/$UPLOAD/$LOSS"
 }
 
 # Function to run nethogs and get top bandwidth-consuming app
@@ -267,6 +271,10 @@ echo "-------------------------------------------------------------" >> "$LOG_FI
         START_TIME=$(date +%s)
         TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
         STATUS="OK"
+
+        # Check interface traffic
+        echo "Interface traffic at $TIMESTAMP:" >> "$LOG_FILE"
+        check_interface_traffic "$INTERFACE"
 
         # Run iftop for network speed
         IFTOP_OUTPUT=$(iftop -t -s $SAMPLE_TIME -i "$INTERFACE" 2>/dev/null)
