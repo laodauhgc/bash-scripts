@@ -96,21 +96,21 @@ detect_interface() {
 # Function to run speedtest and extract results
 run_speedtest() {
     SPEEDTEST_OUTPUT=$(speedtest-cli --simple 2>/dev/null)
-    DOWNLOAD=$(echo "$SPEEDTEST_OUTPUT" | grep Download | awk '{print $2}')
-    UPLOAD=$(echo "$SPEEDTEST_OUTPUT" | grep Upload | awk '{print $2}')
-    PING=$(echo "$SPEEDTEST_OUTPUT" | grep Ping | awk '{print $2}')
-    if [[ -z "$DOWNLOAD" ]]; then
+    if [[ -z "$SPEEDTEST_OUTPUT" ]]; then
         echo "0.00/0.00/0.00"
-    else
-        echo "$DOWNLOAD/$UPLOAD/$PING"
+        return
     fi
+    DOWNLOAD=$(echo "$SPEEDTEST_OUTPUT" | grep Download | awk '{print $2}' | grep -E '^[0-9.]+$' || echo "0.00")
+    UPLOAD=$(echo "$SPEEDTEST_OUTPUT" | grep Upload | awk '{print $2}' | grep -E '^[0-9.]+$' || echo "0.00")
+    PING=$(echo "$SPEEDTEST_OUTPUT" | grep Ping | awk '{print $2}' | grep -E '^[0-9.]+$' || echo "0.00")
+    echo "$DOWNLOAD/$UPLOAD/$PING"
 }
 
 # Function to run nethogs and get top bandwidth-consuming app
 run_nethogs() {
     NETHOGS_OUTPUT=$(timeout 5 nethogs "$INTERFACE" -t 2>/dev/null | grep -v "Refreshing" | head -n 1)
     if [[ -n "$NETHOGS_OUTPUT" ]]; then
-        echo "$NETHOGS_OUTPUT" | awk '{print $1}' | cut -d'/' -f1
+        echo "$NETHOGS_OUTPUT" | awk '{print $1}' | cut -d'/' -f1 | tr -d '\n'
     else
         echo "N/A"
     fi
@@ -241,11 +241,11 @@ echo "-------------------------------------------------------------" >> "$LOG_FI
 
         # Run iftop for network speed
         IFTOP_OUTPUT=$(iftop -t -s $SAMPLE_TIME -i "$INTERFACE" 2>/dev/null)
-        DOWNLOAD=$(echo "$IFTOP_OUTPUT" | grep -A 2 "Total send and receive rate" | tail -n 1 | awk '{print $1}' | tr -d '[:alpha:]')
-        UPLOAD=$(echo "$IFTOP_OUTPUT" | grep -A 2 "Total send rate" | tail -n 1 | awk '{print $1}' | tr -d '[:alpha:]')
+        DOWNLOAD=$(echo "$IFTOP_OUTPUT" | grep -A 2 "Total send and receive rate" | tail -n 1 | awk '{print $1}' | tr -d '[:alpha:]' | grep -E '^[0-9.]+$' || echo "0")
+        UPLOAD=$(echo "$IFTOP_OUTPUT" | grep -A 2 "Total send rate" | tail -n 1 | awk '{print $1}' | tr -d '[:alpha:]' | grep -E '^[0-9.]+$' || echo "0")
 
         # Convert speeds to Mbps
-        if [[ "$DOWNLOAD" =~ ^[0-9.]+$ ]]; then
+        if [[ -n "$DOWNLOAD" && "$DOWNLOAD" != "0" ]]; then
             if [[ "$IFTOP_OUTPUT" =~ "Kb" ]]; then
                 DOWNLOAD=$(echo "$DOWNLOAD / 1000" | bc -l)
             elif [[ "$IFTOP_OUTPUT" =~ "Gb" ]]; then
@@ -254,7 +254,7 @@ echo "-------------------------------------------------------------" >> "$LOG_FI
         else
             DOWNLOAD="0"
         fi
-        if [[ "$UPLOAD" =~ ^[0-9.]+$ ]]; then
+        if [[ -n "$UPLOAD" && "$UPLOAD" != "0" ]]; then
             if [[ "$IFTOP_OUTPUT" =~ "Kb" ]]; then
                 UPLOAD=$(echo "$UPLOAD / 1000" | bc -l)
             elif [[ "$IFTOP_OUTPUT" =~ "Gb" ]]; then
@@ -267,12 +267,11 @@ echo "-------------------------------------------------------------" >> "$LOG_FI
         UPLOAD=$(printf "%.2f" "$UPLOAD")
 
         # Run mtr for latency and packet loss
-        MTR_OUTPUT=$(mtr -c 10 -r 8.8.8.8 2>/dev/null | grep ' 1.')
-        LATENCY=$(echo "$MTR_OUTPUT" | awk '{print $6}')
-        LOSS=$(echo "$MTR_OUTPUT" | awk '{print $3}' | tr -d '%')
-        if [[ -z "$LATENCY" ]]; then
-            LATENCY="N/A"
-            LOSS="N/A"
+        MTR_OUTPUT=$(mtr -c 10 -r 8.8.8.8 2>/dev/null | grep -E '^\s*1\.' | head -n 1)
+        LATENCY=$(echo "$MTR_OUTPUT" | awk '{print $6}' | grep -E '^[0-9.]+$' || echo "N/A")
+        LOSS=$(echo "$MTR_OUTPUT" | awk '{print $3}' | tr -d '%' | grep -E '^[0-9.]+$' || echo "N/A")
+        if [[ "$LATENCY" == "N/A" || "$LOSS" == "N/A" ]]; then
+            echo "Warning: mtr failed to retrieve valid latency/loss at $TIMESTAMP" >> "$LOG_FILE"
         fi
 
         # Run nethogs if speed is low
@@ -316,9 +315,9 @@ echo "-------------------------------------------------------------" >> "$LOG_FI
             CHECK_COUNT=$((CHECK_COUNT + 1))
         fi
 
-        # Write to log
+        # Write to log with safe printf
         printf "%-20s %-15s %-15s %-15s %-10s %-15s %-15s %-30s %-15s\n" \
-            "$TIMESTAMP" "$DOWNLOAD" "$UPLOAD" "$LATENCY" "$LOSS" "$SPEEDTEST_DOWN" "$SPEEDTEST_UP" "$TOP_APP" "$NOTES" >> "$LOG_FILE"
+            "$TIMESTAMP" "$DOWNLOAD" "$UPLOAD" "$LATENCY" "$LOSS" "$SPEEDTEST_DOWN" "$SPEEDTEST_UP" "$TOP_APP" "$NOTES" >> "$LOG_FILE" 2>/dev/null
 
         # Sleep until next interval
         sleep $((INTERVAL - SAMPLE_TIME))
