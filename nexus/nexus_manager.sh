@@ -1,13 +1,13 @@
 #!/bin/bash
 set -e
 
-# Nexus Node Manager v2.1
+# Nexus Node Manager v2.2
 # Installs and removes Nexus nodes in Docker containers, aligned with official Nexus CLI
 # Supports Wallet Address (mandatory for install) and Node ID (optional, auto-generated if not provided)
-# Fixes binary installation issue and -r option logic
+# Fixes binary installation issue with improved logging and no-cache build
 
 # Variables
-VERSION="2.1"
+VERSION="2.2"
 BASE_CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
 LOG_DIR="/root/nexus_logs"
@@ -79,7 +79,7 @@ RUN /install_nexus.sh
 ENTRYPOINT ["/entrypoint.sh"]
 EOF
 
-    # Nexus CLI installation script (adapted from official script)
+    # Nexus CLI installation script
     cat > install_nexus.sh <<EOF
 #!/bin/bash
 set -e
@@ -87,23 +87,30 @@ set -e
 NEXUS_HOME="/root/.nexus"
 BIN_DIR="/root/.nexus/bin"
 echo "Fetching latest Nexus CLI release URL..." >&2
-LATEST_RELEASE_URL=\$(curl -s --connect-timeout 10 --max-time 30 https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest | jq -r '.assets[] | select(.name == "nexus-network-linux-x86_64") | .browser_download_url')
+API_RESPONSE=\$(curl -s --connect-timeout 10 --max-time 30 https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest 2>/tmp/api_error.log)
+if [ \$? -ne 0 ]; then
+    echo "Error: Failed to fetch GitHub API" >&2
+    cat /tmp/api_error.log >&2
+    exit 1
+fi
 
+LATEST_RELEASE_URL=\$(echo "\$API_RESPONSE" | jq -r '.assets[] | select(.name == "nexus-network-linux-x86_64") | .browser_download_url')
 if [ -z "\$LATEST_RELEASE_URL" ]; then
     echo "Error: Could not find precompiled binary for linux-x86_64" >&2
     echo "GitHub API response:" >&2
-    curl -s --connect-timeout 10 --max-time 30 https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest >&2
+    echo "\$API_RESPONSE" >&2
     exit 1
 fi
 
 echo "Downloading Nexus CLI binary from \$LATEST_RELEASE_URL..." >&2
-curl -L --connect-timeout 10 --max-time 60 -o "\$BIN_DIR/nexus-network" "\$LATEST_RELEASE_URL" || {
+curl -L --connect-timeout 10 --max-time 60 -o "\$BIN_DIR/nexus-network" "\$LATEST_RELEASE_URL" 2>/tmp/download_error.log || {
     echo "Error: Failed to download binary from \$LATEST_RELEASE_URL" >&2
+    cat /tmp/download_error.log >&2
     exit 1
 }
 
-if [ ! -f "\$BIN_DIR/nexus-network" ]; then
-    echo "Error: Binary file \$BIN_DIR/nexus-network not found after download" >&2
+if [ ! -s "\$BIN_DIR/nexus-network" ]; then
+    echo "Error: Binary file \$BIN_DIR/nexus-network is empty or not found" >&2
     exit 1
 fi
 
@@ -183,7 +190,7 @@ echo "Credentials saved at /root/.nexus/credentials.json" >&2
 tail -f /root/nexus.log
 EOF
 
-    docker build -t "$IMAGE_NAME" .
+    docker build --no-cache -t "$IMAGE_NAME" .
     cd -
     rm -rf "$WORKDIR"
 }
