@@ -1,53 +1,53 @@
 #!/bin/bash
 set -e
 
-# Nexus Node Manager v2.10
-# Installs and removes Nexus nodes in Docker containers, aligned with official Nexus CLI
-# Supports Wallet Address (mandatory for install) and Node ID (optional, auto-generated if not provided)
-# Fixes binary installation by removing host volume mount and ensuring binary persistence in image
+# Nexus Node Manager v2.11
+# Installs and removes Nexus nodes in Docker containers
+# Uses fixed binary URL and SHA256 verification to ensure correct binary installation
 
 # Variables
-VERSION="2.10"
+VERSION="2.11"
 BASE_CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
 LOG_DIR="/root/nexus_logs"
 NEXUS_HOME="/root/.nexus"
 NEXUS_BIN="$NEXUS_HOME/bin/nexus-network"
-FALLBACK_URL="https://github.com/nexus-xyz/nexus-cli/releases/download/v0.8.11/nexus-network-linux-x86_64"
+BINARY_URL="https://github.com/nexus-xyz/nexus-cli/releases/download/v0.8.11/nexus-network-linux-x86_64"
+SHA256_URL="https://github.com/nexus-xyz/nexus-cli/releases/download/v0.8.11/nexus-network-linux-x86_64.sha256"
 RETRY_COUNT=5
 RETRY_DELAY=5
 
-# Function to validate Wallet Address (Ethereum address format)
+# Function to validate Wallet Address
 validate_wallet_address() {
-    [[ "$1" =~ ^0x[a-fA-F0-9]{40}$ ]] || { echo "Invalid Wallet Address: Must be a valid Ethereum address (e.g., 0x238a3a4ff431De579885D4cE0297af7A0d3a1b32)"; exit 1; }
+    [[ "$1" =~ ^0x[a-fA-F0-9]{40}$ ]] || { echo "Invalid Wallet Address"; exit 1; }
 }
 
-# Function to validate Node ID (if provided, must be numeric)
+# Function to validate Node ID
 validate_node_id() {
-    [[ -z "$1" || "$1" =~ ^[0-9]+$ ]] || { echo "Invalid Node ID: Must be numeric (e.g., 7300170)"; exit 1; }
+    [[ -z "$1" || "$1" =~ ^[0-9]+$ ]] || { echo "Invalid Node ID: Must be numeric"; exit 1; }
 }
 
-# Check and install Docker using get.docker.com
+# Check and install Docker
 check_docker() {
     if ! command -v docker >/dev/null 2>&1; then
-        echo "Docker not found, installing using get.docker.com..."
-        wget -O /docker.sh https://get.docker.com || { echo "Failed to download Docker installation script"; exit 1; }
+        echo "Installing Docker..."
+        wget -O /docker.sh https://get.docker.com || { echo "Failed to download Docker script"; exit 1; }
         chmod +x /docker.sh
         /docker.sh || { echo "Docker installation failed"; exit 1; }
         rm -f /docker.sh
-        sudo systemctl enable docker
-        sudo systemctl start docker
+        systemctl enable docker
+        systemctl start docker
     fi
 }
 
 # Check and install cron
 check_cron() {
     if ! command -v cron >/dev/null 2>&1; then
-        echo "Cron not found, installing..."
-        sudo apt update
-        sudo apt install -y cron
-        sudo systemctl enable cron
-        sudo systemctl start cron
+        echo "Installing cron..."
+        apt update
+        apt install -y cron
+        systemctl enable cron
+        systemctl start cron
     fi
 }
 
@@ -76,7 +76,6 @@ RUN apt-get update && apt-get install -y \
 COPY install_nexus.sh /install_nexus.sh
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /install_nexus.sh /entrypoint.sh
-
 RUN /install_nexus.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
@@ -90,9 +89,11 @@ set -x
 NEXUS_HOME="/root/.nexus"
 BIN_DIR="/root/.nexus/bin"
 TEMP_BINARY="/tmp/nexus-network"
+TEMP_SHA256="/tmp/nexus-network.sha256"
+BINARY_URL="$BINARY_URL"
+SHA256_URL="$SHA256_URL"
 RETRY_COUNT=$RETRY_COUNT
 RETRY_DELAY=$RETRY_DELAY
-FALLBACK_URL="$FALLBACK_URL"
 
 echo "Checking disk space..." >&2
 df -h /tmp >&2
@@ -123,33 +124,29 @@ fetch_binary() {
     exit 1
 }
 
-echo "Fetching latest Nexus CLI release URL..." >&2
-API_RESPONSE=\$(curl -s -w "\\n%{http_code}" --connect-timeout 20 --max-time 60 https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest 2>/tmp/api_error.log)
-HTTP_CODE=\$(echo "\$API_RESPONSE" | tail -n 1)
-API_BODY=\$(echo "\$API_RESPONSE" | sed '\$d')
-if [ -z "\$API_BODY" ]; then
-    echo "Error: Empty API response body" >&2
-    cat /tmp/api_error.log >&2
+fetch_sha256() {
+    local url=\$1
+    local attempt=1
+    while [ \$attempt -le \$RETRY_COUNT ]; do
+        echo "Attempt \$attempt: Downloading SHA256 from \$url..." >&2
+        if curl -L --connect-timeout 20 --max-time 120 -o "\$TEMP_SHA256" "\$url" 2>/tmp/sha256_error.log; then
+            return 0
+        else
+            echo "Download failed, retrying in \$RETRY_DELAY seconds..." >&2
+            cat /tmp/sha256_error.log >&2
+            sleep \$RETRY_DELAY
+            attempt=\$((attempt + 1))
+        fi
+    done
+    echo "Error: Failed to download SHA256 from \$url after \$RETRY_COUNT attempts" >&2
     exit 1
-fi
+}
 
-if [ "\$HTTP_CODE" -ne 200 ]; then
-    echo "Error: Failed to fetch GitHub API (HTTP \$HTTP_CODE)" >&2
-    echo "Response body:" >&2
-    echo "\$API_BODY" >&2
-    cat /tmp/api_error.log >&2
-    exit 1
-fi
+echo "Downloading Nexus CLI binary..." >&2
+fetch_binary "\$BINARY_URL"
 
-echo "Parsing API response with grep..." >&2
-LATEST_RELEASE_URL=\$(echo "\$API_BODY" | grep '"browser_download_url":.*nexus-network-linux-x86_64"' | head -n 1 | cut -d '"' -f 4)
-if [ -z "\$LATEST_RELEASE_URL" ]; then
-    echo "Warning: Could not parse binary URL, using fallback URL..." >&2
-    LATEST_RELEASE_URL="\$FALLBACK_URL"
-fi
-
-echo "Downloading Nexus CLI binary from \$LATEST_RELEASE_URL..." >&2
-fetch_binary "\$LATEST_RELEASE_URL"
+echo "Downloading SHA256 checksum..." >&2
+fetch_sha256 "\$SHA256_URL"
 
 if [ ! -s "\$TEMP_BINARY" ]; then
     echo "Error: Binary file \$TEMP_BINARY is empty or not found" >&2
@@ -158,6 +155,14 @@ fi
 
 echo "Verifying binary format..." >&2
 file "\$TEMP_BINARY" >&2
+
+echo "Verifying SHA256 checksum..." >&2
+EXPECTED_SHA256=\$(cat "\$TEMP_SHA256" | cut -d ' ' -f 1)
+ACTUAL_SHA256=\$(sha256sum "\$TEMP_BINARY" | cut -d ' ' -f 1)
+if [ "\$EXPECTED_SHA256" != "\$ACTUAL_SHA256" ]; then
+    echo "Error: SHA256 checksum mismatch. Expected: \$EXPECTED_SHA256, Actual: \$ACTUAL_SHA256" >&2
+    exit 1
+fi
 
 echo "Moving binary to \$BIN_DIR/nexus-network..." >&2
 mv "\$TEMP_BINARY" "\$BIN_DIR/nexus-network" || { echo "Error: Failed to move binary to \$BIN_DIR/nexus-network" >&2; exit 1; }
@@ -189,20 +194,17 @@ if [ -z "\$WALLET_ADDRESS" ]; then
     exit 1
 fi
 
-# Check basic network connectivity
 echo "Checking network connectivity..." >&2
 curl -s --head --connect-timeout 5 --max-time 10 https://www.google.com >/dev/null 2>&1 || {
-    echo "Warning: Cannot connect to https://www.google.com. Proceeding, but Nexus CLI may fail due to network issues." >&2
+    echo "Warning: Cannot connect to https://www.google.com. Proceeding, but Nexus CLI may fail." >&2
 }
 
-# Verify binary exists
 if [ ! -f "$NEXUS_BIN" ]; then
     echo "Error: Nexus CLI binary not found at $NEXUS_BIN" >&2
     ls -la /root/.nexus/bin >&2
     exit 1
 fi
 
-# Register user
 echo "Registering user with wallet address: \$WALLET_ADDRESS" >&2
 $NEXUS_BIN register-user --wallet-address "\$WALLET_ADDRESS" 2>>/root/nexus.log || {
     echo "Error: Failed to register user" >&2
@@ -210,7 +212,6 @@ $NEXUS_BIN register-user --wallet-address "\$WALLET_ADDRESS" 2>>/root/nexus.log 
     exit 1
 }
 
-# Register node
 echo "Registering new node..." >&2
 $NEXUS_BIN register-node 2>>/root/nexus.log || {
     echo "Error: Failed to register node" >&2
@@ -218,16 +219,14 @@ $NEXUS_BIN register-node 2>>/root/nexus.log || {
     exit 1
 }
 
-# Read Node ID from file
 NODE_ID=\$(cat "\$PROVER_ID_FILE" 2>/dev/null || echo "")
 if [ -z "\$NODE_ID" ]; then
-    echo "Error: Failed to retrieve Node ID after registration" >&2
+    echo "Error: Failed to retrieve Node ID" >&2
     tail -n 50 /root/nexus.log >&2
     exit 1
 fi
 echo "Using node-id: \$NODE_ID" >&2
 
-# Start node
 echo "Starting nexus-network node..." >&2
 $NEXUS_BIN start --node-id "\$NODE_ID" &>> /root/nexus.log || {
     echo "Error: Failed to start nexus-network node" >&2
@@ -237,9 +236,6 @@ $NEXUS_BIN start --node-id "\$NODE_ID" &>> /root/nexus.log || {
 
 echo "Node started in background." >&2
 echo "Log file: /root/nexus.log" >&2
-echo "Use 'docker logs \$CONTAINER_NAME' to view logs" >&2
-echo "Credentials saved at /root/.nexus/credentials.json" >&2
-
 tail -f /root/nexus.log
 EOF
 
@@ -270,7 +266,7 @@ remove_node() {
     uninstall_node "$node_id"
 }
 
-# Run container with log mounting and cron for log cleanup
+# Run container
 run_container() {
     local node_id=$1
     local wallet_address=$2
@@ -283,10 +279,8 @@ run_container() {
     fi
 
     mkdir -p "$LOG_DIR"
-    if [ ! -f "$log_file" ]; then
-        touch "$log_file"
-        chmod 644 "$log_file"
-    fi
+    touch "$log_file"
+    chmod 644 "$log_file"
 
     docker run -d --name "$container_name" \
         -v "$log_file":/root/nexus.log \
@@ -314,15 +308,15 @@ uninstall_node() {
     local cron_file="/etc/cron.d/nexus-log-cleanup${node_id:+-${node_id}}"
 
     echo "Stopping and removing container $container_name..."
-    docker rm -f "$container_name" 2>/dev/null || echo "Container not found or already stopped"
+    docker rm -f "$container_name" 2>/dev/null || echo "Container not found"
 
-    [ -f "$log_file" ] && { echo "Removing log file $log_file..."; rm -f "$log_file"; } || echo "Log file not found: $log_file"
-    [ -f "$cron_file" ] && { echo "Removing cron job $cron_file..."; rm -f "$cron_file"; } || echo "Cron job not found: $cron_file"
+    [ -f "$log_file" ] && { echo "Removing log file $log_file..."; rm -f "$log_file"; }
+    [ -f "$cron_file" ] && { echo "Removing cron job $cron_file..."; rm -f "$cron_file"; }
 
     echo "Node ${node_id:-default} uninstalled."
 }
 
-# Parse command-line arguments
+# Parse arguments
 REMOVE_NODE=false
 while getopts "r" opt; do
     case $opt in
