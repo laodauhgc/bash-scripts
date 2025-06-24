@@ -74,13 +74,8 @@ command -v rustc >/dev/null 2>&1 || {
 
 # Install Nexus CLI with auto-agree to Terms of Use
 echo "Installing Nexus Network CLI..."
-curl -sSf "$CLI_URL" | sh -s -- -y
+echo Y | curl -sSf "$CLI_URL" | sh
 source "$HOME/.bashrc" || source "$HOME/.zshrc" || true
-
-# Check Nexus CLI installation
-command -v nexus-network >/dev/null 2>&1 || {
-    echo "Nexus CLI not found. Attempting to proceed..."
-}
 
 # Configure Nexus CLI
 echo "Registering with Wallet Address: $WALLET_ADDRESS"
