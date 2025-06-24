@@ -1,13 +1,13 @@
 #!/bin/bash
 set -e
 
-# Nexus Node Manager v1.2
+# Nexus Node Manager v1.3
 # Manages Nexus nodes in Docker containers, aligned with official Nexus CLI installation
 # Supports Wallet Address (mandatory) and Node ID (optional, auto-generated if not provided)
-# Fixes network check to avoid container exit and removes nslookup dependency
+# Fixes binary installation issue and log error handling
 
 # Variables
-VERSION="1.2"
+VERSION="1.3"
 BASE_CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
 LOG_DIR="/root/nexus_logs"
@@ -87,16 +87,32 @@ set -e
 
 NEXUS_HOME="/root/.nexus"
 BIN_DIR="/root/.nexus/bin"
-LATEST_RELEASE_URL=\$(curl -s https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest | grep "browser_download_url" | grep "nexus-network-linux-x86_64\"" | cut -d '"' -f 4)
+echo "Fetching latest Nexus CLI release URL..." >&2
+LATEST_RELEASE_URL=\$(curl -s --connect-timeout 10 --max-time 30 https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest | grep "browser_download_url" | grep "nexus-network-linux-x86_64\"" | cut -d '"' -f 4)
 
 if [ -z "\$LATEST_RELEASE_URL" ]; then
-    echo "Could not find precompiled binary for linux-x86_64" >&2
+    echo "Error: Could not find precompiled binary for linux-x86_64" >&2
+    echo "GitHub API response:" >&2
+    curl -s https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest >&2
     exit 1
 fi
 
-echo "Downloading latest Nexus CLI binary..." >&2
-curl -L -o "\$BIN_DIR/nexus-network" "\$LATEST_RELEASE_URL" || { echo "Failed to download binary" >&2; exit 1; }
+echo "Downloading Nexus CLI binary from \$LATEST_RELEASE_URL..." >&2
+curl -L --connect-timeout 10 --max-time 60 -o "\$BIN_DIR/nexus-network" "\$LATEST_RELEASE_URL" || {
+    echo "Error: Failed to download binary from \$LATEST_RELEASE_URL" >&2
+    exit 1
+}
+
+if [ ! -f "\$BIN_DIR/nexus-network" ]; then
+    echo "Error: Binary file \$BIN_DIR/nexus-network not found after download" >&2
+    exit 1
+fi
+
 chmod +x "\$BIN_DIR/nexus-network"
+if [ ! -x "\$BIN_DIR/nexus-network" ]; then
+    echo "Error: Binary file \$BIN_DIR/nexus-network is not executable" >&2
+    exit 1
+fi
 
 echo "Nexus CLI installed successfully" >&2
 EOF
@@ -117,23 +133,29 @@ fi
 
 # Check basic network connectivity
 echo "Checking network connectivity..." >&2
-curl -s --head https://www.google.com >/dev/null 2>&1 || {
+curl -s --head --connect-timeout 5 --max-time 10 https://www.google.com >/dev/null 2>&1 || {
     echo "Warning: Cannot connect to https://www.google.com. Proceeding, but Nexus CLI may fail due to network issues." >&2
 }
 
+# Verify binary exists
+if [ ! -f "$NEXUS_BIN" ]; then
+    echo "Error: Nexus CLI binary not found at $NEXUS_BIN" >&2
+    exit 1
+fi
+
 # Register user
 echo "Registering user with wallet address: \$WALLET_ADDRESS" >&2
-/root/.nexus/bin/nexus-network register-user --wallet-address "\$WALLET_ADDRESS" || {
+$NEXUS_BIN register-user --wallet-address "\$WALLET_ADDRESS" 2>>/root/nexus.log || {
     echo "Error: Failed to register user" >&2
-    cat /root/nexus.log >&2
+    tail -n 50 /root/nexus.log >&2
     exit 1
 }
 
 # Register node
 echo "Registering new node..." >&2
-/root/.nexus/bin/nexus-network register-node || {
+$NEXUS_BIN register-node 2>>/root/nexus.log || {
     echo "Error: Failed to register node" >&2
-    cat /root/nexus.log >&2
+    tail -n 50 /root/nexus.log >&2
     exit 1
 }
 
@@ -141,16 +163,16 @@ echo "Registering new node..." >&2
 NODE_ID=\$(cat "\$PROVER_ID_FILE" 2>/dev/null || echo "")
 if [ -z "\$NODE_ID" ]; then
     echo "Error: Failed to retrieve Node ID after registration" >&2
-    cat /root/nexus.log >&2
+    tail -n 50 /root/nexus.log >&2
     exit 1
 fi
 echo "Using node-id: \$NODE_ID" >&2
 
 # Start node
 echo "Starting nexus-network node..." >&2
-/root/.nexus/bin/nexus-network start --node-id "\$NODE_ID" &>> /root/nexus.log || {
+$NEXUS_BIN start --node-id "\$NODE_ID" &>> /root/nexus.log || {
     echo "Error: Failed to start nexus-network node" >&2
-    cat /root/nexus.log >&2
+    tail -n 50 /root/nexus.log >&2
     exit 1
 }
 
