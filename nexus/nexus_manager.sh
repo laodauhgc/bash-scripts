@@ -1,20 +1,20 @@
 #!/bin/bash
 set -e
 
-# Nexus Node Manager v2.8
+# Nexus Node Manager v2.9
 # Installs and removes Nexus nodes in Docker containers, aligned with official Nexus CLI
 # Supports Wallet Address (mandatory for install) and Node ID (optional, auto-generated if not provided)
-# Fixes binary installation with fallback URL, exhaustive logging, and simplified parsing
+# Fixes binary installation with simplified parsing, increased retries, and exhaustive logging
 
 # Variables
-VERSION="2.8"
+VERSION="2.9"
 BASE_CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
 LOG_DIR="/root/nexus_logs"
 INSTALL_DIR="/root/.nexus"
 NEXUS_BIN="/root/.nexus/bin/nexus-network"
 FALLBACK_URL="https://github.com/nexus-xyz/nexus-cli/releases/download/v0.8.11/nexus-network-linux-x86_64"
-RETRY_COUNT=3
+RETRY_COUNT=5
 RETRY_DELAY=5
 
 # Function to validate Wallet Address (Ethereum address format)
@@ -147,9 +147,9 @@ if [ "\$HTTP_CODE" -ne 200 ]; then
 fi
 
 echo "Parsing API response with grep..." >&2
-LATEST_RELEASE_URL=\$(echo "\$API_BODY" | grep -o '"browser_download_url":"[^"]*nexus-network-linux-x86_64"' | cut -d '"' -f 4)
+LATEST_RELEASE_URL=\$(echo "\$API_BODY" | grep '"browser_download_url":.*nexus-network-linux-x86_64"' | head -n 1 | cut -d '"' -f 4)
 if [ -z "\$LATEST_RELEASE_URL" ]; then
-    echo "Warning: Could not find precompiled binary for linux-x86_64, using fallback URL..." >&2
+    echo "Warning: Could not parse binary URL, using fallback URL..." >&2
     LATEST_RELEASE_URL="\$FALLBACK_URL"
 fi
 
