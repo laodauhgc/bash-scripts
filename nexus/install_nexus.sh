@@ -4,6 +4,7 @@
 INSTALL_DIR="$HOME/.nexus"
 CLI_URL="https://cli.nexus.xyz/"
 SERVICE_NAME="nexus-network"
+NEXUS_BIN="$INSTALL_DIR/bin/nexus-network"
 
 # Function to validate Node ID (numeric)
 validate_node_id() {
@@ -37,7 +38,7 @@ if [ "$REMOVE_NODE" = true ]; then
     sudo rm -f /etc/systemd/system/$SERVICE_NAME.service
     sudo systemctl daemon-reload
     rm -rf "$INSTALL_DIR"
-    nexus-network logout 2>/dev/null || true
+    "$NEXUS_BIN" logout 2>/dev/null || true
     echo "Node removed. Credentials and data cleared."
     exit 0
 fi
@@ -77,11 +78,17 @@ echo "Installing Nexus Network CLI..."
 echo Y | curl -sSf "$CLI_URL" | sh
 source "$HOME/.bashrc" || source "$HOME/.zshrc" || true
 
-# Configure Nexus CLI
+# Check if Nexus binary exists
+if [ ! -f "$NEXUS_BIN" ]; then
+    echo "Nexus CLI binary not found at $NEXUS_BIN. Installation may have failed. Aborting."
+    exit 1
+fi
+
+# Configure Nexus CLI using direct binary path
 echo "Registering with Wallet Address: $WALLET_ADDRESS"
-nexus-network register-user --wallet-address "$WALLET_ADDRESS" || { echo "Failed to register user. Aborting."; exit 1; }
-nexus-network register-node || { echo "Failed to register node. Aborting."; exit 1; }
-START_CMD="nexus-network start --node-id $NODE_ID"
+"$NEXUS_BIN" register-user --wallet-address "$WALLET_ADDRESS" || { echo "Failed to register user. Aborting."; exit 1; }
+"$NEXUS_BIN" register-node || { echo "Failed to register node. Aborting."; exit 1; }
+START_CMD="$NEXUS_BIN start --node-id $NODE_ID"
 
 # Create systemd service
 echo "Setting up systemd service..."
