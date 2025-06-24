@@ -1,13 +1,13 @@
 #!/bin/bash
 set -e
 
-# Nexus Node Manager v2.4
+# Nexus Node Manager v2.5
 # Installs and removes Nexus nodes in Docker containers, aligned with official Nexus CLI
 # Supports Wallet Address (mandatory for install) and Node ID (optional, auto-generated if not provided)
-# Fixes sed syntax error in install_nexus.sh
+# Fixes binary installation with detailed logging and SHA256 verification
 
 # Variables
-VERSION="2.4"
+VERSION="2.5"
 BASE_CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
 LOG_DIR="/root/nexus_logs"
@@ -71,7 +71,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/* \
     && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
     && . /root/.cargo/env \
-    && mkdir -p \$NEXUS_HOME \$BIN_DIR
+    && mkdir -p \$NEXUS_HOME \$BIN_DIR \
+    && chmod 755 \$NEXUS_HOME \$BIN_DIR
 
 COPY install_nexus.sh /install_nexus.sh
 COPY entrypoint.sh /entrypoint.sh
@@ -89,14 +90,17 @@ set -e
 
 NEXUS_HOME="/root/.nexus"
 BIN_DIR="/root/.nexus/bin"
-echo "Fetching latest Nexus CLI release URL..." >&2
-API_RESPONSE=\$(curl -s -w "\\n%{http_code}" --connect-timeout 15 --max-time 45 https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest 2>/tmp/api_error.log)
-if [ \$? -ne 0 ]; then
-    echo "Error: Failed to fetch GitHub API" >&2
-    cat /tmp/api_error.log >&2
+TEMP_BINARY="/tmp/nexus-network"
+
+echo "Verifying directory \$BIN_DIR..." >&2
+ls -ld "\$BIN_DIR" >&2
+if [ ! -w "\$BIN_DIR" ]; then
+    echo "Error: Directory \$BIN_DIR is not writable" >&2
     exit 1
 fi
 
+echo "Fetching latest Nexus CLI release URL..." >&2
+API_RESPONSE=\$(curl -s -w "\\n%{http_code}" --connect-timeout 15 --max-time 45 https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest 2>/tmp/api_error.log)
 HTTP_CODE=\$(echo "\$API_RESPONSE" | tail -n 1)
 API_BODY=\$(echo "\$API_RESPONSE" | sed '\$d')
 if [ -z "\$API_BODY" ]; then
@@ -109,10 +113,18 @@ if [ "\$HTTP_CODE" -ne 200 ]; then
     echo "Error: Failed to fetch GitHub API (HTTP \$HTTP_CODE)" >&2
     echo "Response body:" >&2
     echo "\$API_BODY" >&2
+    cat /tmp/api_error.log >&2
     exit 1
 fi
 
-LATEST_RELEASE_URL=\$(echo "\$API_BODY" | jq -r '.assets[] | select(.name == "nexus-network-linux-x86_64") | .browser_download_url')
+echo "Parsing API response with jq..." >&2
+LATEST_RELEASE_URL=\$(echo "\$API_BODY" | jq -r '.assets[] | select(.name == "nexus-network-linux-x86_64") | .browser_download_url' 2>/tmp/jq_error.log)
+if [ \$? -ne 0 ]; then
+    echo "Error: jq failed to parse API response" >&2
+    cat /tmp/jq_error.log >&2
+    exit 1
+fi
+
 if [ -z "\$LATEST_RELEASE_URL" ]; then
     echo "Error: Could not find precompiled binary for linux-x86_64" >&2
     echo "GitHub API response:" >&2
@@ -121,18 +133,26 @@ if [ -z "\$LATEST_RELEASE_URL" ]; then
 fi
 
 echo "Downloading Nexus CLI binary from \$LATEST_RELEASE_URL..." >&2
-curl -L --connect-timeout 15 --max-time 90 -o "\$BIN_DIR/nexus-network" "\$LATEST_RELEASE_URL" 2>/tmp/download_error.log || {
+curl -L --connect-timeout 15 --max-time 90 -o "\$TEMP_BINARY" "\$LATEST_RELEASE_URL" 2>/tmp/download_error.log || {
     echo "Error: Failed to download binary from \$LATEST_RELEASE_URL" >&2
     cat /tmp/download_error.log >&2
     exit 1
 }
 
-if [ ! -s "\$BIN_DIR/nexus-network" ]; then
-    echo "Error: Binary file \$BIN_DIR/nexus-network is empty or not found" >&2
+if [ ! -s "\$TEMP_BINARY" ]; then
+    echo "Error: Binary file \$TEMP_BINARY is empty or not found" >&2
     exit 1
 fi
 
-file "\$BIN_DIR/nexus-network" >&2
+echo "Verifying binary format..." >&2
+file "\$TEMP_BINARY" >&2
+
+echo "Moving binary to \$BIN_DIR/nexus-network..." >&2
+mv "\$TEMP_BINARY" "\$BIN_DIR/nexus-network" || {
+    echo "Error: Failed to move binary to \$BIN_DIR/nexus-network" >&2
+    exit 1
+}
+
 chmod +x "\$BIN_DIR/nexus-network"
 if [ ! -x "\$BIN_DIR/nexus-network" ]; then
     echo "Error: Binary file \$BIN_DIR/nexus-network is not executable" >&2
@@ -257,6 +277,7 @@ run_container() {
     fi
 
     mkdir -p "$INSTALL_DIR"
+    chmod 755 "$INSTALL_DIR"
     docker run -d --name "$container_name" \
         -v "$log_file":/root/nexus.log \
         -v "$INSTALL_DIR":/root/.nexus \
