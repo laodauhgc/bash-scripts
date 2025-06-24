@@ -1,13 +1,18 @@
 #!/bin/bash
 set -e
 
+# Nexus Node Manager v1.0
+# Manages Nexus nodes in Docker containers, aligned with official Nexus CLI installation
+# Supports Wallet Address (mandatory) and Node ID (optional, auto-generated if not provided)
+
 # Variables
+VERSION="1.0"
 BASE_CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
 LOG_DIR="/root/nexus_logs"
 INSTALL_DIR="/root/.nexus"
 NEXUS_BIN="/root/.nexus/bin/nexus-network"
-SERVICE_NAME="nexus-network"
+TIMESTAMP=$(date +%s)
 
 # Function to validate Wallet Address (Ethereum address format)
 validate_wallet_address() {
@@ -55,66 +60,112 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PROVER_ID_FILE=/root/.nexus/node-id
+ENV NEXUS_HOME=/root/.nexus
+ENV BIN_DIR=/root/.nexus/bin
 
 RUN apt-get update && apt-get install -y \
-    curl build-essential pkg-config libssl-dev git protobuf-compiler \
+    curl build-essential pkg-config libssl-dev git protobuf-compiler ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
     && . /root/.cargo/env \
-    && echo Y | curl -sSL https://cli.nexus.xyz/ | sh \
-    && ln -sf /root/.nexus/bin/nexus-network /usr/local/bin/nexus-network
+    && mkdir -p \$NEXUS_HOME \$BIN_DIR
 
+COPY install_nexus.sh /install_nexus.sh
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN chmod +x /install_nexus.sh /entrypoint.sh
+
+RUN /install_nexus.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
+EOF
+
+    # Nexus CLI installation script (adapted from official script)
+    cat > install_nexus.sh <<EOF
+#!/bin/bash
+set -e
+
+NEXUS_HOME="/root/.nexus"
+BIN_DIR="/root/.nexus/bin"
+LATEST_RELEASE_URL=\$(curl -s https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest | grep "browser_download_url" | grep "nexus-network-linux-x86_64\"" | cut -d '"' -f 4)
+
+if [ -z "\$LATEST_RELEASE_URL" ]; then
+    echo "Could not find precompiled binary for linux-x86_64" >&2
+    exit 1
+fi
+
+echo "Downloading latest Nexus CLI binary..." >&2
+curl -L -o "\$BIN_DIR/nexus-network" "\$LATEST_RELEASE_URL" || { echo "Failed to download binary" >&2; exit 1; }
+chmod +x "\$BIN_DIR/nexus-network"
+
+echo "Nexus CLI installed successfully" >&2
 EOF
 
     cat > entrypoint.sh <<EOF
 #!/bin/bash
 set -e
 
+exec 2>>/root/nexus.log
+echo "Container started at \$(date)" >&2
+
 PROVER_ID_FILE="/root/.nexus/node-id"
 
 if [ -z "\$WALLET_ADDRESS" ]; then
-    echo "Error: WALLET_ADDRESS environment variable must be set"
+    echo "Error: WALLET_ADDRESS environment variable must be set" >&2
     exit 1
 fi
 
 # Check network connectivity
+echo "Checking network connectivity..." >&2
 ping -c 1 beta.orchestrator.nexus.xyz >/dev/null 2>&1 || {
-    echo "Error: Cannot connect to Nexus server (beta.orchestrator.nexus.xyz). Check network, DNS, or firewall."
+    echo "Error: Cannot ping Nexus server (beta.orchestrator.nexus.xyz). Checking DNS..." >&2
+    nslookup beta.orchestrator.nexus.xyz >&2 || {
+        echo "Error: DNS resolution failed for beta.orchestrator.nexus.xyz" >&2
+        exit 1
+    }
+    exit 1
+}
+curl -s --head https://beta.orchestrator.nexus.xyz >/dev/null 2>&1 || {
+    echo "Error: Cannot connect to Nexus server via HTTPS (beta.orchestrator.nexus.xyz)" >&2
     exit 1
 }
 
 # Register user
-echo "Registering user with wallet address: \$WALLET_ADDRESS"
+echo "Registering user with wallet address: \$WALLET_ADDRESS" >&2
 /root/.nexus/bin/nexus-network register-user --wallet-address "\$WALLET_ADDRESS" || {
-    echo "Error: Failed to register user"
+    echo "Error: Failed to register user" >&2
+    cat /root/nexus.log >&2
     exit 1
 }
 
 # Register node
-echo "Registering new node..."
+echo "Registering new node..." >&2
 /root/.nexus/bin/nexus-network register-node || {
-    echo "Error: Failed to register node"
+    echo "Error: Failed to register node" >&2
+    cat /root/nexus.log >&2
     exit 1
 }
 
 # Read Node ID from file
 NODE_ID=\$(cat "\$PROVER_ID_FILE" 2>/dev/null || echo "")
 if [ -z "\$NODE_ID" ]; then
-    echo "Error: Failed to retrieve Node ID after registration"
+    echo "Error: Failed to retrieve Node ID after registration" >&2
+    cat /root/nexus.log >&2
     exit 1
 fi
-echo "Using node-id: \$NODE_ID"
+echo "Using node-id: \$NODE_ID" >&2
 
-echo "Starting nexus-network node..."
-/root/.nexus/bin/nexus-network start --node-id "\$NODE_ID" &>> /root/nexus.log &
+# Start node
+echo "Starting nexus-network node..." >&2
+/root/.nexus/bin/nexus-network start --node-id "\$NODE_ID" &>> /root/nexus.log || {
+    echo "Error: Failed to start nexus-network node" >&2
+    cat /root/nexus.log >&2
+    exit 1
+}
 
-echo "Node started in background."
-echo "Log file: /root/nexus.log"
-echo "Use 'docker logs \$CONTAINER_NAME' to view logs"
+echo "Node started in background." >&2
+echo "Log file: /root/nexus.log" >&2
+echo "Use 'docker logs \$CONTAINER_NAME' to view logs" >&2
+echo "Credentials saved at /root/.nexus/credentials.json" >&2
 
 tail -f /root/nexus.log
 EOF
@@ -128,8 +179,8 @@ EOF
 run_container() {
     local node_id=$1
     local wallet_address=$2
-    local container_name="${BASE_CONTAINER_NAME}-${node_id:-new}"
-    local log_file="${LOG_DIR}/nexus-${node_id:-new}.log"
+    local container_name="${BASE_CONTAINER_NAME}${node_id:+-${node_id}}"
+    local log_file="${LOG_DIR}/nexus${node_id:+-${node_id}}.log"
 
     if docker ps -a --format '{{.Names}}' | grep -qw "$container_name"; then
         echo "Removing old container $container_name..."
@@ -142,28 +193,32 @@ run_container() {
         chmod 644 "$log_file"
     fi
 
+    # Mount credentials directory to persist across container restarts
+    mkdir -p "$INSTALL_DIR"
     docker run -d --name "$container_name" \
         -v "$log_file":/root/nexus.log \
+        -v "$INSTALL_DIR":/root/.nexus \
         -e WALLET_ADDRESS="$wallet_address" \
         -e NODE_ID="$node_id" \
+        -e CONTAINER_NAME="$container_name" \
         "$IMAGE_NAME"
     echo "Container $container_name started!"
 
     check_cron
     local cron_job="0 0 * * * rm -f $log_file"
-    local cron_file="/etc/cron.d/nexus-log-cleanup-${node_id:-new}"
+    local cron_file="/etc/cron.d/nexus-log-cleanup${node_id:+-${node_id}}"
     [ -f "$cron_file" ] && rm -f "$cron_file"
     echo "$cron_job" > "$cron_file"
     chmod 0644 "$cron_file"
-    echo "Set daily log cleanup cron job for node ${node_id:-new}"
+    echo "Set daily log cleanup cron job for node ${node_id:-default}"
 }
 
 # Uninstall node
 uninstall_node() {
     local node_id=$1
-    local container_name="${BASE_CONTAINER_NAME}-${node_id}"
-    local log_file="${LOG_DIR}/nexus-${node_id}.log"
-    local cron_file="/etc/cron.d/nexus-log-cleanup-${node_id}"
+    local container_name="${BASE_CONTAINER_NAME}${node_id:+-${node_id}}"
+    local log_file="${LOG_DIR}/nexus${node_id:+-${node_id}}.log"
+    local cron_file="/etc/cron.d/nexus-log-cleanup${node_id:+-${node_id}}"
 
     echo "Stopping and removing container $container_name..."
     docker rm -f "$container_name" 2>/dev/null || echo "Container not found or already stopped"
@@ -171,7 +226,7 @@ uninstall_node() {
     [ -f "$log_file" ] && { echo "Removing log file $log_file..."; rm -f "$log_file"; } || echo "Log file not found: $log_file"
     [ -f "$cron_file" ] && { echo "Removing cron job $cron_file..."; rm -f "$cron_file"; } || echo "Cron job not found: $cron_file"
 
-    echo "Node $node_id uninstalled."
+    echo "Node ${node_id:-default} uninstalled."
 }
 
 # List all nodes
@@ -184,7 +239,7 @@ list_nodes() {
     local all_nodes=($(get_all_nodes))
     for i in "${!all_nodes[@]}"; do
         local node_id=${all_nodes[$i]}
-        local container_name="${BASE_CONTAINER_NAME}-${node_id}"
+        local container_name="${BASE_CONTAINER_NAME}${node_id:+-${node_id}}"
         local container_info=$(docker stats --no-stream --format "{{.CPUPerc}},{{.MemUsage}}" "$container_name" 2>/dev/null)
 
         if [ -n "$container_info" ]; then
@@ -192,12 +247,12 @@ list_nodes() {
             local status=$(docker ps -a --filter "name=$container_name" --format "{{.Status}}")
             local created_time=$(docker ps -a --filter "name=$container_name" --format "{{.CreatedAt}}")
             printf "%-6d %-20s %-10s %-15s %-15s %-15s %-20s\n" \
-                $((i+1)) "$node_id" "$cpu_usage" "$mem_usage" "N/A" "$(echo "$status" | cut -d' ' -f1)" "$created_time"
+                $((i+1)) "${node_id:-default}" "$cpu_usage" "$mem_usage" "N/A" "$(echo "$status" | cut -d' ' -f1)" "$created_time"
         else
             local status=$(docker ps -a --filter "name=$container_name" --format "{{.Status}}")
             local created_time=$(docker ps -a --filter "name=$container_name" --format "{{.CreatedAt}}")
             [ -n "$status" ] && printf "%-6d %-20s %-10s %-15s %-15s %-15s %-20s\n" \
-                $((i+1)) "$node_id" "N/A" "N/A" "N/A" "$(echo "$status" | cut -d' ' -f1)" "$created_time"
+                $((i+1)) "${node_id:-default}" "N/A" "N/A" "N/A" "$(echo "$status" | cut -d' ' -f1)" "$created_time"
         fi
     done
     echo "----------------------------------------------------------------------------------------------------------------------"
@@ -211,13 +266,13 @@ list_nodes() {
 
 # Get all node IDs
 get_all_nodes() {
-    docker ps -a --filter "name=${BASE_CONTAINER_NAME}" --format "{{.Names}}" | sed "s/${BASE_CONTAINER_NAME}-//"
+    docker ps -a --filter "name=${BASE_CONTAINER_NAME}" --format "{{.Names}}" | sed "s/${BASE_CONTAINER_NAME}\(-*\)//"
 }
 
 # View node logs
 view_node_logs() {
     local node_id=$1
-    local container_name="${BASE_CONTAINER_NAME}-${node_id}"
+    local container_name="${BASE_CONTAINER_NAME}${node_id:+-${node_id}}"
 
     if docker ps -a --format '{{.Names}}' | grep -qw "$container_name"; then
         echo "Select log viewing mode:"
@@ -283,12 +338,12 @@ select_node_to_view() {
     echo "0. Return to main menu"
     for i in "${!all_nodes[@]}"; do
         local node_id=${all_nodes[$i]}
-        local container_name="${BASE_CONTAINER_NAME}-${node_id}"
+        local container_name="${BASE_CONTAINER_NAME}${node_id:+-${node_id}}"
         local status=$(docker ps -a --filter "name=$container_name" --format "{{.Status}}")
         if [[ $status == Up* ]]; then
-            echo "$((i+1)). Node $node_id [Running]"
+            echo "$((i+1)). Node ${node_id:-default} [Running]"
         else
-            echo "$((i+1)). Node $node_id [Stopped]"
+            echo "$((i+1)). Node ${node_id:-default} [Stopped]"
         fi
     done
 
@@ -321,12 +376,12 @@ batch_uninstall_nodes() {
     echo "----------------------------------------"
     for i in "${!all_nodes[@]}"; do
         local node_id=${all_nodes[$i]}
-        local container_name="${BASE_CONTAINER_NAME}-${node_id}"
+        local container_name="${BASE_CONTAINER_NAME}${node_id:+-${node_id}}"
         local status=$(docker ps -a --filter "name=$container_name" --format "{{.Status}}")
         if [[ $status == Up* ]]; then
-            printf "%-4d %-20s [Running]\n" $((i+1)) "$node_id"
+            printf "%-4d %-20s [Running]\n" $((i+1)) "${node_id:-default}"
         else
-            printf "%-4d %-20s [Stopped]\n" $((i+1)) "$node_id"
+            printf "%-4d %-20s [Stopped]\n" $((i+1)) "${node_id:-default}"
         fi
     done
     echo "----------------------------------------"
@@ -364,7 +419,7 @@ uninstall_all_nodes() {
     echo "WARNING: This will uninstall ALL nodes!"
     echo "Total nodes: ${#all_nodes[@]}"
     for node_id in "${all_nodes[@]}"; do
-        echo "- $node_id"
+        echo "- ${node_id:-default}"
     done
 
     read -rp "Confirm deletion of all nodes? (y/N): " confirm
@@ -376,7 +431,7 @@ uninstall_all_nodes() {
 
     echo "Uninstalling all nodes..."
     for node_id in "${all_nodes[@]}"; do
-        echo "Uninstalling node $node_id..."
+        echo "Uninstalling node ${node_id:-default}..."
         uninstall_node "$node_id"
     done
 
@@ -395,7 +450,7 @@ if [ $# -eq 1 ]; then
         run_container "" "$WALLET_ADDRESS"
         exit 0
     else
-        echo "Invalid Wallet Address. Usage: $0 <WALLET_ADDRESS>"
+        echo "Invalid Wallet Address. Usage: $0 [<NODE_ID>] <WALLET_ADDRESS>"
         exit 1
     fi
 elif [ $# -eq 2 ]; then
@@ -417,7 +472,7 @@ fi
 # Main menu
 while true; do
     clear
-    echo "Nexus Node Manager"
+    echo "Nexus Node Manager v$VERSION"
     echo "==================================="
     echo "1. Install and start new node"
     echo "2. List all node statuses"
