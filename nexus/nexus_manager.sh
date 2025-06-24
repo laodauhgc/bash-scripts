@@ -1,13 +1,13 @@
 #!/bin/bash
 set -e
 
-# Nexus Node Manager v2.2
+# Nexus Node Manager v2.3
 # Installs and removes Nexus nodes in Docker containers, aligned with official Nexus CLI
 # Supports Wallet Address (mandatory for install) and Node ID (optional, auto-generated if not provided)
-# Fixes binary installation issue with improved logging and no-cache build
+# Fixes binary installation with no-cache build, improved logging, and cache cleanup
 
 # Variables
-VERSION="2.2"
+VERSION="2.3"
 BASE_CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
 LOG_DIR="/root/nexus_logs"
@@ -52,6 +52,9 @@ check_cron() {
 
 # Build Docker image
 build_image() {
+    # Remove old image to ensure no cache
+    docker rmi -f "$IMAGE_NAME" 2>/dev/null || true
+
     WORKDIR=$(mktemp -d)
     cd "$WORKDIR"
 
@@ -64,7 +67,7 @@ ENV NEXUS_HOME=/root/.nexus
 ENV BIN_DIR=/root/.nexus/bin
 
 RUN apt-get update && apt-get install -y \
-    curl build-essential pkg-config libssl-dev git protobuf-compiler ca-certificates jq \
+    curl build-essential pkg-config libssl-dev git protobuf-compiler ca-certificates jq file \
     && rm -rf /var/lib/apt/lists/* \
     && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
     && . /root/.cargo/env \
@@ -87,23 +90,26 @@ set -e
 NEXUS_HOME="/root/.nexus"
 BIN_DIR="/root/.nexus/bin"
 echo "Fetching latest Nexus CLI release URL..." >&2
-API_RESPONSE=\$(curl -s --connect-timeout 10 --max-time 30 https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest 2>/tmp/api_error.log)
-if [ \$? -ne 0 ]; then
-    echo "Error: Failed to fetch GitHub API" >&2
+API_RESPONSE=\$(curl -s -w "%{http_code}" --connect-timeout 15 --max-time 45 https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest 2>/tmp/api_error.log)
+HTTP_CODE=\$(echo "\$API_RESPONSE" | tail -n 1)
+API_BODY=\$(echo "\$API_RESPONSE" | sed \$d)
+
+if [ "\$HTTP_CODE" -ne 200 ]; then
+    echo "Error: Failed to fetch GitHub API (HTTP \$HTTP_CODE)" >&2
     cat /tmp/api_error.log >&2
     exit 1
 fi
 
-LATEST_RELEASE_URL=\$(echo "\$API_RESPONSE" | jq -r '.assets[] | select(.name == "nexus-network-linux-x86_64") | .browser_download_url')
+LATEST_RELEASE_URL=\$(echo "\$API_BODY" | jq -r '.assets[] | select(.name == "nexus-network-linux-x86_64") | .browser_download_url')
 if [ -z "\$LATEST_RELEASE_URL" ]; then
     echo "Error: Could not find precompiled binary for linux-x86_64" >&2
     echo "GitHub API response:" >&2
-    echo "\$API_RESPONSE" >&2
+    echo "\$API_BODY" >&2
     exit 1
 fi
 
 echo "Downloading Nexus CLI binary from \$LATEST_RELEASE_URL..." >&2
-curl -L --connect-timeout 10 --max-time 60 -o "\$BIN_DIR/nexus-network" "\$LATEST_RELEASE_URL" 2>/tmp/download_error.log || {
+curl -L --connect-timeout 15 --max-time 90 -o "\$BIN_DIR/nexus-network" "\$LATEST_RELEASE_URL" 2>/tmp/download_error.log || {
     echo "Error: Failed to download binary from \$LATEST_RELEASE_URL" >&2
     cat /tmp/download_error.log >&2
     exit 1
@@ -114,6 +120,7 @@ if [ ! -s "\$BIN_DIR/nexus-network" ]; then
     exit 1
 fi
 
+file "\$BIN_DIR/nexus-network" >&2
 chmod +x "\$BIN_DIR/nexus-network"
 if [ ! -x "\$BIN_DIR/nexus-network" ]; then
     echo "Error: Binary file \$BIN_DIR/nexus-network is not executable" >&2
@@ -126,6 +133,7 @@ EOF
     cat > entrypoint.sh <<EOF
 #!/bin/bash
 set -e
+set -x
 
 exec 2>>/root/nexus.log
 echo "Container started at \$(date)" >&2
@@ -146,6 +154,7 @@ curl -s --head --connect-timeout 5 --max-time 10 https://www.google.com >/dev/nu
 # Verify binary exists
 if [ ! -f "$NEXUS_BIN" ]; then
     echo "Error: Nexus CLI binary not found at $NEXUS_BIN" >&2
+    ls -la /root/.nexus/bin >&2
     exit 1
 fi
 
