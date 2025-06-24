@@ -1,32 +1,30 @@
 #!/bin/bash
 set -e
 
-# Nexus Node Manager v2.9
+# Nexus Node Manager v2.10
 # Installs and removes Nexus nodes in Docker containers, aligned with official Nexus CLI
 # Supports Wallet Address (mandatory for install) and Node ID (optional, auto-generated if not provided)
-# Fixes binary installation with simplified parsing, increased retries, and exhaustive logging
+# Fixes binary installation by removing host volume mount and ensuring binary persistence in image
 
 # Variables
-VERSION="2.9"
+VERSION="2.10"
 BASE_CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
 LOG_DIR="/root/nexus_logs"
-INSTALL_DIR="/root/.nexus"
-NEXUS_BIN="/root/.nexus/bin/nexus-network"
+NEXUS_HOME="/root/.nexus"
+NEXUS_BIN="$NEXUS_HOME/bin/nexus-network"
 FALLBACK_URL="https://github.com/nexus-xyz/nexus-cli/releases/download/v0.8.11/nexus-network-linux-x86_64"
 RETRY_COUNT=5
 RETRY_DELAY=5
 
 # Function to validate Wallet Address (Ethereum address format)
 validate_wallet_address() {
-    [[ "$1" =~ ^0x[a-fA-F0-9]{40}$ ]] || { echo "Invalid Wallet Address: Must be a valid Ethereum address (e.g., 0x238a3a4ff431De579885D4cE0297af7A0d3a1b32)"; return 1; }
-    return 0
+    [[ "$1" =~ ^0x[a-fA-F0-9]{40}$ ]] || { echo "Invalid Wallet Address: Must be a valid Ethereum address (e.g., 0x238a3a4ff431De579885D4cE0297af7A0d3a1b32)"; exit 1; }
 }
 
 # Function to validate Node ID (if provided, must be numeric)
 validate_node_id() {
-    [[ -z "$1" || "$1" =~ ^[0-9]+$ ]] || { echo "Invalid Node ID: Must be numeric (e.g., 7300170)"; return 1; }
-    return 0
+    [[ -z "$1" || "$1" =~ ^[0-9]+$ ]] || { echo "Invalid Node ID: Must be numeric (e.g., 7300170)"; exit 1; }
 }
 
 # Check and install Docker using get.docker.com
@@ -55,9 +53,7 @@ check_cron() {
 
 # Build Docker image
 build_image() {
-    # Remove old image to ensure no cache
     docker rmi -f "$IMAGE_NAME" 2>/dev/null || true
-
     WORKDIR=$(mktemp -d)
     cd "$WORKDIR"
 
@@ -86,7 +82,6 @@ RUN /install_nexus.sh
 ENTRYPOINT ["/entrypoint.sh"]
 EOF
 
-    # Nexus CLI installation script
     cat > install_nexus.sh <<EOF
 #!/bin/bash
 set -e
@@ -125,7 +120,7 @@ fetch_binary() {
         fi
     done
     echo "Error: Failed to download binary from \$url after \$RETRY_COUNT attempts" >&2
-    return 1
+    exit 1
 }
 
 echo "Fetching latest Nexus CLI release URL..." >&2
@@ -154,10 +149,7 @@ if [ -z "\$LATEST_RELEASE_URL" ]; then
 fi
 
 echo "Downloading Nexus CLI binary from \$LATEST_RELEASE_URL..." >&2
-fetch_binary "\$LATEST_RELEASE_URL" || {
-    echo "Error: All download attempts failed" >&2
-    exit 1
-}
+fetch_binary "\$LATEST_RELEASE_URL"
 
 if [ ! -s "\$TEMP_BINARY" ]; then
     echo "Error: Binary file \$TEMP_BINARY is empty or not found" >&2
@@ -168,16 +160,16 @@ echo "Verifying binary format..." >&2
 file "\$TEMP_BINARY" >&2
 
 echo "Moving binary to \$BIN_DIR/nexus-network..." >&2
-mv "\$TEMP_BINARY" "\$BIN_DIR/nexus-network" || {
-    echo "Error: Failed to move binary to \$BIN_DIR/nexus-network" >&2
-    exit 1
-}
+mv "\$TEMP_BINARY" "\$BIN_DIR/nexus-network" || { echo "Error: Failed to move binary to \$BIN_DIR/nexus-network" >&2; exit 1; }
 
 chmod +x "\$BIN_DIR/nexus-network"
 if [ ! -x "\$BIN_DIR/nexus-network" ]; then
     echo "Error: Binary file \$BIN_DIR/nexus-network is not executable" >&2
     exit 1
 fi
+
+echo "Verifying binary existence..." >&2
+ls -l "\$BIN_DIR/nexus-network" >&2
 
 echo "Nexus CLI installed successfully" >&2
 EOF
@@ -261,8 +253,8 @@ install_node() {
     local node_id="$1"
     local wallet_address="$2"
 
-    validate_wallet_address "$wallet_address" || exit 1
-    validate_node_id "$node_id" || exit 1
+    validate_wallet_address "$wallet_address"
+    validate_node_id "$node_id"
 
     check_docker
     echo "Building image..."
@@ -274,7 +266,7 @@ install_node() {
 # Remove node
 remove_node() {
     local node_id="$1"
-    validate_node_id "$node_id" || exit 1
+    validate_node_id "$node_id"
     uninstall_node "$node_id"
 }
 
@@ -296,11 +288,8 @@ run_container() {
         chmod 644 "$log_file"
     fi
 
-    mkdir -p "$INSTALL_DIR"
-    chmod 755 "$INSTALL_DIR"
     docker run -d --name "$container_name" \
         -v "$log_file":/root/nexus.log \
-        -v "$INSTALL_DIR":/root/.nexus \
         -e WALLET_ADDRESS="$wallet_address" \
         -e NODE_ID="$node_id" \
         -e CONTAINER_NAME="$container_name" \
@@ -342,10 +331,8 @@ while getopts "r" opt; do
     esac
 done
 
-# Shift past the options
 shift $((OPTIND-1))
 
-# Handle remove node option
 if [ "$REMOVE_NODE" = true ]; then
     if [ $# -eq 0 ]; then
         remove_node ""
@@ -358,7 +345,6 @@ if [ "$REMOVE_NODE" = true ]; then
     exit 0
 fi
 
-# Handle install node
 case $# in
     1)
         install_node "" "$1"
