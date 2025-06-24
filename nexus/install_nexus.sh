@@ -64,25 +64,28 @@ sudo apt update
 sudo apt upgrade -y
 sudo apt install -y build-essential pkg-config libssl-dev git-all protobuf-compiler curl
 command -v curl >/dev/null 2>&1 || { echo "curl installation failed. Aborting."; exit 1; }
-command -v rustc >/dev/null 2>&1 || { echo "Installing Rust..."; curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; source "$HOME/.cargo/env"; }
 
-# Install Nexus CLI
+# Install Rust and update PATH
+command -v rustc >/dev/null 2>&1 || {
+    echo "Installing Rust..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    source "$HOME/.cargo/env"
+}
+
+# Install Nexus CLI with auto-agree to Terms of Use
 echo "Installing Nexus Network CLI..."
-curl -sSf "$CLI_URL" -o install.sh
-chmod +x install.sh
-./install.sh
-rm install.sh
-
-# Refresh shell
-source ~/.bashrc || source ~/.zshrc || true
+curl -sSf "$CLI_URL" | sh -s -- -y
+source "$HOME/.bashrc" || source "$HOME/.zshrc" || true
 
 # Check Nexus CLI installation
-command -v nexus-network >/dev/null 2>&1 || { echo "Nexus CLI installation failed. Aborting."; exit 1; }
+command -v nexus-network >/dev/null 2>&1 || {
+    echo "Nexus CLI not found. Attempting to proceed..."
+}
 
 # Configure Nexus CLI
 echo "Registering with Wallet Address: $WALLET_ADDRESS"
-nexus-network register-user --wallet-address "$WALLET_ADDRESS"
-nexus-network register-node
+nexus-network register-user --wallet-address "$WALLET_ADDRESS" || { echo "Failed to register user. Aborting."; exit 1; }
+nexus-network register-node || { echo "Failed to register node. Aborting."; exit 1; }
 START_CMD="nexus-network start --node-id $NODE_ID"
 
 # Create systemd service
