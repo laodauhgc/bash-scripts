@@ -1,13 +1,13 @@
 #!/bin/bash
 set -e
 
-# Nexus Node Manager v1.1
+# Nexus Node Manager v1.2
 # Manages Nexus nodes in Docker containers, aligned with official Nexus CLI installation
 # Supports Wallet Address (mandatory) and Node ID (optional, auto-generated if not provided)
-# Fixes nslookup error and removes outdated beta.orchestrator.nexus.xyz check
+# Fixes network check to avoid container exit and removes nslookup dependency
 
 # Variables
-VERSION="1.1"
+VERSION="1.2"
 BASE_CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
 LOG_DIR="/root/nexus_logs"
@@ -65,7 +65,7 @@ ENV NEXUS_HOME=/root/.nexus
 ENV BIN_DIR=/root/.nexus/bin
 
 RUN apt-get update && apt-get install -y \
-    curl build-essential pkg-config libssl-dev git protobuf-compiler ca-certificates dnsutils \
+    curl build-essential pkg-config libssl-dev git protobuf-compiler ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
     && . /root/.cargo/env \
@@ -117,13 +117,8 @@ fi
 
 # Check basic network connectivity
 echo "Checking network connectivity..." >&2
-ping -c 1 google.com >/dev/null 2>&1 || {
-    echo "Error: Cannot ping google.com. Checking DNS..." >&2
-    nslookup google.com >&2 || {
-        echo "Error: DNS resolution failed for google.com" >&2
-        exit 1
-    }
-    exit 1
+curl -s --head https://www.google.com >/dev/null 2>&1 || {
+    echo "Warning: Cannot connect to https://www.google.com. Proceeding, but Nexus CLI may fail due to network issues." >&2
 }
 
 # Register user
@@ -198,6 +193,7 @@ run_container() {
         -e WALLET_ADDRESS="$wallet_address" \
         -e NODE_ID="$node_id" \
         -e CONTAINER_NAME="$container_name" \
+        --network host \
         "$IMAGE_NAME"
     echo "Container $container_name started!"
 
