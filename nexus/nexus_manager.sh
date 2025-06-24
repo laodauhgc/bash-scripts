@@ -1,13 +1,13 @@
 #!/bin/bash
 set -e
 
-# Nexus Node Manager v2.5
+# Nexus Node Manager v2.6
 # Installs and removes Nexus nodes in Docker containers, aligned with official Nexus CLI
 # Supports Wallet Address (mandatory for install) and Node ID (optional, auto-generated if not provided)
-# Fixes binary installation with detailed logging and SHA256 verification
+# Fixes binary installation with detailed logging, disk space check, and improved -r logic
 
 # Variables
-VERSION="2.5"
+VERSION="2.6"
 BASE_CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
 LOG_DIR="/root/nexus_logs"
@@ -87,10 +87,15 @@ EOF
     cat > install_nexus.sh <<EOF
 #!/bin/bash
 set -e
+set -x
 
 NEXUS_HOME="/root/.nexus"
 BIN_DIR="/root/.nexus/bin"
 TEMP_BINARY="/tmp/nexus-network"
+
+echo "Checking disk space..." >&2
+df -h /tmp >&2
+df -h /root >&2
 
 echo "Verifying directory \$BIN_DIR..." >&2
 ls -ld "\$BIN_DIR" >&2
@@ -100,7 +105,7 @@ if [ ! -w "\$BIN_DIR" ]; then
 fi
 
 echo "Fetching latest Nexus CLI release URL..." >&2
-API_RESPONSE=\$(curl -s -w "\\n%{http_code}" --connect-timeout 15 --max-time 45 https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest 2>/tmp/api_error.log)
+API_RESPONSE=\$(curl -s -w "\\n%{http_code}" --connect-timeout 20 --max-time 60 https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest 2>/tmp/api_error.log)
 HTTP_CODE=\$(echo "\$API_RESPONSE" | tail -n 1)
 API_BODY=\$(echo "\$API_RESPONSE" | sed '\$d')
 if [ -z "\$API_BODY" ]; then
@@ -133,7 +138,7 @@ if [ -z "\$LATEST_RELEASE_URL" ]; then
 fi
 
 echo "Downloading Nexus CLI binary from \$LATEST_RELEASE_URL..." >&2
-curl -L --connect-timeout 15 --max-time 90 -o "\$TEMP_BINARY" "\$LATEST_RELEASE_URL" 2>/tmp/download_error.log || {
+curl -L --connect-timeout 20 --max-time 120 -o "\$TEMP_BINARY" "\$LATEST_RELEASE_URL" 2>/tmp/download_error.log || {
     echo "Error: Failed to download binary from \$LATEST_RELEASE_URL" >&2
     cat /tmp/download_error.log >&2
     exit 1
