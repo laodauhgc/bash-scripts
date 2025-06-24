@@ -9,15 +9,15 @@ INSTALL_DIR="/root/.nexus"
 NEXUS_BIN="/root/.nexus/bin/nexus-network"
 SERVICE_NAME="nexus-network"
 
-# Function to validate Node ID (numeric)
-validate_node_id() {
-    [[ "$1" =~ ^[0-9]+$ ]] || { echo "Invalid Node ID: Must be numeric (e.g., 7149291)"; return 1; }
-    return 0
-}
-
 # Function to validate Wallet Address (Ethereum address format)
 validate_wallet_address() {
     [[ "$1" =~ ^0x[a-fA-F0-9]{40}$ ]] || { echo "Invalid Wallet Address: Must be a valid Ethereum address (e.g., 0x238a3a4ff431De579885D4cE0297af7A0d3a1b32)"; return 1; }
+    return 0
+}
+
+# Function to validate Node ID (if provided, must be numeric)
+validate_node_id() {
+    [[ -z "$1" || "$1" =~ ^[0-9]+$ ]] || { echo "Invalid Node ID: Must be numeric (e.g., 7300170)"; return 1; }
     return 0
 }
 
@@ -76,22 +76,38 @@ set -e
 
 PROVER_ID_FILE="/root/.nexus/node-id"
 
-if [ -z "\$NODE_ID" ] || [ -z "\$WALLET_ADDRESS" ]; then
-    echo "Error: NODE_ID and WALLET_ADDRESS environment variables must be set"
+if [ -z "\$WALLET_ADDRESS" ]; then
+    echo "Error: WALLET_ADDRESS environment variable must be set"
     exit 1
 fi
 
-echo "\$NODE_ID" > "\$PROVER_ID_FILE"
+# Check network connectivity
+ping -c 1 beta.orchestrator.nexus.xyz >/dev/null 2>&1 || {
+    echo "Error: Cannot connect to Nexus server (beta.orchestrator.nexus.xyz). Check network, DNS, or firewall."
+    exit 1
+}
+
+# Register user
+echo "Registering user with wallet address: \$WALLET_ADDRESS"
+/root/.nexus/bin/nexus-network register-user --wallet-address "\$WALLET_ADDRESS" || {
+    echo "Error: Failed to register user"
+    exit 1
+}
+
+# Register node
+echo "Registering new node..."
+/root/.nexus/bin/nexus-network register-node || {
+    echo "Error: Failed to register node"
+    exit 1
+}
+
+# Read Node ID from file
+NODE_ID=\$(cat "\$PROVER_ID_FILE" 2>/dev/null || echo "")
+if [ -z "\$NODE_ID" ]; then
+    echo "Error: Failed to retrieve Node ID after registration"
+    exit 1
+fi
 echo "Using node-id: \$NODE_ID"
-
-if ! command -v nexus-network >/dev/null 2>&1; then
-    echo "Error: nexus-network not installed or unavailable"
-    exit 1
-fi
-
-# Register user and node
-/root/.nexus/bin/nexus-network register-user --wallet-address "\$WALLET_ADDRESS"
-/root/.nexus/bin/nexus-network register-node
 
 echo "Starting nexus-network node..."
 /root/.nexus/bin/nexus-network start --node-id "\$NODE_ID" &>> /root/nexus.log &
@@ -112,8 +128,8 @@ EOF
 run_container() {
     local node_id=$1
     local wallet_address=$2
-    local container_name="${BASE_CONTAINER_NAME}-${node_id}"
-    local log_file="${LOG_DIR}/nexus-${node_id}.log"
+    local container_name="${BASE_CONTAINER_NAME}-${node_id:-new}"
+    local log_file="${LOG_DIR}/nexus-${node_id:-new}.log"
 
     if docker ps -a --format '{{.Names}}' | grep -qw "$container_name"; then
         echo "Removing old container $container_name..."
@@ -128,18 +144,18 @@ run_container() {
 
     docker run -d --name "$container_name" \
         -v "$log_file":/root/nexus.log \
-        -e NODE_ID="$node_id" \
         -e WALLET_ADDRESS="$wallet_address" \
+        -e NODE_ID="$node_id" \
         "$IMAGE_NAME"
     echo "Container $container_name started!"
 
     check_cron
     local cron_job="0 0 * * * rm -f $log_file"
-    local cron_file="/etc/cron.d/nexus-log-cleanup-${node_id}"
+    local cron_file="/etc/cron.d/nexus-log-cleanup-${node_id:-new}"
     [ -f "$cron_file" ] && rm -f "$cron_file"
     echo "$cron_job" > "$cron_file"
     chmod 0644 "$cron_file"
-    echo "Set daily log cleanup cron job for node $node_id"
+    echo "Set daily log cleanup cron job for node ${node_id:-new}"
 }
 
 # Uninstall node
@@ -223,19 +239,18 @@ view_node_logs() {
 
 # Batch install nodes
 batch_install_nodes() {
-    echo "Enter Node IDs and Wallet Addresses (one per line, format: <NODE_ID> <WALLET_ADDRESS>, press Ctrl+D to finish):"
+    echo "Enter Wallet Addresses (one per line, press Ctrl+D to finish):"
 
-    local nodes=()
-    while read -r node_id wallet_address; do
-        if [ -n "$node_id" ] && [ -n "$wallet_address" ]; then
-            validate_node_id "$node_id" || { echo "Skipping invalid Node ID: $node_id"; continue; }
+    local wallets=()
+    while read -r wallet_address; do
+        if [ -n "$wallet_address" ]; then
             validate_wallet_address "$wallet_address" || { echo "Skipping invalid Wallet Address: $wallet_address"; continue; }
-            nodes+=("$node_id $wallet_address")
+            wallets+=("$wallet_address")
         fi
     done
 
-    if [ ${#nodes[@]} -eq 0 ]; then
-        echo "No valid nodes entered, returning to main menu."
+    if [ ${#wallets[@]} -eq 0 ]; then
+        echo "No valid Wallet Addresses entered, returning to main menu."
         read -p "Press any key to continue"
         return
     fi
@@ -244,10 +259,9 @@ batch_install_nodes() {
     build_image
 
     echo "Starting nodes..."
-    for node in "${nodes[@]}"; do
-        read -r node_id wallet_address <<< "$node"
-        echo "Starting node $node_id..."
-        run_container "$node_id" "$wallet_address"
+    for wallet_address in "${wallets[@]}"; do
+        echo "Starting node for Wallet Address $wallet_address..."
+        run_container "" "$wallet_address"
         sleep 2
     done
 
@@ -371,17 +385,31 @@ uninstall_all_nodes() {
 }
 
 # Handle command-line arguments for auto-install
-if [ $# -eq 2 ]; then
+if [ $# -eq 1 ]; then
+    WALLET_ADDRESS="$1"
+    if validate_wallet_address "$WALLET_ADDRESS"; then
+        check_docker
+        echo "Building image..."
+        build_image
+        echo "Installing and starting node with Wallet Address: $WALLET_ADDRESS..."
+        run_container "" "$WALLET_ADDRESS"
+        exit 0
+    else
+        echo "Invalid Wallet Address. Usage: $0 <WALLET_ADDRESS>"
+        exit 1
+    fi
+elif [ $# -eq 2 ]; then
     NODE_ID="$1"
     WALLET_ADDRESS="$2"
     if validate_node_id "$NODE_ID" && validate_wallet_address "$WALLET_ADDRESS"; then
         check_docker
-        echo "Installing and starting node with Node ID: $NODE_ID and Wallet Address: $WALLET_ADDRESS..."
+        echo "Building image..."
         build_image
+        echo "Installing and starting node with Node ID: $NODE_ID and Wallet Address: $WALLET_ADDRESS..."
         run_container "$NODE_ID" "$WALLET_ADDRESS"
         exit 0
     else
-        echo "Invalid Node ID or Wallet Address. Usage: $0 <NODE_ID> <WALLET_ADDRESS>"
+        echo "Invalid Node ID or Wallet Address. Usage: $0 [<NODE_ID>] <WALLET_ADDRESS>"
         exit 1
     fi
 fi
@@ -403,12 +431,13 @@ while true; do
     case $choice in
         1)
             check_docker
-            read -rp "Enter Node ID (e.g., 7149291): " node_id
-            validate_node_id "$node_id" || { read -p "Press any key to continue"; continue; }
             read -rp "Enter Wallet Address (e.g., 0x238a3a4ff431De579885D4cE0297af7A0d3a1b32): " wallet_address
             validate_wallet_address "$wallet_address" || { read -p "Press any key to continue"; continue; }
-            echo "Building image and starting container..."
+            read -rp "Enter Node ID (optional, e.g., 7300170, leave blank to auto-generate): " node_id
+            validate_node_id "$node_id" || { read -p "Press any key to continue"; continue; }
+            echo "Building image..."
             build_image
+            echo "Starting node..."
             run_container "$node_id" "$wallet_address"
             read -p "Press any key to return to menu"
             ;;
