@@ -1,12 +1,13 @@
 #!/bin/bash
 set -e
 
-# Nexus Node Manager v1.0
+# Nexus Node Manager v1.1
 # Manages Nexus nodes in Docker containers, aligned with official Nexus CLI installation
 # Supports Wallet Address (mandatory) and Node ID (optional, auto-generated if not provided)
+# Fixes nslookup error and removes outdated beta.orchestrator.nexus.xyz check
 
 # Variables
-VERSION="1.0"
+VERSION="1.1"
 BASE_CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
 LOG_DIR="/root/nexus_logs"
@@ -64,7 +65,7 @@ ENV NEXUS_HOME=/root/.nexus
 ENV BIN_DIR=/root/.nexus/bin
 
 RUN apt-get update && apt-get install -y \
-    curl build-essential pkg-config libssl-dev git protobuf-compiler ca-certificates \
+    curl build-essential pkg-config libssl-dev git protobuf-compiler ca-certificates dnsutils \
     && rm -rf /var/lib/apt/lists/* \
     && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
     && . /root/.cargo/env \
@@ -114,18 +115,14 @@ if [ -z "\$WALLET_ADDRESS" ]; then
     exit 1
 fi
 
-# Check network connectivity
+# Check basic network connectivity
 echo "Checking network connectivity..." >&2
-ping -c 1 beta.orchestrator.nexus.xyz >/dev/null 2>&1 || {
-    echo "Error: Cannot ping Nexus server (beta.orchestrator.nexus.xyz). Checking DNS..." >&2
-    nslookup beta.orchestrator.nexus.xyz >&2 || {
-        echo "Error: DNS resolution failed for beta.orchestrator.nexus.xyz" >&2
+ping -c 1 google.com >/dev/null 2>&1 || {
+    echo "Error: Cannot ping google.com. Checking DNS..." >&2
+    nslookup google.com >&2 || {
+        echo "Error: DNS resolution failed for google.com" >&2
         exit 1
     }
-    exit 1
-}
-curl -s --head https://beta.orchestrator.nexus.xyz >/dev/null 2>&1 || {
-    echo "Error: Cannot connect to Nexus server via HTTPS (beta.orchestrator.nexus.xyz)" >&2
     exit 1
 }
 
