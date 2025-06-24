@@ -1,13 +1,13 @@
 #!/bin/bash
 set -e
 
-# Nexus Node Manager v2.7
+# Nexus Node Manager v2.8
 # Installs and removes Nexus nodes in Docker containers, aligned with official Nexus CLI
 # Supports Wallet Address (mandatory for install) and Node ID (optional, auto-generated if not provided)
-# Fixes binary installation with retry logic, fallback URL, and exhaustive logging
+# Fixes binary installation with fallback URL, exhaustive logging, and simplified parsing
 
 # Variables
-VERSION="2.7"
+VERSION="2.8"
 BASE_CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
 LOG_DIR="/root/nexus_logs"
@@ -70,7 +70,7 @@ ENV NEXUS_HOME=/root/.nexus
 ENV BIN_DIR=/root/.nexus/bin
 
 RUN apt-get update && apt-get install -y \
-    curl build-essential pkg-config libssl-dev git protobuf-compiler ca-certificates jq file \
+    curl build-essential pkg-config libssl-dev git protobuf-compiler ca-certificates file \
     && rm -rf /var/lib/apt/lists/* \
     && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
     && . /root/.cargo/env \
@@ -146,14 +146,8 @@ if [ "\$HTTP_CODE" -ne 200 ]; then
     exit 1
 fi
 
-echo "Parsing API response with jq..." >&2
-LATEST_RELEASE_URL=\$(echo "\$API_BODY" | jq -r '.assets[] | select(.name == "nexus-network-linux-x86_64") | .browser_download_url' 2>/tmp/jq_error.log)
-if [ \$? -ne 0 ]; then
-    echo "Error: jq failed to parse API response" >&2
-    cat /tmp/jq_error.log >&2
-    exit 1
-fi
-
+echo "Parsing API response with grep..." >&2
+LATEST_RELEASE_URL=\$(echo "\$API_BODY" | grep -o '"browser_download_url":"[^"]*nexus-network-linux-x86_64"' | cut -d '"' -f 4)
 if [ -z "\$LATEST_RELEASE_URL" ]; then
     echo "Warning: Could not find precompiled binary for linux-x86_64, using fallback URL..." >&2
     LATEST_RELEASE_URL="\$FALLBACK_URL"
