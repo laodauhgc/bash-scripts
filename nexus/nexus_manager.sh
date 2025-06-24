@@ -1,18 +1,21 @@
 #!/bin/bash
 set -e
 
-# Nexus Node Manager v2.6
+# Nexus Node Manager v2.7
 # Installs and removes Nexus nodes in Docker containers, aligned with official Nexus CLI
 # Supports Wallet Address (mandatory for install) and Node ID (optional, auto-generated if not provided)
-# Fixes binary installation with detailed logging, disk space check, and improved -r logic
+# Fixes binary installation with retry logic, fallback URL, and exhaustive logging
 
 # Variables
-VERSION="2.6"
+VERSION="2.7"
 BASE_CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
 LOG_DIR="/root/nexus_logs"
 INSTALL_DIR="/root/.nexus"
 NEXUS_BIN="/root/.nexus/bin/nexus-network"
+FALLBACK_URL="https://github.com/nexus-xyz/nexus-cli/releases/download/v0.8.11/nexus-network-linux-x86_64"
+RETRY_COUNT=3
+RETRY_DELAY=5
 
 # Function to validate Wallet Address (Ethereum address format)
 validate_wallet_address() {
@@ -92,6 +95,9 @@ set -x
 NEXUS_HOME="/root/.nexus"
 BIN_DIR="/root/.nexus/bin"
 TEMP_BINARY="/tmp/nexus-network"
+RETRY_COUNT=$RETRY_COUNT
+RETRY_DELAY=$RETRY_DELAY
+FALLBACK_URL="$FALLBACK_URL"
 
 echo "Checking disk space..." >&2
 df -h /tmp >&2
@@ -103,6 +109,24 @@ if [ ! -w "\$BIN_DIR" ]; then
     echo "Error: Directory \$BIN_DIR is not writable" >&2
     exit 1
 fi
+
+fetch_binary() {
+    local url=\$1
+    local attempt=1
+    while [ \$attempt -le \$RETRY_COUNT ]; do
+        echo "Attempt \$attempt: Downloading from \$url..." >&2
+        if curl -L --connect-timeout 20 --max-time 120 -o "\$TEMP_BINARY" "\$url" 2>/tmp/download_error.log; then
+            return 0
+        else
+            echo "Download failed, retrying in \$RETRY_DELAY seconds..." >&2
+            cat /tmp/download_error.log >&2
+            sleep \$RETRY_DELAY
+            attempt=\$((attempt + 1))
+        fi
+    done
+    echo "Error: Failed to download binary from \$url after \$RETRY_COUNT attempts" >&2
+    return 1
+}
 
 echo "Fetching latest Nexus CLI release URL..." >&2
 API_RESPONSE=\$(curl -s -w "\\n%{http_code}" --connect-timeout 20 --max-time 60 https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest 2>/tmp/api_error.log)
@@ -131,16 +155,13 @@ if [ \$? -ne 0 ]; then
 fi
 
 if [ -z "\$LATEST_RELEASE_URL" ]; then
-    echo "Error: Could not find precompiled binary for linux-x86_64" >&2
-    echo "GitHub API response:" >&2
-    echo "\$API_BODY" >&2
-    exit 1
+    echo "Warning: Could not find precompiled binary for linux-x86_64, using fallback URL..." >&2
+    LATEST_RELEASE_URL="\$FALLBACK_URL"
 fi
 
 echo "Downloading Nexus CLI binary from \$LATEST_RELEASE_URL..." >&2
-curl -L --connect-timeout 20 --max-time 120 -o "\$TEMP_BINARY" "\$LATEST_RELEASE_URL" 2>/tmp/download_error.log || {
-    echo "Error: Failed to download binary from \$LATEST_RELEASE_URL" >&2
-    cat /tmp/download_error.log >&2
+fetch_binary "\$LATEST_RELEASE_URL" || {
+    echo "Error: All download attempts failed" >&2
     exit 1
 }
 
