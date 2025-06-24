@@ -1,19 +1,18 @@
 #!/bin/bash
 set -e
 
-# Nexus Node Manager v1.3
-# Manages Nexus nodes in Docker containers, aligned with official Nexus CLI installation
+# Nexus Node Manager v2.0
+# Installs and removes Nexus nodes in Docker containers, aligned with official Nexus CLI
 # Supports Wallet Address (mandatory) and Node ID (optional, auto-generated if not provided)
-# Fixes binary installation issue and log error handling
+# Simplified to only install and remove nodes, fixes binary installation issues
 
 # Variables
-VERSION="1.3"
+VERSION="2.0"
 BASE_CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
 LOG_DIR="/root/nexus_logs"
 INSTALL_DIR="/root/.nexus"
 NEXUS_BIN="/root/.nexus/bin/nexus-network"
-TIMESTAMP=$(date +%s)
 
 # Function to validate Wallet Address (Ethereum address format)
 validate_wallet_address() {
@@ -88,12 +87,12 @@ set -e
 NEXUS_HOME="/root/.nexus"
 BIN_DIR="/root/.nexus/bin"
 echo "Fetching latest Nexus CLI release URL..." >&2
-LATEST_RELEASE_URL=\$(curl -s --connect-timeout 10 --max-time 30 https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest | grep "browser_download_url" | grep "nexus-network-linux-x86_64\"" | cut -d '"' -f 4)
+LATEST_RELEASE_URL=\$(curl -s --connect-timeout 10 --max-time 30 https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest | grep -o '"browser_download_url":"[^"]*nexus-network-linux-x86_64"' | cut -d '"' -f 4)
 
 if [ -z "\$LATEST_RELEASE_URL" ]; then
     echo "Error: Could not find precompiled binary for linux-x86_64" >&2
     echo "GitHub API response:" >&2
-    curl -s https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest >&2
+    curl -s --connect-timeout 10 --max-time 30 https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest >&2
     exit 1
 fi
 
@@ -189,6 +188,28 @@ EOF
     rm -rf "$WORKDIR"
 }
 
+# Install node
+install_node() {
+    local node_id="$1"
+    local wallet_address="$2"
+
+    validate_wallet_address "$wallet_address" || exit 1
+    validate_node_id "$node_id" || exit 1
+
+    check_docker
+    echo "Building image..."
+    build_image
+    echo "Installing and starting node with Wallet Address: $wallet_address${node_id:+ and Node ID: $node_id}..."
+    run_container "$node_id" "$wallet_address"
+}
+
+# Remove node
+remove_node() {
+    local node_id="$1"
+    validate_node_id "$node_id" || exit 1
+    uninstall_node "$node_id"
+}
+
 # Run container with log mounting and cron for log cleanup
 run_container() {
     local node_id=$1
@@ -207,7 +228,6 @@ run_container() {
         chmod 644 "$log_file"
     fi
 
-    # Mount credentials directory to persist across container restarts
     mkdir -p "$INSTALL_DIR"
     docker run -d --name "$container_name" \
         -v "$log_file":/root/nexus.log \
@@ -244,292 +264,38 @@ uninstall_node() {
     echo "Node ${node_id:-default} uninstalled."
 }
 
-# List all nodes
-list_nodes() {
-    echo "Current node status:"
-    echo "----------------------------------------------------------------------------------------------------------------------"
-    printf "%-6s %-20s %-10s %-15s %-15s %-15s %-20s\n" "No." "Node ID" "CPU Usage" "Memory Usage" "Memory Limit" "Status" "Created At"
-    echo "----------------------------------------------------------------------------------------------------------------------"
-
-    local all_nodes=($(get_all_nodes))
-    for i in "${!all_nodes[@]}"; do
-        local node_id=${all_nodes[$i]}
-        local container_name="${BASE_CONTAINER_NAME}${node_id:+-${node_id}}"
-        local container_info=$(docker stats --no-stream --format "{{.CPUPerc}},{{.MemUsage}}" "$container_name" 2>/dev/null)
-
-        if [ -n "$container_info" ]; then
-            IFS=',' read -r cpu_usage mem_usage <<< "$container_info"
-            local status=$(docker ps -a --filter "name=$container_name" --format "{{.Status}}")
-            local created_time=$(docker ps -a --filter "name=$container_name" --format "{{.CreatedAt}}")
-            printf "%-6d %-20s %-10s %-15s %-15s %-15s %-20s\n" \
-                $((i+1)) "${node_id:-default}" "$cpu_usage" "$mem_usage" "N/A" "$(echo "$status" | cut -d' ' -f1)" "$created_time"
-        else
-            local status=$(docker ps -a --filter "name=$container_name" --format "{{.Status}}")
-            local created_time=$(docker ps -a --filter "name=$container_name" --format "{{.CreatedAt}}")
-            [ -n "$status" ] && printf "%-6d %-20s %-10s %-15s %-15s %-15s %-20s\n" \
-                $((i+1)) "${node_id:-default}" "N/A" "N/A" "N/A" "$(echo "$status" | cut -d' ' -f1)" "$created_time"
-        fi
-    done
-    echo "----------------------------------------------------------------------------------------------------------------------"
-    echo "Notes:"
-    echo "- CPU Usage: Container CPU usage percentage"
-    echo "- Memory Usage: Current memory used by container"
-    echo "- Status: Container running status"
-    echo "- Created At: Container creation time"
-    read -p "Press any key to return to menu"
-}
-
-# Get all node IDs
-get_all_nodes() {
-    docker ps -a --filter "name=${BASE_CONTAINER_NAME}" --format "{{.Names}}" | sed "s/${BASE_CONTAINER_NAME}\(-*\)//"
-}
-
-# View node logs
-view_node_logs() {
-    local node_id=$1
-    local container_name="${BASE_CONTAINER_NAME}${node_id:+-${node_id}}"
-
-    if docker ps -a --format '{{.Names}}' | grep -qw "$container_name"; then
-        echo "Select log viewing mode:"
-        echo "1. Raw logs (may include color codes)"
-        echo "2. Cleaned logs (color codes removed)"
-        read -rp "Select (1-2): " log_mode
-
-        echo "Viewing logs, press Ctrl+C to exit"
-        if [ "$log_mode" = "2" ]; then
-            docker logs -f "$container_name" | sed 's/\x1b\[[0-9;]*m//g' | sed 's/\x1b\[?25l//g' | sed 's/\x1b\[?25h//g'
-        else
-            docker logs -f "$container_name"
-        fi
-    else
-        echo "Container not running. Please install and start the node first (option 1)."
-        read -p "Press any key to return to menu"
-    fi
-}
-
-# Batch install nodes
-batch_install_nodes() {
-    echo "Enter Wallet Addresses (one per line, press Ctrl+D to finish):"
-
-    local wallets=()
-    while read -r wallet_address; do
-        if [ -n "$wallet_address" ]; then
-            validate_wallet_address "$wallet_address" || { echo "Skipping invalid Wallet Address: $wallet_address"; continue; }
-            wallets+=("$wallet_address")
-        fi
-    done
-
-    if [ ${#wallets[@]} -eq 0 ]; then
-        echo "No valid Wallet Addresses entered, returning to main menu."
-        read -p "Press any key to continue"
-        return
-    fi
-
-    echo "Building image..."
-    build_image
-
-    echo "Starting nodes..."
-    for wallet_address in "${wallets[@]}"; do
-        echo "Starting node for Wallet Address $wallet_address..."
-        run_container "" "$wallet_address"
-        sleep 2
-    done
-
-    echo "All nodes started!"
-    read -p "Press any key to return to menu"
-}
-
-# Select node to view logs
-select_node_to_view() {
-    local all_nodes=($(get_all_nodes))
-
-    if [ ${#all_nodes[@]} -eq 0 ]; then
-        echo "No nodes found."
-        read -p "Press any key to return to menu"
-        return
-    fi
-
-    echo "Select a node to view:"
-    echo "0. Return to main menu"
-    for i in "${!all_nodes[@]}"; do
-        local node_id=${all_nodes[$i]}
-        local container_name="${BASE_CONTAINER_NAME}${node_id:+-${node_id}}"
-        local status=$(docker ps -a --filter "name=$container_name" --format "{{.Status}}")
-        if [[ $status == Up* ]]; then
-            echo "$((i+1)). Node ${node_id:-default} [Running]"
-        else
-            echo "$((i+1)). Node ${node_id:-default} [Stopped]"
-        fi
-    done
-
-    read -rp "Enter option (0-${#all_nodes[@]}): " choice
-    if [ "$choice" = "0" ]; then
-        return
-    fi
-
-    if [ "$choice" -ge 1 ] && [ "$choice" -le ${#all_nodes[@]} ]; then
-        view_node_logs "${all_nodes[$((choice-1))]}"
-    else
-        echo "Invalid option."
-        read -p "Press any key to continue"
-    fi
-}
-
-# Batch uninstall nodes
-batch_uninstall_nodes() {
-    local all_nodes=($(get_all_nodes))
-
-    if [ ${#all_nodes[@]} -eq 0 ]; then
-        echo "No nodes found."
-        read -p "Press any key to return to menu"
-        return
-    fi
-
-    echo "Current node status:"
-    echo "----------------------------------------"
-    echo "No.  Node ID              Status"
-    echo "----------------------------------------"
-    for i in "${!all_nodes[@]}"; do
-        local node_id=${all_nodes[$i]}
-        local container_name="${BASE_CONTAINER_NAME}${node_id:+-${node_id}}"
-        local status=$(docker ps -a --filter "name=$container_name" --format "{{.Status}}")
-        if [[ $status == Up* ]]; then
-            printf "%-4d %-20s [Running]\n" $((i+1)) "${node_id:-default}"
-        else
-            printf "%-4d %-20s [Stopped]\n" $((i+1)) "${node_id:-default}"
-        fi
-    done
-    echo "----------------------------------------"
-
-    echo "Select nodes to uninstall (space-separated numbers, 0 to return):"
-    read -rp "Enter options: " choices
-    if [ "$choices" = "0" ]; then
-        return
-    fi
-
-    read -ra selected_choices <<< "$choices"
-    for choice in "${selected_choices[@]}"; do
-        if [ "$choice" -ge 1 ] && [ "$choice" -le ${#all_nodes[@]} ]; then
-            echo "Uninstalling node ${all_nodes[$((choice-1))]}..."
-            uninstall_node "${all_nodes[$((choice-1))]}"
-        else
-            echo "Skipping invalid option: $choice"
-        fi
-    done
-
-    echo "Batch uninstall complete!"
-    read -p "Press any key to return to menu"
-}
-
-# Uninstall all nodes
-uninstall_all_nodes() {
-    local all_nodes=($(get_all_nodes))
-
-    if [ ${#all_nodes[@]} -eq 0 ]; then
-        echo "No nodes found."
-        read -p "Press any key to return to menu"
-        return
-    fi
-
-    echo "WARNING: This will uninstall ALL nodes!"
-    echo "Total nodes: ${#all_nodes[@]}"
-    for node_id in "${all_nodes[@]}"; do
-        echo "- ${node_id:-default}"
-    done
-
-    read -rp "Confirm deletion of all nodes? (y/N): " confirm
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-        echo "Operation canceled."
-        read -p "Press any key to return to menu"
-        return
-    fi
-
-    echo "Uninstalling all nodes..."
-    for node_id in "${all_nodes[@]}"; do
-        echo "Uninstalling node ${node_id:-default}..."
-        uninstall_node "$node_id"
-    done
-
-    echo "All nodes uninstalled."
-    read -p "Press any key to return to menu"
-}
-
-# Handle command-line arguments for auto-install
-if [ $# -eq 1 ]; then
-    WALLET_ADDRESS="$1"
-    if validate_wallet_address "$WALLET_ADDRESS"; then
-        check_docker
-        echo "Building image..."
-        build_image
-        echo "Installing and starting node with Wallet Address: $WALLET_ADDRESS..."
-        run_container "" "$WALLET_ADDRESS"
-        exit 0
-    else
-        echo "Invalid Wallet Address. Usage: $0 [<NODE_ID>] <WALLET_ADDRESS>"
-        exit 1
-    fi
-elif [ $# -eq 2 ]; then
-    NODE_ID="$1"
-    WALLET_ADDRESS="$2"
-    if validate_node_id "$NODE_ID" && validate_wallet_address "$WALLET_ADDRESS"; then
-        check_docker
-        echo "Building image..."
-        build_image
-        echo "Installing and starting node with Node ID: $NODE_ID and Wallet Address: $WALLET_ADDRESS..."
-        run_container "$NODE_ID" "$WALLET_ADDRESS"
-        exit 0
-    else
-        echo "Invalid Node ID or Wallet Address. Usage: $0 [<NODE_ID>] <WALLET_ADDRESS>"
-        exit 1
-    fi
-fi
-
-# Main menu
-while true; do
-    clear
-    echo "Nexus Node Manager v$VERSION"
-    echo "==================================="
-    echo "1. Install and start new node"
-    echo "2. List all node statuses"
-    echo "3. Batch uninstall nodes"
-    echo "4. View node logs"
-    echo "5. Uninstall all nodes"
-    echo "6. Exit"
-    echo "==================================="
-
-    read -rp "Enter option (1-6): " choice
-    case $choice in
-        1)
-            check_docker
-            read -rp "Enter Wallet Address (e.g., 0x238a3a4ff431De579885D4cE0297af7A0d3a1b32): " wallet_address
-            validate_wallet_address "$wallet_address" || { read -p "Press any key to continue"; continue; }
-            read -rp "Enter Node ID (optional, e.g., 7300170, leave blank to auto-generate): " node_id
-            validate_node_id "$node_id" || { read -p "Press any key to continue"; continue; }
-            echo "Building image..."
-            build_image
-            echo "Starting node..."
-            run_container "$node_id" "$wallet_address"
-            read -p "Press any key to return to menu"
-            ;;
-        2)
-            list_nodes
-            ;;
-        3)
-            batch_uninstall_nodes
-            ;;
-        4)
-            select_node_to_view
-            ;;
-        5)
-            uninstall_all_nodes
-            ;;
-        6)
-            echo "Exiting script."
-            exit 0
-            ;;
-        *)
-            echo "Invalid option, please try again."
-            read -p "Press any key to continue"
-            ;;
+# Parse command-line arguments
+REMOVE_NODE=false
+while getopts "r" opt; do
+    case $opt in
+        r) REMOVE_NODE=true ;;
+        *) echo "Usage: $0 [-r] [<NODE_ID>] <WALLET_ADDRESS>"; exit 1 ;;
     esac
 done
+
+# Shift past the options
+shift $((OPTIND-1))
+
+# Handle remove node option
+if [ "$REMOVE_NODE" = true ]; then
+    if [ $# -eq 1 ]; then
+        remove_node "$1"
+    else
+        remove_node ""
+    fi
+    exit 0
+fi
+
+# Handle install node
+case $# in
+    1)
+        install_node "" "$1"
+        ;;
+    2)
+        install_node "$1" "$2"
+        ;;
+    *)
+        echo "Usage: $0 [-r] [<NODE_ID>] <WALLET_ADDRESS>"
+        exit 1
+        ;;
+esac
