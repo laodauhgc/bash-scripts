@@ -1,13 +1,13 @@
 #!/bin/bash
 set -e
 
-# Nexus Node Manager v2.3
+# Nexus Node Manager v2.4
 # Installs and removes Nexus nodes in Docker containers, aligned with official Nexus CLI
 # Supports Wallet Address (mandatory for install) and Node ID (optional, auto-generated if not provided)
-# Fixes binary installation with no-cache build, improved logging, and cache cleanup
+# Fixes sed syntax error in install_nexus.sh
 
 # Variables
-VERSION="2.3"
+VERSION="2.4"
 BASE_CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
 LOG_DIR="/root/nexus_logs"
@@ -90,13 +90,25 @@ set -e
 NEXUS_HOME="/root/.nexus"
 BIN_DIR="/root/.nexus/bin"
 echo "Fetching latest Nexus CLI release URL..." >&2
-API_RESPONSE=\$(curl -s -w "%{http_code}" --connect-timeout 15 --max-time 45 https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest 2>/tmp/api_error.log)
+API_RESPONSE=\$(curl -s -w "\\n%{http_code}" --connect-timeout 15 --max-time 45 https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest 2>/tmp/api_error.log)
+if [ \$? -ne 0 ]; then
+    echo "Error: Failed to fetch GitHub API" >&2
+    cat /tmp/api_error.log >&2
+    exit 1
+fi
+
 HTTP_CODE=\$(echo "\$API_RESPONSE" | tail -n 1)
-API_BODY=\$(echo "\$API_RESPONSE" | sed \$d)
+API_BODY=\$(echo "\$API_RESPONSE" | sed '\$d')
+if [ -z "\$API_BODY" ]; then
+    echo "Error: Empty API response body" >&2
+    cat /tmp/api_error.log >&2
+    exit 1
+fi
 
 if [ "\$HTTP_CODE" -ne 200 ]; then
     echo "Error: Failed to fetch GitHub API (HTTP \$HTTP_CODE)" >&2
-    cat /tmp/api_error.log >&2
+    echo "Response body:" >&2
+    echo "\$API_BODY" >&2
     exit 1
 fi
 
