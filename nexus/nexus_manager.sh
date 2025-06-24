@@ -1,13 +1,13 @@
 #!/bin/bash
 set -e
 
-# Nexus Node Manager v2.0
+# Nexus Node Manager v2.1
 # Installs and removes Nexus nodes in Docker containers, aligned with official Nexus CLI
-# Supports Wallet Address (mandatory) and Node ID (optional, auto-generated if not provided)
-# Simplified to only install and remove nodes, fixes binary installation issues
+# Supports Wallet Address (mandatory for install) and Node ID (optional, auto-generated if not provided)
+# Fixes binary installation issue and -r option logic
 
 # Variables
-VERSION="2.0"
+VERSION="2.1"
 BASE_CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
 LOG_DIR="/root/nexus_logs"
@@ -64,7 +64,7 @@ ENV NEXUS_HOME=/root/.nexus
 ENV BIN_DIR=/root/.nexus/bin
 
 RUN apt-get update && apt-get install -y \
-    curl build-essential pkg-config libssl-dev git protobuf-compiler ca-certificates \
+    curl build-essential pkg-config libssl-dev git protobuf-compiler ca-certificates jq \
     && rm -rf /var/lib/apt/lists/* \
     && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
     && . /root/.cargo/env \
@@ -87,7 +87,7 @@ set -e
 NEXUS_HOME="/root/.nexus"
 BIN_DIR="/root/.nexus/bin"
 echo "Fetching latest Nexus CLI release URL..." >&2
-LATEST_RELEASE_URL=\$(curl -s --connect-timeout 10 --max-time 30 https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest | grep -o '"browser_download_url":"[^"]*nexus-network-linux-x86_64"' | cut -d '"' -f 4)
+LATEST_RELEASE_URL=\$(curl -s --connect-timeout 10 --max-time 30 https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest | jq -r '.assets[] | select(.name == "nexus-network-linux-x86_64") | .browser_download_url')
 
 if [ -z "\$LATEST_RELEASE_URL" ]; then
     echo "Error: Could not find precompiled binary for linux-x86_64" >&2
@@ -269,7 +269,7 @@ REMOVE_NODE=false
 while getopts "r" opt; do
     case $opt in
         r) REMOVE_NODE=true ;;
-        *) echo "Usage: $0 [-r] [<NODE_ID>] <WALLET_ADDRESS>"; exit 1 ;;
+        *) echo "Usage: $0 [-r] [<NODE_ID>] [<WALLET_ADDRESS>]"; exit 1 ;;
     esac
 done
 
@@ -278,10 +278,13 @@ shift $((OPTIND-1))
 
 # Handle remove node option
 if [ "$REMOVE_NODE" = true ]; then
-    if [ $# -eq 1 ]; then
+    if [ $# -eq 0 ]; then
+        remove_node ""
+    elif [ $# -eq 1 ]; then
         remove_node "$1"
     else
-        remove_node ""
+        echo "Usage: $0 -r [<NODE_ID>]"
+        exit 1
     fi
     exit 0
 fi
@@ -295,7 +298,7 @@ case $# in
         install_node "$1" "$2"
         ;;
     *)
-        echo "Usage: $0 [-r] [<NODE_ID>] <WALLET_ADDRESS>"
+        echo "Usage: $0 [-r] [<NODE_ID>] [<WALLET_ADDRESS>]"
         exit 1
         ;;
 esac
