@@ -4,6 +4,7 @@ set -e
 BASE_CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
 LOG_DIR="/root/nexus_logs"
+VERSION="v0.1.0"
 
 # Check and install Node.js and pm2
 check_node_pm2() {
@@ -550,9 +551,10 @@ EOF
 }
 
 # Main menu
+set +e
 while true; do
     clear
-    echo "========== Nexus Multi-Node Management =========="
+    echo "========== Nexus Multi-Node Management ($VERSION) =========="
     echo "1. Batch node rotation start"
     echo "2. Show all node status"
     echo "3. Batch stop and uninstall nodes"
