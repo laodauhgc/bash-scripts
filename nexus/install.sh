@@ -1,6 +1,7 @@
 #!/bin/bash
 set -e
 
+# Version: 1.2.3
 # Biến cấu hình
 CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
@@ -63,13 +64,28 @@ create_swap() {
 if ! command -v docker >/dev/null 2>&1; then
     echo "Cài đặt Docker..."
     apt update
-    apt install -y docker.io
+    if ! apt install -y docker.io; then
+        echo "Lỗi: Không thể cài đặt Docker"
+        exit 1
+    fi
     systemctl enable docker
     systemctl start docker
+    # Kiểm tra Docker daemon
+    if ! systemctl is-active --quiet docker; then
+        echo "Lỗi: Docker daemon không chạy"
+        exit 1
+    fi
+fi
+
+# Kiểm tra quyền chạy Docker
+if ! docker ps >/dev/null 2>&1; then
+    echo "Lỗi: Không có quyền chạy Docker. Kiểm tra cài đặt hoặc thêm user vào nhóm docker."
+    exit 1
 fi
 
 # Xây dựng Docker image
 build_image() {
+    echo "Bắt đầu xây dựng image $IMAGE_NAME..."
     workdir=$(mktemp -d)
     cd "$workdir"
 
@@ -111,9 +127,15 @@ fi
 tail -f /root/nexus.log
 EOF
 
-    docker build -t "$IMAGE_NAME" .
+    if ! docker build -t "$IMAGE_NAME" .; then
+        echo "Lỗi: Không thể xây dựng image $IMAGE_NAME"
+        cd -
+        rm -rf "$workdir"
+        exit 1
+    fi
     cd -
     rm -rf "$workdir"
+    echo "Xây dựng image $IMAGE_NAME thành công."
 }
 
 # Chạy container
@@ -136,11 +158,9 @@ run_container() {
 # Tạo swap trước khi chạy node
 create_swap
 
-# Kiểm tra và xây dựng image nếu cần
-if ! docker images -q "$IMAGE_NAME" >/dev/null 2>&1; then
-    echo "Xây dựng Docker image..."
-    build_image
-fi
+# Buộc xây dựng image để đảm bảo image mới
+echo "Xây dựng Docker image..."
+build_image
 
 # Chạy container
 run_container
