@@ -1,0 +1,146 @@
+#!/bin/bash
+set -e
+
+# Biến cấu hình
+CONTAINER_NAME="nexus-node"
+IMAGE_NAME="nexus-node:latest"
+LOG_FILE="/root/nexus_logs/nexus.log"
+SWAP_FILE="/swapfile"
+WALLET_ADDRESS="$1"
+
+# Kiểm tra wallet address
+if [ -z "$WALLET_ADDRESS" ]; then
+    echo "Lỗi: Vui lòng cung cấp wallet address. Cách dùng: $0 <wallet_address>"
+    exit 1
+fi
+
+# Xác định số luồng dựa trên RAM
+total_ram=$(free -m | awk '/^Mem:/{print $2}')
+if [ "$total_ram" -lt 12000 ]; then
+    max_threads=1
+elif [ "$total_ram" -lt 24000 ]; then
+    max_threads=2
+else
+    max_threads=8
+fi
+
+# Hàm tạo swap tự động
+create_swap() {
+    if swapon --show | grep -q "$SWAP_FILE"; then
+        current_swap=$(free -m | awk '/^Swap:/{print $2}')
+        if [ "$current_swap" -ge "$total_ram" ]; then
+            echo "Swap đã tồn tại ($current_swap MB), bỏ qua tạo swap."
+            return
+        fi
+        swapoff "$SWAP_FILE" 2>/dev/null || true
+    fi
+
+    min_swap=$total_ram
+    max_swap=$((total_ram * 2))
+    available_disk=$(df -BM --output=avail "$(dirname "$SWAP_FILE")" | tail -n 1 | grep -o '[0-9]\+')
+    if [ "$available_disk" -lt "$min_swap" ]; then
+        echo "Không đủ dung lượng ổ cứng ($available_disk MB) để tạo swap tối thiểu ($min_swap MB). Bỏ qua."
+        return
+    fi
+
+    swap_size=$min_swap
+    if [ "$available_disk" -ge "$max_swap" ]; then
+        swap_size=$max_swap
+    fi
+
+    echo "Tạo swap $swap_size MB..."
+    fallocate -l "${swap_size}M" "$SWAP_FILE" 2>/dev/null || dd if=/dev/zero of="$SWAP_FILE" bs=1M count="$swap_size"
+    chmod 600 "$SWAP_FILE"
+    mkswap "$SWAP_FILE"
+    swapon "$SWAP_FILE"
+    if ! grep -q "$SWAP_FILE" /etc/fstab; then
+        echo "$SWAP_FILE none swap sw 0 0" >> /etc/fstab
+    fi
+    echo "Swap đã được tạo và kích hoạt ($swap_size MB)."
+}
+
+# Kiểm tra và cài đặt Docker
+if ! command -v docker >/dev/null 2>&1; then
+    echo "Cài đặt Docker..."
+    apt update
+    apt install -y docker.io
+    systemctl enable docker
+    systemctl start docker
+fi
+
+# Xây dựng Docker image
+build_image() {
+    workdir=$(mktemp -d)
+    cd "$workdir"
+
+    cat > Dockerfile <<EOF
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y curl screen bash && rm -rf /var/lib/apt/lists/*
+RUN curl -sSL https://cli.nexus.xyz/ | NONINTERACTIVE=1 sh && ln -sf /root/.nexus/bin/nexus-network /usr/local/bin/nexus-network
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
+EOF
+
+    cat > entrypoint.sh <<EOF
+#!/bin/bash
+set -e
+# Kiểm tra wallet address
+if [ -z "\$WALLET_ADDRESS" ]; then
+    echo "Lỗi: Thiếu wallet address"
+    exit 1
+fi
+# Đăng ký node với wallet address
+nexus-network register-node --wallet "\$WALLET_ADDRESS" &>> /root/nexus.log
+if [ \$? -ne 0 ]; then
+    echo "Lỗi: Không thể đăng ký node. Xem log:"
+    cat /root/nexus.log
+    exit 1
+fi
+# Chạy node
+screen -dmS nexus bash -c "nexus-network start --max-threads $max_threads &>> /root/nexus.log"
+sleep 3
+if screen -list | grep -q "nexus"; then
+    echo "Node đã khởi động với max_threads=$max_threads. Log: /root/nexus.log"
+else
+    echo "Khởi động thất bại. Xem log:"
+    cat /root/nexus.log
+    exit 1
+fi
+tail -f /root/nexus.log
+EOF
+
+    docker build -t "$IMAGE_NAME" .
+    cd -
+    rm -rf "$workdir"
+}
+
+# Chạy container
+run_container() {
+    docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+    mkdir -p "$(dirname "$LOG_FILE")"
+    touch "$LOG_FILE"
+    chmod 644 "$LOG_FILE"
+
+    docker run -d --name "$CONTAINER_NAME" \
+        --restart unless-stopped \
+        -v "$LOG_FILE":/root/nexus.log \
+        -e WALLET_ADDRESS="$WALLET_ADDRESS" \
+        "$IMAGE_NAME"
+    echo "Đã chạy node với wallet_address=$WALLET_ADDRESS, max_threads=$max_threads"
+    echo "Log: $LOG_FILE"
+    echo "Xem log theo thời gian thực: docker logs -f $CONTAINER_NAME"
+}
+
+# Tạo swap trước khi chạy node
+create_swap
+
+# Kiểm tra và xây dựng image nếu cần
+if ! docker images -q "$IMAGE_NAME" >/dev/null 2>&1; then
+    echo "Xây dựng Docker image..."
+    build_image
+fi
+
+# Chạy container
+run_container
