@@ -1,17 +1,18 @@
 #!/bin/bash
 set -e
 
-# Version: 1.2.3
+# Version: 1.2.4
 # Biến cấu hình
 CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
 LOG_FILE="/root/nexus_logs/nexus.log"
 SWAP_FILE="/swapfile"
 WALLET_ADDRESS="$1"
+PROVIDER_CODE="$2"
 
-# Kiểm tra wallet address
+# Kiểm tra wallet address và provider code
 if [ -z "$WALLET_ADDRESS" ]; then
-    echo "Lỗi: Vui lòng cung cấp wallet address. Cách dùng: $0 <wallet_address>"
+    echo "Lỗi: Vui lòng cung cấp wallet address. Cách dùng: $0 <wallet_address> [provider_code]"
     exit 1
 fi
 
@@ -70,7 +71,6 @@ if ! command -v docker >/dev/null 2>&1; then
     fi
     systemctl enable docker
     systemctl start docker
-    # Kiểm tra Docker daemon
     if ! systemctl is-active --quiet docker; then
         echo "Lỗi: Docker daemon không chạy"
         exit 1
@@ -107,10 +107,18 @@ if [ -z "\$WALLET_ADDRESS" ]; then
     echo "Lỗi: Thiếu wallet address"
     exit 1
 fi
-# Đăng ký node với wallet address
-nexus-network register-node --wallet "\$WALLET_ADDRESS" &>> /root/nexus.log
+# Đăng ký node
+echo "Đăng ký node với wallet: \$WALLET_ADDRESS"
+if [ -n "\$PROVIDER_CODE" ]; then
+    nexus-network register-node --provider-code "\$PROVIDER_CODE" &>> /root/nexus.log
+else
+    nexus-network register-node &>> /root/nexus.log
+fi
 if [ \$? -ne 0 ]; then
     echo "Lỗi: Không thể đăng ký node. Xem log:"
+    cat /root/nexus.log
+    echo "Thông tin hỗ trợ:"
+    nexus-network register-node --help &>> /root/nexus.log
     cat /root/nexus.log
     exit 1
 fi
@@ -118,7 +126,7 @@ fi
 screen -dmS nexus bash -c "nexus-network start --max-threads $max_threads &>> /root/nexus.log"
 sleep 3
 if screen -list | grep -q "nexus"; then
-    echo "Node đã khởi động với max_threads=$max_threads. Log: /root/nexus.log"
+    echo "Node đã khởi động với wallet_address=\$WALLET_ADDRESS, max_threads=$max_threads. Log: /root/nexus.log"
 else
     echo "Khởi động thất bại. Xem log:"
     cat /root/nexus.log
@@ -149,8 +157,12 @@ run_container() {
         --restart unless-stopped \
         -v "$LOG_FILE":/root/nexus.log \
         -e WALLET_ADDRESS="$WALLET_ADDRESS" \
+        -e PROVIDER_CODE="$PROVIDER_CODE" \
         "$IMAGE_NAME"
     echo "Đã chạy node với wallet_address=$WALLET_ADDRESS, max_threads=$max_threads"
+    if [ -n "$PROVIDER_CODE" ]; then
+        echo "Provider code: $PROVIDER_CODE"
+    fi
     echo "Log: $LOG_FILE"
     echo "Xem log theo thời gian thực: docker logs -f $CONTAINER_NAME"
 }
@@ -158,7 +170,7 @@ run_container() {
 # Tạo swap trước khi chạy node
 create_swap
 
-# Buộc xây dựng image để đảm bảo image mới
+# Xây dựng Docker image
 echo "Xây dựng Docker image..."
 build_image
 
