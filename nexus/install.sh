@@ -1,18 +1,17 @@
 #!/bin/bash
 set -e
 
-# Version: 1.2.4
+# Version: 1.2.5
 # Biến cấu hình
 CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
 LOG_FILE="/root/nexus_logs/nexus.log"
 SWAP_FILE="/swapfile"
 WALLET_ADDRESS="$1"
-PROVIDER_CODE="$2"
 
-# Kiểm tra wallet address và provider code
+# Kiểm tra wallet address
 if [ -z "$WALLET_ADDRESS" ]; then
-    echo "Lỗi: Vui lòng cung cấp wallet address. Cách dùng: $0 <wallet_address> [provider_code]"
+    echo "Lỗi: Vui lòng cung cấp wallet address. Cách dùng: $0 <wallet_address>"
     exit 1
 fi
 
@@ -107,13 +106,20 @@ if [ -z "\$WALLET_ADDRESS" ]; then
     echo "Lỗi: Thiếu wallet address"
     exit 1
 fi
-# Đăng ký node
-echo "Đăng ký node với wallet: \$WALLET_ADDRESS"
-if [ -n "\$PROVIDER_CODE" ]; then
-    nexus-network register-node --provider-code "\$PROVIDER_CODE" &>> /root/nexus.log
-else
-    nexus-network register-node &>> /root/nexus.log
+# Đăng ký ví
+echo "Đăng ký ví với wallet: \$WALLET_ADDRESS"
+nexus-network register-user --wallet-address "\$WALLET_ADDRESS" &>> /root/nexus.log
+if [ \$? -ne 0 ]; then
+    echo "Lỗi: Không thể đăng ký ví. Xem log:"
+    cat /root/nexus.log
+    echo "Thông tin hỗ trợ:"
+    nexus-network --help &>> /root/nexus.log
+    cat /root/nexus.log
+    exit 1
 fi
+# Đăng ký node
+echo "Đăng ký node..."
+nexus-network register-node &>> /root/nexus.log
 if [ \$? -ne 0 ]; then
     echo "Lỗi: Không thể đăng ký node. Xem log:"
     cat /root/nexus.log
@@ -157,12 +163,8 @@ run_container() {
         --restart unless-stopped \
         -v "$LOG_FILE":/root/nexus.log \
         -e WALLET_ADDRESS="$WALLET_ADDRESS" \
-        -e PROVIDER_CODE="$PROVIDER_CODE" \
         "$IMAGE_NAME"
     echo "Đã chạy node với wallet_address=$WALLET_ADDRESS, max_threads=$max_threads"
-    if [ -n "$PROVIDER_CODE" ]; then
-        echo "Provider code: $PROVIDER_CODE"
-    fi
     echo "Log: $LOG_FILE"
     echo "Xem log theo thời gian thực: docker logs -f $CONTAINER_NAME"
 }
