@@ -88,6 +88,9 @@ RestartSec=15
 WantedBy=multi-user.target
 EOF
 
+echo "Reloading systemd daemon..."
+systemctl daemon-reload
+
 # Enable systemd service
 echo "Enabling titand.service..."
 systemctl enable titand.service
