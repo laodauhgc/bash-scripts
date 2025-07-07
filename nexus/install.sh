@@ -20,10 +20,16 @@ max_threads=$(nproc)
 
 # Hàm tạo swap tự động
 create_swap() {
-    total_ram=$(free -m | awk '/^Mem:/{print $2}')  # Thêm dòng này để lấy RAM
+    # Lấy tổng RAM hệ thống (MB)
+    total_ram=$(free -m | awk '/^Mem:/{print $2}')
+    if [ -z "$total_ram" ] || [ "$total_ram" -le 0 ]; then
+        echo "Lỗi: Không thể xác định RAM hệ thống. Bỏ qua tạo swap."
+        return 1
+    fi
+
     if swapon --show | grep -q "$SWAP_FILE"; then
         current_swap=$(free -m | awk '/^Swap:/{print $2}')
-        if [ "$current_swap" -ge "$total_ram" ]; then
+        if [ -n "$current_swap" ] && [ "$current_swap" -ge "$total_ram" ]; then
             echo "Swap đã tồn tại ($current_swap MB), bỏ qua tạo swap."
             return
         fi
@@ -33,7 +39,7 @@ create_swap() {
     min_swap=$total_ram
     max_swap=$((total_ram * 2))
     available_disk=$(df -BM --output=avail "$(dirname "$SWAP_FILE")" | tail -n 1 | grep -o '[0-9]\+')
-    if [ "$available_disk" -lt "$min_swap" ]; then
+    if [ -z "$available_disk" ] || [ "$available_disk" -lt "$min_swap" ]; then
         echo "Không đủ dung lượng ổ cứng ($available_disk MB) để tạo swap tối thiểu ($min_swap MB). Bỏ qua."
         return
     fi
@@ -43,8 +49,15 @@ create_swap() {
         swap_size=$max_swap
     fi
 
+    if [ "$swap_size" -le 0 ]; then
+        echo "Lỗi: Kích thước swap không hợp lệ ($swap_size MB). Bỏ qua tạo swap."
+        return 1
+    fi
+
     echo "Tạo swap $swap_size MB..."
-    fallocate -l "${swap_size}M" "$SWAP_FILE" 2>/dev/null || dd if=/dev/zero of="$SWAP_FILE" bs=1M count="$swap_size"
+    if ! fallocate -l "${swap_size}M" "$SWAP_FILE" 2>/dev/null; then
+        dd if=/dev/zero of="$SWAP_FILE" bs=1M count="$swap_size"
+    fi
     chmod 600 "$SWAP_FILE"
     mkswap "$SWAP_FILE"
     swapon "$SWAP_FILE"
