@@ -1,4 +1,7 @@
 #!/bin/bash
+# Script tự động cài đặt SOCKS5 Proxy trên Ubuntu bằng Docker
+# Ngày: 07/07/2025
+# Phiên bản: 1.0.0
 
 # Màu sắc cho output
 RED='\033[0;31m'
@@ -174,10 +177,14 @@ if ! command_exists ufw; then
     apt install -y ufw
 fi
 
-# Kích hoạt ufw nếu chưa bật
+# Kích hoạt ufw nếu chưa bật và đảm bảo SSH được phép
 if ! ufw status | grep -q "Status: active"; then
-    echo -e "${YELLOW}Kích hoạt ufw...${NC}"
-    ufw enable
+    echo -e "${YELLOW}Kích hoạt ufw và cho phép SSH...${NC}"
+    ufw allow 22/tcp comment 'Allow SSH' >/dev/null 2>&1
+    ufw --force enable
+else
+    echo -e "${YELLOW}Đảm bảo SSH được phép...${NC}"
+    ufw allow 22/tcp comment 'Allow SSH' >/dev/null 2>&1
 fi
 
 # Tạo thư mục làm việc
@@ -208,7 +215,7 @@ for i in $(seq 1 $PROXY_COUNT); do
     echo "      - NET_ADMIN" >> docker-compose.yml
 
     # Mở cổng trong ufw
-    ufw allow $PORT/tcp >/dev/null 2>&1
+    ufw allow $PORT/tcp comment "SOCKS5 Proxy $i" >/dev/null 2>&1
 
     # Lưu thông tin proxy
     PROXY_INFO="Proxy $i: socks5://$PUBLIC_IP:$PORT@$USERNAME:$PASSWORD"
