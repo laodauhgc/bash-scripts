@@ -15,15 +15,8 @@ if [ -z "$WALLET_ADDRESS" ]; then
     exit 1
 fi
 
-# Xác định số luồng dựa trên RAM
-total_ram=$(free -m | awk '/^Mem:/{print $2}')
-if [ "$total_ram" -lt 12000 ]; then
-    max_threads=1
-elif [ "$total_ram" -lt 24000 ]; then
-    max_threads=2
-else
-    max_threads=8
-fi
+# Xác định số luồng dựa trên số vCPU
+max_threads=$(nproc)
 
 # Hàm tạo swap tự động
 create_swap() {
