@@ -20,6 +20,7 @@ max_threads=$(nproc)
 
 # Hàm tạo swap tự động
 create_swap() {
+    total_ram=$(free -m | awk '/^Mem:/{print $2}')  # Thêm dòng này để lấy RAM
     if swapon --show | grep -q "$SWAP_FILE"; then
         current_swap=$(free -m | awk '/^Swap:/{print $2}')
         if [ "$current_swap" -ge "$total_ram" ]; then
