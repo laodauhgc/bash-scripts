@@ -1,8 +1,7 @@
-
 #!/bin/bash
-
 # Script tự động cài đặt MTProto Proxy trên Ubuntu bằng Docker
 # Ngày: 26/05/2025
+# Phiên bản: 1.0.1
 
 # Màu sắc cho output
 RED='\033[0;31m'
@@ -114,10 +113,14 @@ if ! command_exists ufw; then
     apt install -y ufw
 fi
 
-# Kích hoạt ufw nếu chưa bật
+# Kích hoạt ufw nếu chưa bật và đảm bảo SSH được phép
 if ! ufw status | grep -q "Status: active"; then
-    echo -e "${YELLOW}Kích hoạt ufw...${NC}"
-    ufw enable
+    echo -e "${YELLOW}Kích hoạt ufw và cho phép SSH...${NC}"
+    ufw allow 22/tcp comment 'Allow SSH' >/dev/null 2>&1
+    ufw --force enable
+else
+    echo -e "${YELLOW}Đảm bảo SSH được phép...${NC}"
+    ufw allow 22/tcp comment 'Allow SSH' >/dev/null 2>&1
 fi
 
 # Tạo thư mục làm việc
@@ -144,7 +147,7 @@ for i in $(seq 1 $PROXY_COUNT); do
     echo "    restart: always" >> docker-compose.yml
 
     # Mở cổng trong ufw
-    ufw allow $PORT/tcp >/dev/null 2>&1
+    ufw allow $PORT/tcp comment "MTProto Proxy $i" >/dev/null 2>&1
 
     # Lưu thông tin proxy
     PROXY_LINK="tg://proxy?server=$PUBLIC_IP&port=$PORT&secret=$SECRET"
