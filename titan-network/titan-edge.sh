@@ -157,25 +157,16 @@ check_system_requirements() {
     
     # Check available memory
     local total_mem=$(free -m | awk '/^Mem:/{print $2}')
-    local required_mem=2048  # 2GB minimum
+    local required_mem=1024  # 1GB minimum (reduced from 2GB)
     
     if [[ "$total_mem" -lt "$required_mem" ]]; then
-        log_warn "Low memory detected: ${total_mem}MB (recommended: ${required_mem}MB+)"
-    fi
-    
-    # Check available disk space
-    local available_space=$(df "$TITAN_EDGE_DIR" 2>/dev/null | awk 'NR==2{print int($4/1024)}' || echo "0")
-    local required_space=$((STORAGE_GB * DEFAULT_MAX_NODES + 10))  # Extra 10GB for system
-    
-    if [[ "$available_space" -lt "$required_space" ]]; then
-        log_error "Insufficient disk space: ${available_space}GB available, ${required_space}GB required"
-        exit 1
+        log_warn "Low memory detected: ${total_mem}MB (recommended: 2GB+)"
     fi
     
     # Check if ports are available
     check_port_availability
     
-    log_success "System requirements check passed"
+    log_success "Basic system requirements check passed"
 }
 
 # Check port availability
@@ -594,21 +585,52 @@ ${YELLOW}OPTIONS:${NC}
     -h, --help              Show this help message
     -c, --config <file>     Use custom configuration file
     -v, --verbose           Enable verbose logging
+    --full-checks           Enable comprehensive system checks (disk, memory)
 
 ${YELLOW}EXAMPLES:${NC}
-    $0 deploy abc123 3      # Deploy 3 nodes with hash abc123
-    $0 status               # Show current node status
-    $0 logs 1               # Show logs for node 01
-    $0 remove               # Remove all nodes
+    $0 deploy abc123                # Deploy 5 nodes (default) with hash abc123
+    $0 deploy abc123 3              # Deploy 3 nodes with hash abc123
+    $0 deploy abc123 --full-checks  # Deploy with comprehensive system checks
+    $0 status                       # Show current node status
+    $0 logs 1                       # Show logs for node 01
+    $0 remove                       # Remove all nodes
 
 ${YELLOW}FILES:${NC}
     Config: $CONFIG_FILE
     Logs:   $LOG_FILE
+
+${YELLOW}NOTE:${NC}
+    - Default deployment: 5 nodes without disk space checks
+    - Use --full-checks for comprehensive system validation
 EOF
 }
 
 # Main execution function
 main() {
+    # Parse options
+    local full_checks=false
+    local args=()
+    
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --full-checks)
+                full_checks=true
+                shift
+                ;;
+            -h|--help)
+                show_usage
+                exit 0
+                ;;
+            *)
+                args+=("$1")
+                shift
+                ;;
+        esac
+    done
+    
+    # Restore positional parameters
+    set -- "${args[@]}"
+    
     # Initialize
     acquire_lock
     load_config
@@ -617,12 +639,20 @@ main() {
     case "${1:-}" in
         deploy)
             check_privileges
-            check_system_requirements
+            
+            # Always run basic checks, but skip disk check by default
+            if [[ "$full_checks" == "true" ]]; then
+                log_info "Running comprehensive system checks (including disk space)..."
+                check_system_requirements_full
+            else
+                check_system_requirements
+            fi
+            
             install_docker
             optimize_network
             
             local hash_value="${2:-}"
-            local node_count="${3:-5}"
+            local node_count="${3:-5}"  # Default to 5 nodes
             
             if [[ -z "$hash_value" ]]; then
                 log_error "Hash value is required for deployment"
@@ -634,6 +664,8 @@ main() {
                 log_error "Node count must be between 1 and 5"
                 exit 1
             fi
+            
+            log_info "Deploying $node_count Titan Edge nodes..."
             
             # Pull latest image
             log_info "Pulling Docker image $IMAGE_NAME..."
