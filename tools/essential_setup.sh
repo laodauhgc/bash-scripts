@@ -41,7 +41,7 @@ info()     { log "ℹ️  $1" "$BLUE"; }
 success()  { log "✅ $1" "$GREEN"; }
 warn()     { log "⚠️  $1" "$YELLOW"; }
 error()    { log "❌ $1" "$RED"; }
-debug()    { [[ ${DEBUG:-0} -eq 1 ]] && log "🐛 $1" "$PURPLE"; }
+debug()    { [[ "${DEBUG:-0}" -eq 1 ]] && log "🐛 $1" "$PURPLE"; }
 header()   { log "\n${BOLD}$1${RESET}" "$CYAN"; }
 
 die() {
@@ -68,7 +68,7 @@ acquire_lock() {
             rm -f "$LOCK_FILE"
         fi
     fi
-    echo $$ > "$LOCK_FILE"
+    echo $ > "$LOCK_FILE"
     trap cleanup EXIT
 }
 
@@ -132,6 +132,10 @@ parse_args() {
                 shift
                 ;;
             --nodejs-version)
+                if [[ $# -lt 2 ]]; then
+                    error "Option --nodejs-version requires a value"
+                    exit 1
+                fi
                 NODEJS_VERSION="$2"
                 shift 2
                 ;;
@@ -241,8 +245,8 @@ create_backup() {
         "/etc/apt/sources.list"
         "/etc/environment"
         "/etc/profile"
-        "$HOME/.bashrc"
-        "$HOME/.profile"
+        "${HOME}/.bashrc"
+        "${HOME}/.profile"
     )
     
     for file in "${backup_files[@]}"; do
@@ -572,6 +576,6 @@ EOF
 }
 
 # ==== Script Entry Point ====
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+if [[ "${BASH_SOURCE[0]:-$0}" == "${0}" ]]; then
     main "$@"
 fi
