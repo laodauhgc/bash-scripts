@@ -1,788 +1,594 @@
 #!/usr/bin/env bash
 
-# Blockcast BEACON Setup Script - Optimized Version
-# Author: Optimized for security, portability, and reliability
-# Version: 2.0
-# Supported OS: Ubuntu 18.04+, Debian 10+, CentOS 7+, RHEL 7+
+###############################################################################
+# Blockcast BEACON Setup Script - v3.0 (Hardened & Portable)
+# Supported OS  : Ubuntu 18.04+/Debian 10+/RHEL/CentOS 7+/Fedora 33+
+# Architectures : x86_64/amd64, arm64/aarch64
+# Requirements  : root privileges (sudo), internet access (for install path)
+###############################################################################
 
-set -euo pipefail  # Exit on error, undefined vars, pipe failures
-IFS=$'\n\t'        # Secure Internal Field Separator
+set -eEuo pipefail
+IFS=$'\n\t'
 
-# ============================================================================
-# CONFIGURATION AND CONSTANTS
-# ============================================================================
-
-readonly SCRIPT_NAME="$(basename "${0}")"
+#--------------------------------------
+# Constants / Defaults
+#--------------------------------------
+readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly LOG_FILE="${SCRIPT_DIR}/blockcast_setup.log"
-readonly BACKUP_DIR="${HOME}/.blockcast_backup_$(date +%Y%m%d_%H%M%S)"
+readonly BACKUP_STAGING_DIR="${HOME}/.blockcast_backup_$(date +%Y%m%d_%H%M%S)"
+readonly BACKUP_TAR_PREFIX="blockcast_backup_$(date +%Y%m%d_%H%M%S)"
 readonly BEACON_REPO_URL="https://github.com/Blockcast/beacon-docker-compose.git"
 readonly BEACON_DIR_NAME="beacon-docker-compose"
-readonly DOCKER_INSTALL_URL="https://get.docker.com"
 readonly MIN_DOCKER_VERSION="20.10.0"
-readonly MIN_COMPOSE_VERSION="1.25.0"
+readonly MIN_COMPOSE_VERSION="2.0.0"   # v2 plugin preferred
+readonly DISK_MIN_GB=10
+readonly MEM_MIN_GB=2
 
-# Colors for output
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly PURPLE='\033[0;35m'
-readonly CYAN='\033[0;36m'
-readonly NC='\033[0m' # No Color
+# Colors
+readonly RED='\033[0;31m'; readonly GREEN='\033[0;32m'; readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'; readonly PURPLE='\033[0;35m'; readonly CYAN='\033[0;36m'
+readonly NC='\033[0m'
 
-# ============================================================================
-# UTILITY FUNCTIONS
-# ============================================================================
+# Globals (mutable)
+OS=""; OS_VERSION=""; OS_CODENAME=""; ARCH=""; COMPOSE_CMD=""
+DEBUG_LEVEL=${DEBUG:-0}
 
+#--------------------------------------
+# Logging helpers
+#--------------------------------------
 log() {
-    local level="${1}"
-    local message="${2}"
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    
-    case "${level}" in
-        "INFO")  echo -e "${GREEN}[INFO]${NC} ${message}" | tee -a "${LOG_FILE}" ;;
-        "WARN")  echo -e "${YELLOW}[WARN]${NC} ${message}" | tee -a "${LOG_FILE}" ;;
-        "ERROR") echo -e "${RED}[ERROR]${NC} ${message}" | tee -a "${LOG_FILE}" ;;
-        "DEBUG") [[ "${DEBUG:-0}" == "1" ]] && echo -e "${PURPLE}[DEBUG]${NC} ${message}" | tee -a "${LOG_FILE}" ;;
-    esac
-    
-    echo "[${timestamp}] [${level}] ${message}" >> "${LOG_FILE}"
+  local level="$1"; shift
+  local msg="$*"
+  local ts
+  ts="$(date '+%Y-%m-%d %H:%M:%S')"
+
+  # color prefix
+  local color=""; local tag="[$level]"
+  case "$level" in
+    INFO)  color="$GREEN";;
+    WARN)  color="$YELLOW";;
+    ERROR) color="$RED";;
+    DEBUG) color="$PURPLE";;
+  esac
+
+  # Respect DEBUG level
+  if [[ "$level" == DEBUG && "$DEBUG_LEVEL" -ne 1 ]]; then
+    echo "[$ts] [DEBUG] $msg" >>"$LOG_FILE"
+    return
+  fi
+
+  echo -e "${color}${tag}${NC} $msg" | tee -a "$LOG_FILE" >&2
+  [[ "$level" == DEBUG ]] || echo "[$ts] [$level] $msg" >>"$LOG_FILE"
 }
 
+fatal() { log ERROR "$*"; exit 1; }
+
+cleanup() {
+  local code=$?
+  if (( code != 0 )); then
+    log ERROR "Script failed with exit code $code. See $LOG_FILE"
+  fi
+  tput sgr0 2>/dev/null || true
+  exit $code
+}
+trap cleanup EXIT
+
+#--------------------------------------
+# Utility functions
+#--------------------------------------
+# Return 0 if v1 >= v2
+version_ge() {
+  local v1="$1" v2="$2"
+  if command -v dpkg >/dev/null 2>&1; then
+    dpkg --compare-versions "$v1" ge "$v2"
+  else
+    [[ "$(printf '%s\n' "$v2" "$v1" | sort -V | head -n1)" == "$v2" ]]
+  fi
+}
+
+# Curl with sane defaults
+_fetch() {
+  curl -fsSL --proto '=https' --tlsv1.2 "$@"
+}
+
+# Detect docker compose command (plugin or legacy)
+set_compose_cmd() {
+  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    COMPOSE_CMD="docker compose"
+  elif command -v docker-compose >/dev/null 2>&1; then
+    COMPOSE_CMD="docker-compose"
+  else
+    COMPOSE_CMD=""   # will install later
+  fi
+}
+
+#--------------------------------------
+# Pretty banner / help
+#--------------------------------------
 print_banner() {
-    echo -e "${CYAN}"
-    echo "╔══════════════════════════════════════════════════════════════════════╗"
-    echo "║                    Blockcast BEACON Setup Script v2.0               ║"
-    echo "║                           Optimized Version                          ║"
-    echo "╚══════════════════════════════════════════════════════════════════════╝"
-    echo -e "${NC}"
+  echo -e "${CYAN}"
+  echo "╔══════════════════════════════════════════════════════════════════════╗"
+  echo "║                    Blockcast BEACON Setup Script v3.0               ║"
+  echo "║                     Hardened, Portable, Reliable                    ║"
+  echo "╚══════════════════════════════════════════════════════════════════════╝"
+  echo -e "${NC}"
 }
 
-print_usage() {
-    cat << EOF
-Usage: ${SCRIPT_NAME} [OPTIONS]
+usage() {
+  cat <<EOF
+Usage: sudo ./${SCRIPT_NAME} [OPTIONS]
 
-Options:
-    -u, --uninstall     Uninstall Blockcast BEACON
-    -b, --backup        Create backup of existing installation
-    -r, --restore FILE  Restore from backup file
-    -c, --check         Check system requirements only
-    -v, --verbose       Enable verbose logging
-    -h, --help          Show this help message
-    --dry-run           Show what would be done without executing
+Actions (pick one):
+  -i, --install              Install Blockcast BEACON (default)
+  -u, --uninstall            Uninstall Blockcast BEACON
+  -b, --backup               Create backup of current installation
+  -r, --restore <FILE>       Restore from backup tar.gz file
+  -c, --check                Only check system requirements
+
+Flags:
+  -v, --verbose              Enable debug logging
+      --dry-run              Print what would be done, don't execute
+  -h, --help                 Show this help
 
 Examples:
-    sudo ./${SCRIPT_NAME}                    # Install Blockcast BEACON
-    sudo ./${SCRIPT_NAME} --uninstall        # Uninstall
-    sudo ./${SCRIPT_NAME} --backup           # Create backup
-    sudo ./${SCRIPT_NAME} --check            # Check requirements
-
+  sudo ./${SCRIPT_NAME}
+  sudo ./${SCRIPT_NAME} --uninstall
+  sudo ./${SCRIPT_NAME} --backup
+  sudo ./${SCRIPT_NAME} --restore ./blockcast_backup_20250101_120000.tar.gz
 EOF
 }
 
-cleanup() {
-    local exit_code=$?
-    if [[ ${exit_code} -ne 0 ]]; then
-        log "ERROR" "Script failed with exit code ${exit_code}"
-        log "INFO" "Check log file: ${LOG_FILE}"
-    fi
-    exit ${exit_code}
-}
-
-verify_checksum() {
-    local file="${1}"
-    local expected_sum="${2}"
-    
-    if command -v sha256sum >/dev/null 2>&1; then
-        local actual_sum=$(sha256sum "${file}" | cut -d' ' -f1)
-    elif command -v shasum >/dev/null 2>&1; then
-        local actual_sum=$(shasum -a 256 "${file}" | cut -d' ' -f1)
-    else
-        log "WARN" "No checksum utility found. Skipping verification."
-        return 0
-    fi
-    
-    if [[ "${actual_sum}" != "${expected_sum}" ]]; then
-        log "ERROR" "Checksum verification failed for ${file}"
-        return 1
-    fi
-    
-    log "INFO" "Checksum verified for ${file}"
-}
-
-version_compare() {
-    # Compare version strings (returns 0 if v1 >= v2)
-    local v1="${1}"
-    local v2="${2}"
-    
-    printf '%s\n%s\n' "${v1}" "${v2}" | sort -V -C
-}
-
-# ============================================================================
-# SYSTEM DETECTION AND REQUIREMENTS
-# ============================================================================
+#--------------------------------------
+# Detection & requirement checks
+#--------------------------------------
 
 detect_os() {
-    if [[ -f /etc/os-release ]]; then
-        source /etc/os-release
-        OS="${ID}"
-        OS_VERSION="${VERSION_ID}"
-        OS_CODENAME="${VERSION_CODENAME:-}"
-    elif [[ -f /etc/redhat-release ]]; then
-        OS="centos"
-        OS_VERSION=$(grep -oE '[0-9]+\.[0-9]+' /etc/redhat-release | head -1)
-    else
-        log "ERROR" "Unsupported operating system"
-        exit 1
-    fi
-    
-    log "INFO" "Detected OS: ${OS} ${OS_VERSION}"
+  if [[ -f /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    source /etc/os-release
+    OS="$ID"; OS_VERSION="$VERSION_ID"; OS_CODENAME="${VERSION_CODENAME:-}"
+  elif [[ -f /etc/redhat-release ]]; then
+    OS="centos"
+    OS_VERSION=$(grep -oE '[0-9]+\.[0-9]+' /etc/redhat-release | head -1)
+  else
+    fatal "Unsupported operating system"
+  fi
+  ARCH=$(uname -m)
+  log INFO "Detected OS: $OS $OS_VERSION ($ARCH)"
+}
+
+check_root() {
+  if [[ $EUID -ne 0 ]]; then
+    fatal "Run as root. Example: sudo $SCRIPT_NAME"
+  fi
 }
 
 check_requirements() {
-    log "INFO" "Checking system requirements..."
-    
-    # Check if running as root
-    if [[ "${EUID}" -ne 0 ]]; then
-        log "ERROR" "This script must be run as root. Use: sudo ${SCRIPT_NAME}"
-        exit 1
-    fi
-    
-    # Check architecture
-    local arch=$(uname -m)
-    if [[ ! "${arch}" =~ ^(x86_64|amd64|arm64|aarch64)$ ]]; then
-        log "ERROR" "Unsupported architecture: ${arch}"
-        exit 1
-    fi
-    
-    # Check available disk space (minimum 10GB)
-    local available_space=$(df / | awk 'NR==2 {print $4}')
-    local min_space=$((10 * 1024 * 1024)) # 10GB in KB
-    
-    if [[ ${available_space} -lt ${min_space} ]]; then
-        log "ERROR" "Insufficient disk space. Need at least 10GB free."
-        exit 1
-    fi
-    
-    # Check memory (minimum 2GB)
-    local available_memory=$(free -k | awk '/^Mem:/ {print $2}')
-    local min_memory=$((2 * 1024 * 1024)) # 2GB in KB
-    
-    if [[ ${available_memory} -lt ${min_memory} ]]; then
-        log "WARN" "Low memory detected. Recommend at least 2GB RAM."
-    fi
-    
-    log "INFO" "System requirements check passed"
+  log INFO "Checking system requirements…"
+  check_root
+
+  # arch
+  if [[ ! "$ARCH" =~ ^(x86_64|amd64|arm64|aarch64)$ ]]; then
+    fatal "Unsupported architecture: $ARCH"
+  fi
+
+  # disk
+  local avail_kb
+  avail_kb=$(df --output=avail -k / | tail -1 | tr -d ' ')
+  local need_kb=$((DISK_MIN_GB * 1024 * 1024))
+  if (( avail_kb < need_kb )); then
+    fatal "Need at least ${DISK_MIN_GB}GB free on /"
+  fi
+
+  # memory
+  local mem_kb
+  if grep -q MemAvailable /proc/meminfo; then
+    mem_kb=$(awk '/MemTotal:/ {print $2}' /proc/meminfo)
+  else
+    mem_kb=$(free -k | awk '/^Mem:/ {print $2}')
+  fi
+  local need_mem_kb=$((MEM_MIN_GB * 1024 * 1024))
+  if (( mem_kb < need_mem_kb )); then
+    log WARN "Detected < ${MEM_MIN_GB}GB RAM. Proceeding anyway."
+  fi
+  log INFO "System requirements OK"
 }
 
-# ============================================================================
-# PACKAGE MANAGEMENT
-# ============================================================================
-
-update_package_manager() {
-    log "INFO" "Updating package manager..."
-    
-    case "${OS}" in
-        ubuntu|debian)
-            apt-get update -qq || {
-                log "ERROR" "Failed to update package manager"
-                exit 1
-            }
-            ;;
-        centos|rhel|fedora)
-            if command -v dnf >/dev/null 2>&1; then
-                dnf makecache -q || {
-                    log "ERROR" "Failed to update package manager"
-                    exit 1
-                }
-            else
-                yum makecache -q || {
-                    log "ERROR" "Failed to update package manager"
-                    exit 1
-                }
-            fi
-            ;;
-    esac
+#--------------------------------------
+# Package install helpers
+#--------------------------------------
+update_pkg_index() {
+  log INFO "Updating package index…"
+  case "$OS" in
+    ubuntu|debian) apt-get update -qq ;;
+    centos|rhel)   yum makecache -q    ;;
+    fedora)        dnf makecache -q    ;;
+    *) fatal "Unsupported OS for package manager updates";;
+  esac
 }
 
-install_package() {
-    local package="${1}"
-    log "INFO" "Installing ${package}..."
-    
-    case "${OS}" in
-        ubuntu|debian)
-            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${package}" || {
-                log "ERROR" "Failed to install ${package}"
-                return 1
-            }
-            ;;
-        centos|rhel|fedora)
-            if command -v dnf >/dev/null 2>&1; then
-                dnf install -y -q "${package}" || {
-                    log "ERROR" "Failed to install ${package}"
-                    return 1
-                }
-            else
-                yum install -y -q "${package}" || {
-                    log "ERROR" "Failed to install ${package}"
-                    return 1
-                }
-            fi
-            ;;
-    esac
-    
-    log "INFO" "${package} installed successfully"
+install_pkgs() {
+  local pkgs=("$@")
+  (( ${#pkgs[@]} == 0 )) && return 0
+  log INFO "Installing packages: ${pkgs[*]}"
+  case "$OS" in
+    ubuntu|debian)
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${pkgs[@]}" ;;
+    centos|rhel)
+      yum install -y -q "${pkgs[@]}" ;;
+    fedora)
+      dnf install -y -q "${pkgs[@]}" ;;
+    *) fatal "Unsupported OS for package installation";;
+  esac
 }
 
-# ============================================================================
-# DOCKER INSTALLATION AND MANAGEMENT
-# ============================================================================
-
+#--------------------------------------
+# Docker & Compose
+#--------------------------------------
 install_docker() {
-    if command -v docker >/dev/null 2>&1; then
-        local docker_version=$(docker --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-        if version_compare "${docker_version}" "${MIN_DOCKER_VERSION}"; then
-            log "INFO" "Docker ${docker_version} is already installed and meets requirements"
-            return 0
-        else
-            log "WARN" "Docker version ${docker_version} is below minimum ${MIN_DOCKER_VERSION}"
-        fi
+  if command -v docker >/dev/null 2>&1; then
+    local cur
+    cur=$(docker --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+    if [[ -n "$cur" ]] && version_ge "$cur" "$MIN_DOCKER_VERSION"; then
+      log INFO "Docker $cur OK"
+      return
+    else
+      log WARN "Docker $cur < $MIN_DOCKER_VERSION, upgrading"
     fi
-    
-    log "INFO" "Installing Docker..."
-    
-    # Install prerequisites
-    case "${OS}" in
-        ubuntu|debian)
-            install_package "ca-certificates"
-            install_package "curl"
-            install_package "gnupg"
-            install_package "lsb-release"
-            ;;
-        centos|rhel|fedora)
-            install_package "ca-certificates"
-            install_package "curl"
-            install_package "gnupg2"
-            ;;
-    esac
-    
-    # Download and verify Docker install script
-    local docker_script="/tmp/docker_install.sh"
-    log "INFO" "Downloading Docker installation script..."
-    
-    if ! curl -fsSL "${DOCKER_INSTALL_URL}" -o "${docker_script}"; then
-        log "ERROR" "Failed to download Docker installation script"
-        exit 1
-    fi
-    
-    # Make script executable and run
-    chmod +x "${docker_script}"
-    if ! bash "${docker_script}"; then
-        log "ERROR" "Docker installation failed"
-        exit 1
-    fi
-    
-    # Clean up
-    rm -f "${docker_script}"
-    
-    # Start and enable Docker service
-    systemctl start docker || {
-        log "ERROR" "Failed to start Docker service"
-        exit 1
-    }
-    
-    systemctl enable docker || {
-        log "ERROR" "Failed to enable Docker service"
-        exit 1
-    }
-    
-    # Add user to docker group
-    if [[ -n "${SUDO_USER:-}" ]]; then
-        usermod -aG docker "${SUDO_USER}"
-        log "INFO" "Added ${SUDO_USER} to docker group"
-    fi
-    
-    log "INFO" "Docker installed and configured successfully"
+  fi
+
+  log INFO "Installing Docker Engine…"
+  case "$OS" in
+    ubuntu|debian)
+      install_pkgs ca-certificates curl gnupg lsb-release
+      install_pkgs apt-transport-https software-properties-common
+      install_pkgs gnupg-agent
+      install_pkgs uidmap # rootless option later if needed
+
+      _fetch https://download.docker.com/linux/$OS/gpg | gpg --dearmor -o /usr/share/keyrings/docker.gpg
+      echo \
+"deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/$OS $(lsb_release -cs) stable" \
+        > /etc/apt/sources.list.d/docker.list
+      apt-get update -qq
+      install_pkgs docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+      ;;
+    centos|rhel|fedora)
+      install_pkgs ca-certificates curl gnupg2
+      if [[ "$OS" == fedora ]]; then
+        dnf -y config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
+        install_pkgs docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+      else
+        yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+        install_pkgs docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+      fi
+      ;;
+    *) fatal "Docker auto-install not implemented for $OS" ;;
+  esac
+
+  # Start service if systemd
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl enable --now docker || fatal "Could not enable/start docker"
+  else
+    service docker start || true
+  fi
+
+  # Add invoking user to docker group
+  if [[ -n "${SUDO_USER:-}" ]]; then
+    usermod -aG docker "$SUDO_USER" || log WARN "Could not add $SUDO_USER to docker group"
+    log INFO "User $SUDO_USER added to docker group. Re-login required to take effect."
+  fi
 }
 
-install_docker_compose() {
-    if command -v docker-compose >/dev/null 2>&1; then
-        local compose_version=$(docker-compose --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-        if version_compare "${compose_version}" "${MIN_COMPOSE_VERSION}"; then
-            log "INFO" "Docker Compose ${compose_version} is already installed and meets requirements"
-            return 0
-        fi
+install_compose() {
+  set_compose_cmd
+  if [[ -n "$COMPOSE_CMD" ]]; then
+    local cur
+    if [[ "$COMPOSE_CMD" == "docker compose" ]]; then
+      cur=$(docker compose version --short | tr -d 'v' || true)
+    else
+      cur=$(docker-compose --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
     fi
-    
-    log "INFO" "Installing Docker Compose..."
-    
-    case "${OS}" in
-        ubuntu|debian)
-            install_package "docker-compose"
-            ;;
-        centos|rhel|fedora)
-            # Install via pip for better version control
-            if ! command -v pip3 >/dev/null 2>&1; then
-                install_package "python3-pip"
-            fi
-            pip3 install --upgrade docker-compose
-            ;;
-    esac
-    
-    log "INFO" "Docker Compose installed successfully"
+    if version_ge "${cur:-0}" "$MIN_COMPOSE_VERSION"; then
+      log INFO "Docker Compose $cur OK"
+      return
+    fi
+  fi
+
+  log INFO "Installing Docker Compose plugin v2…"
+  # If docker-compose-plugin not installed above, install manually
+  local plugin_dir="/usr/local/libexec/docker/cli-plugins"
+  mkdir -p "$plugin_dir"
+  local os_lower=linux arch_lower
+  case "$ARCH" in
+    x86_64|amd64) arch_lower=amd64 ;;
+    aarch64|arm64) arch_lower=arm64 ;;
+    *) fatal "Unsupported arch for compose plugin: $ARCH" ;;
+  esac
+  local ver="v2.27.1"  # pin or update regularly
+  _fetch "https://github.com/docker/compose/releases/download/${ver}/docker-compose-${os_lower}-${arch_lower}" \
+    -o "${plugin_dir}/docker-compose" || fatal "Failed download compose"
+  chmod +x "${plugin_dir}/docker-compose"
+  set_compose_cmd
+  [[ -z "$COMPOSE_CMD" ]] && fatal "Failed to install docker compose"
 }
 
-# ============================================================================
-# BACKUP AND RESTORE FUNCTIONS
-# ============================================================================
-
+#--------------------------------------
+# Backup / Restore
+#--------------------------------------
 create_backup() {
-    log "INFO" "Creating backup..."
-    
-    if [[ ! -d "${BEACON_DIR_NAME}" ]]; then
-        log "WARN" "No existing installation found to backup"
-        return 0
-    fi
-    
-    mkdir -p "${BACKUP_DIR}"
-    
-    # Backup configuration files
-    if [[ -d "${HOME}/.blockcast" ]]; then
-        cp -r "${HOME}/.blockcast" "${BACKUP_DIR}/" || {
-            log "ERROR" "Failed to backup .blockcast directory"
-            return 1
-        }
-    fi
-    
-    # Backup docker-compose files
-    cp -r "${BEACON_DIR_NAME}" "${BACKUP_DIR}/" || {
-        log "ERROR" "Failed to backup beacon directory"
-        return 1
-    }
-    
-    # Create backup info file
-    cat > "${BACKUP_DIR}/backup_info.txt" << EOF
+  log INFO "Creating backup…"
+
+  if [[ ! -d "$BEACON_DIR_NAME" && ! -d "$HOME/.blockcast" ]]; then
+    log WARN "No installation found to backup"
+    return 0
+  fi
+
+  mkdir -p "$BACKUP_STAGING_DIR"
+  [[ -d "$HOME/.blockcast" ]] && cp -a "$HOME/.blockcast" "$BACKUP_STAGING_DIR/"
+  [[ -d "$BEACON_DIR_NAME" ]] && cp -a "$BEACON_DIR_NAME" "$BACKUP_STAGING_DIR/"
+
+  cat >"$BACKUP_STAGING_DIR/backup_info.txt" <<EOF
 Backup created: $(date)
-Script version: 2.0
-OS: ${OS} ${OS_VERSION}
-Docker version: $(docker --version 2>/dev/null || echo "Not installed")
-Docker Compose version: $(docker-compose --version 2>/dev/null || echo "Not installed")
+Script version: 3.0
+OS: $OS $OS_VERSION
+Docker: $(docker --version 2>/dev/null || echo 'not installed')
+Compose: $($COMPOSE_CMD version 2>/dev/null || echo 'not installed')
 EOF
-    
-    # Create compressed backup
-    local backup_file="${SCRIPT_DIR}/blockcast_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
-    tar -czf "${backup_file}" -C "$(dirname "${BACKUP_DIR}")" "$(basename "${BACKUP_DIR}")" || {
-        log "ERROR" "Failed to create backup archive"
-        return 1
-    }
-    
-    # Clean up temporary backup directory
-    rm -rf "${BACKUP_DIR}"
-    
-    log "INFO" "Backup created: ${backup_file}"
-    echo -e "${GREEN}Backup file: ${backup_file}${NC}"
+
+  local tar_file="${SCRIPT_DIR}/${BACKUP_TAR_PREFIX}.tar.gz"
+  tar -czf "$tar_file" -C "$(dirname "$BACKUP_STAGING_DIR")" "$(basename "$BACKUP_STAGING_DIR")"
+  rm -rf "$BACKUP_STAGING_DIR"
+
+  log INFO "Backup created: $tar_file"
+  echo -e "${GREEN}Backup file: $tar_file${NC}"
 }
 
 restore_backup() {
-    local backup_file="${1}"
-    
-    if [[ ! -f "${backup_file}" ]]; then
-        log "ERROR" "Backup file not found: ${backup_file}"
-        exit 1
-    fi
-    
-    log "INFO" "Restoring from backup: ${backup_file}"
-    
-    # Extract backup
-    local temp_restore_dir="/tmp/blockcast_restore_$$"
-    mkdir -p "${temp_restore_dir}"
-    
-    tar -xzf "${backup_file}" -C "${temp_restore_dir}" || {
-        log "ERROR" "Failed to extract backup file"
-        exit 1
-    }
-    
-    # Find the backup directory (should be the only directory in temp_restore_dir)
-    local backup_content_dir=$(find "${temp_restore_dir}" -maxdepth 1 -type d -name "*.blockcast_backup_*" | head -1)
-    
-    if [[ -z "${backup_content_dir}" ]]; then
-        log "ERROR" "Invalid backup file structure"
-        exit 1
-    fi
-    
-    # Restore files
-    if [[ -d "${backup_content_dir}/.blockcast" ]]; then
-        cp -r "${backup_content_dir}/.blockcast" "${HOME}/" || {
-            log "ERROR" "Failed to restore .blockcast directory"
-            exit 1
-        }
-    fi
-    
-    if [[ -d "${backup_content_dir}/${BEACON_DIR_NAME}" ]]; then
-        rm -rf "${BEACON_DIR_NAME}"
-        cp -r "${backup_content_dir}/${BEACON_DIR_NAME}" ./ || {
-            log "ERROR" "Failed to restore beacon directory"
-            exit 1
-        }
-    fi
-    
-    # Clean up
-    rm -rf "${temp_restore_dir}"
-    
-    log "INFO" "Backup restored successfully"
+  local tar_file="$1"
+  [[ -z "$tar_file" ]] && fatal "--restore requires a file"
+  [[ -f "$tar_file" ]] || fatal "Backup file not found: $tar_file"
+
+  log INFO "Restoring from $tar_file …"
+  local tmp_dir="/tmp/blockcast_restore_$$"
+  mkdir -p "$tmp_dir"
+  tar -xzf "$tar_file" -C "$tmp_dir"
+
+  # Detect dir pattern we stored (starts with .blockcast_backup_) or any single dir
+  local inner_dir
+  inner_dir=$(find "$tmp_dir" -maxdepth 1 -type d -name "*.blockcast_backup_*" -o -type d -mindepth 1 -print | head -1)
+  [[ -z "$inner_dir" ]] && fatal "Invalid backup structure"
+
+  [[ -d "$inner_dir/.blockcast" ]] && cp -a "$inner_dir/.blockcast" "$HOME/"
+  if [[ -d "$inner_dir/$BEACON_DIR_NAME" ]]; then
+    rm -rf "$BEACON_DIR_NAME"
+    cp -a "$inner_dir/$BEACON_DIR_NAME" ./
+  fi
+
+  rm -rf "$tmp_dir"
+  log INFO "Restore complete."
 }
 
-# ============================================================================
-# BLOCKCAST BEACON FUNCTIONS
-# ============================================================================
+#--------------------------------------
+# Clone / start services
+#--------------------------------------
+clone_repo() {
+  log INFO "Cloning Blockcast repo…"
+  if [[ -d "$BEACON_DIR_NAME" ]]; then
+    local bak="${BEACON_DIR_NAME}.bak.$(date +%s)"
+    mv "$BEACON_DIR_NAME" "$bak"
+    log INFO "Existing repo moved to $bak"
+  fi
 
-uninstall_blockcast() {
-    log "INFO" "Starting Blockcast BEACON uninstallation..."
-    
-    # Stop and remove containers
-    if [[ -d "${BEACON_DIR_NAME}" ]]; then
-        cd "${BEACON_DIR_NAME}" || {
-            log "ERROR" "Failed to enter beacon directory"
-            exit 1
-        }
-        
-        if [[ -f "docker-compose.yml" ]]; then
-            log "INFO" "Stopping Blockcast BEACON containers..."
-            docker-compose down --remove-orphans --volumes || {
-                log "WARN" "Failed to gracefully stop containers"
-            }
-            
-            # Force remove if necessary
-            docker-compose rm -f || {
-                log "WARN" "Failed to remove containers"
-            }
-        fi
-        
-        cd ..
-        rm -rf "${BEACON_DIR_NAME}"
-        log "INFO" "Removed beacon directory"
-    else
-        log "WARN" "Beacon directory not found"
-    fi
-    
-    # Clean up Docker images (optional)
-    read -p "Remove Blockcast Docker images? [y/N]: " -n 1 -r
-    echo
-    if [[ ${REPLY} =~ ^[Yy]$ ]]; then
-        docker images | grep -E "(blockcast|beacon)" | awk '{print $3}' | xargs -r docker rmi -f
-        log "INFO" "Removed Blockcast Docker images"
-    fi
-    
-    log "INFO" "Blockcast BEACON uninstalled successfully"
-}
-
-install_dependencies() {
-    log "INFO" "Installing dependencies..."
-    
-    # Install git
-    if ! command -v git >/dev/null 2>&1; then
-        install_package "git"
-    fi
-    
-    # Install curl if not present
-    if ! command -v curl >/dev/null 2>&1; then
-        install_package "curl"
-    fi
-    
-    # Install Docker
-    install_docker
-    
-    # Install Docker Compose
-    install_docker_compose
-    
-    log "INFO" "All dependencies installed successfully"
-}
-
-clone_repository() {
-    log "INFO" "Cloning Blockcast BEACON repository..."
-    
-    if [[ -d "${BEACON_DIR_NAME}" ]]; then
-        log "INFO" "Repository already exists. Creating backup and re-cloning..."
-        local backup_name="${BEACON_DIR_NAME}.backup.$(date +%s)"
-        mv "${BEACON_DIR_NAME}" "${backup_name}"
-        log "INFO" "Existing repository backed up as ${backup_name}"
-    fi
-    
-    if ! git clone "${BEACON_REPO_URL}" "${BEACON_DIR_NAME}"; then
-        log "ERROR" "Failed to clone repository"
-        exit 1
-    fi
-    
-    # Verify repository structure
-    if [[ ! -f "${BEACON_DIR_NAME}/docker-compose.yml" ]]; then
-        log "ERROR" "Invalid repository structure - docker-compose.yml not found"
-        exit 1
-    fi
-    
-    log "INFO" "Repository cloned successfully"
+  git clone "$BEACON_REPO_URL" "$BEACON_DIR_NAME" || fatal "git clone failed"
+  [[ -f "$BEACON_DIR_NAME/docker-compose.yml" ]] || fatal "docker-compose.yml missing in repo"
+  log INFO "Repository cloned"
 }
 
 start_blockcast() {
-    log "INFO" "Starting Blockcast BEACON..."
-    
-    cd "${BEACON_DIR_NAME}" || {
-        log "ERROR" "Failed to enter beacon directory"
-        exit 1
-    }
-    
-    # Pull latest images
-    docker-compose pull || {
-        log "ERROR" "Failed to pull Docker images"
-        exit 1
-    }
-    
-    # Start services
-    docker-compose up -d || {
-        log "ERROR" "Failed to start Blockcast BEACON"
-        exit 1
-    }
-    
-    # Wait for services to be ready with better health checking
-    log "INFO" "Waiting for services to initialize..."
-    local max_wait=120
-    local wait_time=0
-    
-    while [[ ${wait_time} -lt ${max_wait} ]]; do
-        if docker-compose ps | grep -q "Up"; then
-            break
-        fi
-        sleep 5
-        wait_time=$((wait_time + 5))
-        log "DEBUG" "Waiting for services... (${wait_time}/${max_wait}s)"
-    done
-    
-    if [[ ${wait_time} -ge ${max_wait} ]]; then
-        log "ERROR" "Services failed to start within ${max_wait} seconds"
-        docker-compose logs
-        exit 1
+  pushd "$BEACON_DIR_NAME" >/dev/null
+  log INFO "Pulling images…"
+  $COMPOSE_CMD pull || fatal "Compose pull failed"
+
+  log INFO "Starting services…"
+  $COMPOSE_CMD up -d || fatal "Compose up failed"
+
+  # Wait for containers to come up (healthcheck aware if defined)
+  log INFO "Waiting for services to initialize…"
+  local max_wait=180 step=5 waited=0 ok=0
+  while (( waited < max_wait )); do
+    if $COMPOSE_CMD ps --format json 2>/dev/null | grep -q '"State":"running"'; then
+      ok=1; break
     fi
-    
-    log "INFO" "Services started successfully"
+    sleep $step; waited=$((waited+step))
+    log DEBUG "Waiting… ${waited}/${max_wait}s"
+  done
+  (( ok == 1 )) || { $COMPOSE_CMD ps; fatal "Services failed to start in $max_wait seconds"; }
+  popd >/dev/null
+  log INFO "Services started"
+}
+
+#--------------------------------------
+# Key generation
+#--------------------------------------
+extract_field() { # extract 'Hardware ID: xxxx' style
+  grep -i "$1" | sed "s/.*$1[[:space:]]*:[[:space:]]*//" | tr -d '\r' | sed 's/[[:space:]]*$//' 
 }
 
 generate_keys() {
-    log "INFO" "Generating hardware and challenge keys..."
-    
-    local max_retries=3
-    local retry=0
-    local init_output=""
-    
-    while [[ ${retry} -lt ${max_retries} ]]; do
-        init_output=$(docker-compose exec -T blockcastd blockcastd init 2>&1) || {
-            retry=$((retry + 1))
-            log "WARN" "Key generation attempt ${retry} failed. Retrying..."
-            sleep 10
-            continue
-        }
-        break
-    done
-    
-    if [[ ${retry} -eq ${max_retries} ]]; then
-        log "ERROR" "Failed to generate keys after ${max_retries} attempts"
-        log "ERROR" "Last output: ${init_output}"
-        exit 1
+  pushd "$BEACON_DIR_NAME" >/dev/null
+  log INFO "Generating hardware and challenge keys…"
+
+  local try=0 max=3 out=""
+  until (( try==max )); do
+    if out=$($COMPOSE_CMD exec -T blockcastd blockcastd init 2>&1); then
+      break
     fi
-    
-    if [[ -z "${init_output}" ]]; then
-        log "ERROR" "No output from init command"
-        exit 1
+    try=$((try+1))
+    log WARN "Init attempt $try failed, retrying in 10s…"
+    sleep 10
+  done
+  (( try==max )) && fatal "Failed to generate keys after $max attempts. Last output:\n$out"
+  [[ -n "$out" ]] || fatal "Empty init output"
+
+  local hwid challenge_key reg_url
+  hwid=$(echo "$out" | extract_field "Hardware ID")
+  challenge_key=$(echo "$out" | extract_field "Challenge Key")
+  reg_url=$(echo "$out" | extract_field "Registration URL")
+  [[ -n "$hwid" && -n "$challenge_key" ]] || fatal "Could not parse keys from init output"
+
+  popd >/dev/null
+
+  echo -e "\n${GREEN}╔══════════════════════════════════════════════════════════════════════╗${NC}"
+  echo -e "${GREEN}║                     Blockcast BEACON Setup Complete!                ║${NC}"
+  echo -e "${GREEN}╚══════════════════════════════════════════════════════════════════════╝${NC}\n"
+
+  echo -e "${CYAN}====== BACK UP THIS INFORMATION ======${NC}"
+  echo -e "${YELLOW}Hardware ID:${NC} $hwid"
+  echo -e "${YELLOW}Challenge Key:${NC} $challenge_key"
+  [[ -n "$reg_url" ]] && echo -e "${YELLOW}Registration URL:${NC} $reg_url"
+
+  echo -e "\n${CYAN}Build Information:${NC}"
+  echo "$out" | grep -i -E "commit|build|version" | sed 's/^/  /'
+
+  echo -e "\n${RED}⚠  SECURITY WARNING: Keep the following private keys secure!${NC}"
+  echo -e "${CYAN}Private Keys Location:${NC}"
+  local cert_dir="${HOME}/.blockcast/certs"
+  for f in gw_challenge.key gateway.key gateway.crt; do
+    local p="$cert_dir/$f"
+    if [[ -f "$p" ]]; then
+      echo -e "\n${YELLOW}$f${NC}\nLocation: $p"
+      [[ $f == *.key ]] && { echo -e "${RED}Content:${NC}"; cat "$p"; }
     fi
-    
-    # Extract information with better parsing
-    local hwid=$(echo "${init_output}" | grep -i "Hardware ID" | sed 's/.*Hardware ID[[:space:]]*:[[:space:]]*//' | tr -d '[:space:]')
-    local challenge_key=$(echo "${init_output}" | grep -i "Challenge Key" | sed 's/.*Challenge Key[[:space:]]*:[[:space:]]*//' | tr -d '[:space:]')
-    local reg_url=$(echo "${init_output}" | grep -i "Registration URL" | sed 's/.*Registration URL[[:space:]]*:[[:space:]]*//')
-    
-    if [[ -z "${hwid}" ]] || [[ -z "${challenge_key}" ]]; then
-        log "ERROR" "Failed to extract keys from init output"
-        log "DEBUG" "Init output: ${init_output}"
-        exit 1
-    fi
-    
-    # Display results
-    echo -e "\n${GREEN}╔══════════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║                    Blockcast BEACON Setup Complete!                 ║${NC}"
-    echo -e "${GREEN}╚══════════════════════════════════════════════════════════════════════╝${NC}\n"
-    
-    echo -e "${CYAN}====== BACKUP THIS INFORMATION ======${NC}"
-    echo -e "${YELLOW}Hardware ID:${NC} ${hwid}"
-    echo -e "${YELLOW}Challenge Key:${NC} ${challenge_key}"
-    if [[ -n "${reg_url}" ]]; then
-        echo -e "${YELLOW}Registration URL:${NC} ${reg_url}"
-    fi
-    
-    # Display build info
-    echo -e "\n${CYAN}Build Information:${NC}"
-    echo "${init_output}" | grep -i -E "commit|build|version" | sed 's/^/  /'
-    
-    # Display private keys with proper security warning
-    echo -e "\n${RED}⚠️  SECURITY WARNING: Keep the following private keys secure!${NC}"
-    echo -e "${CYAN}Private Keys Location:${NC}"
-    
-    local cert_files=("gw_challenge.key" "gateway.key" "gateway.crt")
-    for cert_file in "${cert_files[@]}"; do
-        local cert_path="${HOME}/.blockcast/certs/${cert_file}"
-        if [[ -f "${cert_path}" ]]; then
-            echo -e "\n${YELLOW}${cert_file}:${NC}"
-            echo "Location: ${cert_path}"
-            if [[ "${cert_file}" == *.key ]]; then
-                echo -e "${RED}Content:${NC}"
-                cat "${cert_path}"
-            fi
-        fi
-    done
-    
-    echo -e "${CYAN}====== END BACKUP INFORMATION ======${NC}\n"
-    
-    # Next steps
-    echo -e "${BLUE}Next Steps:${NC}"
-    echo "1. 🌐 Visit https://app.blockcast.network/ and log in"
-    echo "2. 📝 Go to Manage Nodes > Register Node"
-    echo "3. 🔑 Enter the Hardware ID and Challenge Key shown above"
-    if [[ -n "${reg_url}" ]]; then
-        echo "   Or paste the Registration URL directly: ${reg_url}"
-    fi
-    echo "4. 📍 Enter your VM location (e.g., US, India, Indonesia)"
-    echo "5. 💾 Save the backup information shown above in a secure location"
-    echo ""
-    echo -e "${GREEN}Important Notes:${NC}"
-    echo "• Check node status at /manage-nodes after a few minutes"
-    echo "• Node should show 'Healthy' status"
-    echo "• First connectivity test runs after 6 hours"
-    echo "• Rewards start after 24 hours"
-    echo "• Monitor logs with: docker-compose logs -f"
-    
-    # Save information to file
-    local info_file="${SCRIPT_DIR}/blockcast_node_info_$(date +%Y%m%d_%H%M%S).txt"
-    cat > "${info_file}" << EOF
+  done
+  echo -e "${CYAN}====== END BACKUP INFORMATION ======${NC}\n"
+
+  cat >"${SCRIPT_DIR}/blockcast_node_info_$(date +%Y%m%d_%H%M%S).txt" <<EOF
 Blockcast BEACON Node Information
 Generated: $(date)
 
-Hardware ID: ${hwid}
-Challenge Key: ${challenge_key}
-Registration URL: ${reg_url}
+Hardware ID: $hwid
+Challenge Key: $challenge_key
+Registration URL: $reg_url
 
 Build Information:
-$(echo "${init_output}" | grep -i -E "commit|build|version")
+$(echo "$out" | grep -i -E "commit|build|version")
 
-Certificate Files Location: ${HOME}/.blockcast/certs/
+Certificate Files Location: $cert_dir
 EOF
-    
-    log "INFO" "Node information saved to: ${info_file}"
+  log INFO "Node info saved to script directory"
+
+  echo -e "${BLUE}Next Steps:${NC}"
+  echo "1. Visit https://app.blockcast.network/ and log in"
+  echo "2. Manage Nodes > Register Node"
+  echo "3. Enter the Hardware ID & Challenge Key above (or use Registration URL)"
+  echo "4. Provide VM location"
+  echo "5. Store the info/keys securely"
+  echo "\n${GREEN}Notes:${NC}"
+  echo "• Node should show 'Healthy' after a few minutes"
+  echo "• First connectivity test ~6h, rewards ~24h"
+  echo "• Monitor logs: $COMPOSE_CMD logs -f"
 }
 
-# ============================================================================
-# MAIN INSTALLATION FUNCTION
-# ============================================================================
+#--------------------------------------
+# Uninstall
+#--------------------------------------
+uninstall_blockcast() {
+  log INFO "Uninstalling Blockcast BEACON…"
+  if [[ -d "$BEACON_DIR_NAME" ]]; then
+    pushd "$BEACON_DIR_NAME" >/dev/null
+    if [[ -f docker-compose.yml || -f compose.yml ]]; then
+      log INFO "Stopping containers…"
+      $COMPOSE_CMD down --volumes --remove-orphans || log WARN "Couldn't stop containers cleanly"
+    fi
+    popd >/dev/null
+    rm -rf "$BEACON_DIR_NAME"
+    log INFO "Removed repo dir"
+  else
+    log WARN "Repo dir not found"
+  fi
 
+  read -r -p "Remove Blockcast Docker images? [y/N]: " ans
+  if [[ $ans =~ ^[Yy]$ ]]; then
+    docker images --format '{{.Repository}} {{.ID}}' | awk '/blockcast|beacon/ {print $2}' | xargs -r docker rmi -f
+    log INFO "Images removed"
+  fi
+  log INFO "Uninstall complete"
+}
+
+#--------------------------------------
+# Dry-run helper
+#--------------------------------------
+print_plan() {
+  cat <<EOF
+DRY RUN – actions that would be executed:
+  1. detect_os & check_requirements
+  2. update_pkg_index & install docker + compose plugin if missing
+  3. install git/curl
+  4. clone $BEACON_REPO_URL into $BEACON_DIR_NAME
+  5. pull images & start services via docker compose
+  6. run blockcastd init to generate keys
+  7. save node info to file
+EOF
+}
+
+#--------------------------------------
+# Main installer
+#--------------------------------------
 install_blockcast() {
-    log "INFO" "Starting Blockcast BEACON installation..."
-    
-    check_requirements
-    detect_os
-    update_package_manager
-    install_dependencies
-    clone_repository
-    start_blockcast
-    generate_keys
-    
-    log "INFO" "Installation completed successfully!"
+  detect_os
+  check_requirements
+  update_pkg_index
+  install_pkgs git curl gnupg
+  install_docker
+  install_compose
+  clone_repo
+  start_blockcast
+  generate_keys
+  log INFO "Installation completed successfully!"
 }
 
-# ============================================================================
-# MAIN SCRIPT LOGIC
-# ============================================================================
-
+#--------------------------------------
+# CLI parsing & dispatch
+#--------------------------------------
 main() {
-    # Initialize logging
-    touch "${LOG_FILE}"
-    
-    # Set up cleanup trap
-    trap cleanup EXIT
-    
-    print_banner
-    
-    # Parse command line arguments
-    local action="install"
-    local backup_file=""
-    local dry_run=false
-    
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            -u|--uninstall)
-                action="uninstall"
-                shift
-                ;;
-            -b|--backup)
-                action="backup"
-                shift
-                ;;
-            -r|--restore)
-                action="restore"
-                backup_file="${2}"
-                shift 2
-                ;;
-            -c|--check)
-                action="check"
-                shift
-                ;;
-            -v|--verbose)
-                export DEBUG=1
-                shift
-                ;;
-            --dry-run)
-                dry_run=true
-                shift
-                ;;
-            -h|--help)
-                print_usage
-                exit 0
-                ;;
-            *)
-                log "ERROR" "Unknown option: $1"
-                print_usage
-                exit 1
-                ;;
-        esac
-    done
-    
-    # Execute based on action
-    case "${action}" in
-        "install")
-            if [[ "${dry_run}" == true ]]; then
-                log "INFO" "DRY RUN: Would install Blockcast BEACON"
-                check_requirements
-                detect_os
-                exit 0
-            fi
-            install_blockcast
-            ;;
-        "uninstall")
-            if [[ "${dry_run}" == true ]]; then
-                log "INFO" "DRY RUN: Would uninstall Blockcast BEACON"
-                exit 0
-            fi
-            uninstall_blockcast
-            ;;
-        "backup")
-            create_backup
-            ;;
-        "restore")
-            restore_backup "${backup_file}"
-            ;;
-        "check")
-            check_requirements
-            detect_os
-            log "INFO" "System check completed"
-            ;;
+  touch "$LOG_FILE"
+  print_banner
+
+  local action="install" dry_run=0 backup_file=""
+  while (( $# )); do
+    case "$1" in
+      -i|--install)   action="install" ; shift ;;
+      -u|--uninstall) action="uninstall" ; shift ;;
+      -b|--backup)    action="backup" ; shift ;;
+      -r|--restore)   action="restore" ; backup_file="${2:-}"; [[ -z "$backup_file" ]] && fatal "--restore needs a file"; shift 2 ;;
+      -c|--check)     action="check" ; shift ;;
+      -v|--verbose)   DEBUG_LEVEL=1 ; shift ;;
+      --dry-run)      dry_run=1 ; shift ;;
+      -h|--help)      usage; exit 0 ;;
+      *) fatal "Unknown option: $1" ;;
     esac
+  done
+
+  case "$action" in
+    install)
+      if (( dry_run )); then
+        detect_os; check_requirements; print_plan; exit 0
+      fi
+      install_blockcast ;;
+    uninstall)
+      (( dry_run )) && { log INFO "DRY RUN: would uninstall"; exit 0; }
+      set_compose_cmd
+      uninstall_blockcast ;;
+    backup)
+      detect_os
+      create_backup ;;
+    restore)
+      detect_os
+      restore_backup "$backup_file" ;;
+    check)
+      detect_os; check_requirements; log INFO "System check completed" ;;
+  esac
 }
 
-# Run main function with all arguments
 main "$@"
