@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-
 ###############################################################################
-# Blockcast BEACON Setup Script - v3.0 (Hardened & Portable)
+# Blockcast BEACON Setup Script - v3.1 (Hardened & Portable)
+# - Fix compose download 404 (correct asset names x86_64/aarch64)
+# - Prefer official docker-compose-plugin on Ubuntu/Debian
 # Supported OS  : Ubuntu 18.04+/Debian 10+/RHEL/CentOS 7+/Fedora 33+
 # Architectures : x86_64/amd64, arm64/aarch64
-# Requirements  : root privileges (sudo), internet access (for install path)
 ###############################################################################
 
 set -eEuo pipefail
@@ -21,7 +21,7 @@ readonly BACKUP_TAR_PREFIX="blockcast_backup_$(date +%Y%m%d_%H%M%S)"
 readonly BEACON_REPO_URL="https://github.com/Blockcast/beacon-docker-compose.git"
 readonly BEACON_DIR_NAME="beacon-docker-compose"
 readonly MIN_DOCKER_VERSION="20.10.0"
-readonly MIN_COMPOSE_VERSION="2.0.0"   # v2 plugin preferred
+readonly MIN_COMPOSE_VERSION="2.0.0"   # prefer v2 plugin
 readonly DISK_MIN_GB=10
 readonly MEM_MIN_GB=2
 
@@ -30,12 +30,12 @@ readonly RED='\033[0;31m'; readonly GREEN='\033[0;32m'; readonly YELLOW='\033[1;
 readonly BLUE='\033[0;34m'; readonly PURPLE='\033[0;35m'; readonly CYAN='\033[0;36m'
 readonly NC='\033[0m'
 
-# Globals (mutable)
+# Globals
 OS=""; OS_VERSION=""; OS_CODENAME=""; ARCH=""; COMPOSE_CMD=""
 DEBUG_LEVEL=${DEBUG:-0}
 
 #--------------------------------------
-# Logging helpers
+# Logging
 #--------------------------------------
 log() {
   local level="$1"; shift
@@ -43,41 +43,36 @@ log() {
   local ts
   ts="$(date '+%Y-%m-%d %H:%M:%S')"
 
-  # color prefix
-  local color=""; local tag="[$level]"
+  local color=""
   case "$level" in
-    INFO)  color="$GREEN";;
-    WARN)  color="$YELLOW";;
-    ERROR) color="$RED";;
-    DEBUG) color="$PURPLE";;
-  esac
+    INFO)  color="$GREEN" ;;
+    WARN)  color="$YELLOW" ;;
+    ERROR) color="$RED" ;;
+    DEBUG) color="$PURPLE" ;;
+  endesac
 
-  # Respect DEBUG level
   if [[ "$level" == DEBUG && "$DEBUG_LEVEL" -ne 1 ]]; then
     echo "[$ts] [DEBUG] $msg" >>"$LOG_FILE"
     return
   fi
 
-  echo -e "${color}${tag}${NC} $msg" | tee -a "$LOG_FILE" >&2
+  echo -e "${color}[$level]${NC} $msg" | tee -a "$LOG_FILE" >&2
   [[ "$level" == DEBUG ]] || echo "[$ts] [$level] $msg" >>"$LOG_FILE"
 }
 
-fatal() { log ERROR "$*"; exit 1; }
+fatal(){ log ERROR "$*"; exit 1; }
 
 cleanup() {
   local code=$?
-  if (( code != 0 )); then
-    log ERROR "Script failed with exit code $code. See $LOG_FILE"
-  fi
+  (( code != 0 )) && log ERROR "Script failed with exit code $code. See $LOG_FILE"
   tput sgr0 2>/dev/null || true
   exit $code
 }
 trap cleanup EXIT
 
 #--------------------------------------
-# Utility functions
+# Utils
 #--------------------------------------
-# Return 0 if v1 >= v2
 version_ge() {
   local v1="$1" v2="$2"
   if command -v dpkg >/dev/null 2>&1; then
@@ -87,29 +82,22 @@ version_ge() {
   fi
 }
 
-# Curl with sane defaults
-_fetch() {
-  curl -fsSL --proto '=https' --tlsv1.2 "$@"
-}
+_fetch() { curl -fsSL --proto '=https' --tlsv1.2 "$@"; }
 
-# Detect docker compose command (plugin or legacy)
 set_compose_cmd() {
   if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
     COMPOSE_CMD="docker compose"
   elif command -v docker-compose >/dev/null 2>&1; then
     COMPOSE_CMD="docker-compose"
   else
-    COMPOSE_CMD=""   # will install later
+    COMPOSE_CMD=""
   fi
 }
 
-#--------------------------------------
-# Pretty banner / help
-#--------------------------------------
 print_banner() {
   echo -e "${CYAN}"
   echo "╔══════════════════════════════════════════════════════════════════════╗"
-  echo "║                    Blockcast BEACON Setup Script v3.0               ║"
+  echo "║                    Blockcast BEACON Setup Script v3.1               ║"
   echo "║                     Hardened, Portable, Reliable                    ║"
   echo "╚══════════════════════════════════════════════════════════════════════╝"
   echo -e "${NC}"
@@ -128,21 +116,14 @@ Actions (pick one):
 
 Flags:
   -v, --verbose              Enable debug logging
-      --dry-run              Print what would be done, don't execute
+      --dry-run              Show actions without executing
   -h, --help                 Show this help
-
-Examples:
-  sudo ./${SCRIPT_NAME}
-  sudo ./${SCRIPT_NAME} --uninstall
-  sudo ./${SCRIPT_NAME} --backup
-  sudo ./${SCRIPT_NAME} --restore ./blockcast_backup_20250101_120000.tar.gz
 EOF
 }
 
 #--------------------------------------
-# Detection & requirement checks
+# Detection & checks
 #--------------------------------------
-
 detect_os() {
   if [[ -f /etc/os-release ]]; then
     # shellcheck disable=SC1091
@@ -154,49 +135,39 @@ detect_os() {
   else
     fatal "Unsupported operating system"
   fi
-  ARCH=$(uname -m)
+  ARCH="$(uname -m)"
   log INFO "Detected OS: $OS $OS_VERSION ($ARCH)"
 }
 
 check_root() {
-  if [[ $EUID -ne 0 ]]; then
-    fatal "Run as root. Example: sudo $SCRIPT_NAME"
-  fi
+  [[ $EUID -ne 0 ]] && fatal "Run as root. Example: sudo $SCRIPT_NAME"
 }
 
 check_requirements() {
   log INFO "Checking system requirements…"
   check_root
 
-  # arch
-  if [[ ! "$ARCH" =~ ^(x86_64|amd64|arm64|aarch64)$ ]]; then
-    fatal "Unsupported architecture: $ARCH"
-  fi
+  [[ "$ARCH" =~ ^(x86_64|amd64|arm64|aarch64)$ ]] || fatal "Unsupported architecture: $ARCH"
 
-  # disk
   local avail_kb
   avail_kb=$(df --output=avail -k / | tail -1 | tr -d ' ')
   local need_kb=$((DISK_MIN_GB * 1024 * 1024))
-  if (( avail_kb < need_kb )); then
-    fatal "Need at least ${DISK_MIN_GB}GB free on /"
-  fi
+  (( avail_kb < need_kb )) && fatal "Need at least ${DISK_MIN_GB}GB free on /"
 
-  # memory
   local mem_kb
-  if grep -q MemAvailable /proc/meminfo; then
+  if grep -q MemTotal /proc/meminfo; then
     mem_kb=$(awk '/MemTotal:/ {print $2}' /proc/meminfo)
   else
     mem_kb=$(free -k | awk '/^Mem:/ {print $2}')
   fi
   local need_mem_kb=$((MEM_MIN_GB * 1024 * 1024))
-  if (( mem_kb < need_mem_kb )); then
-    log WARN "Detected < ${MEM_MIN_GB}GB RAM. Proceeding anyway."
-  fi
+  (( mem_kb < need_mem_kb )) && log WARN "Detected < ${MEM_MIN_GB}GB RAM. Proceeding anyway."
+
   log INFO "System requirements OK"
 }
 
 #--------------------------------------
-# Package install helpers
+# Package helpers
 #--------------------------------------
 update_pkg_index() {
   log INFO "Updating package index…"
@@ -204,7 +175,7 @@ update_pkg_index() {
     ubuntu|debian) apt-get update -qq ;;
     centos|rhel)   yum makecache -q    ;;
     fedora)        dnf makecache -q    ;;
-    *) fatal "Unsupported OS for package manager updates";;
+    *) fatal "Unsupported OS for package updates" ;;
   esac
 }
 
@@ -219,7 +190,7 @@ install_pkgs() {
       yum install -y -q "${pkgs[@]}" ;;
     fedora)
       dnf install -y -q "${pkgs[@]}" ;;
-    *) fatal "Unsupported OS for package installation";;
+    *) fatal "Unsupported OS for package installation" ;;
   esac
 }
 
@@ -241,22 +212,16 @@ install_docker() {
   log INFO "Installing Docker Engine…"
   case "$OS" in
     ubuntu|debian)
-      install_pkgs ca-certificates curl gnupg lsb-release
-      install_pkgs apt-transport-https software-properties-common
-      install_pkgs gnupg-agent
-      install_pkgs uidmap # rootless option later if needed
-
+      install_pkgs ca-certificates curl gnupg lsb-release apt-transport-https software-properties-common gnupg-agent uidmap
       _fetch https://download.docker.com/linux/$OS/gpg | gpg --dearmor -o /usr/share/keyrings/docker.gpg
-      echo \
-"deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/$OS $(lsb_release -cs) stable" \
-        > /etc/apt/sources.list.d/docker.list
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/$OS $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
       apt-get update -qq
       install_pkgs docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
       ;;
     centos|rhel|fedora)
-      install_pkgs ca-certificates curl gnupg2
+      install_pkgs ca-certificates curl gnupg2 yum-utils dnf-plugins-core || true
       if [[ "$OS" == fedora ]]; then
-        dnf -y config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
+        dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
         install_pkgs docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
       else
         yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
@@ -266,17 +231,15 @@ install_docker() {
     *) fatal "Docker auto-install not implemented for $OS" ;;
   esac
 
-  # Start service if systemd
   if command -v systemctl >/dev/null 2>&1; then
     systemctl enable --now docker || fatal "Could not enable/start docker"
   else
     service docker start || true
   fi
 
-  # Add invoking user to docker group
   if [[ -n "${SUDO_USER:-}" ]]; then
     usermod -aG docker "$SUDO_USER" || log WARN "Could not add $SUDO_USER to docker group"
-    log INFO "User $SUDO_USER added to docker group. Re-login required to take effect."
+    log INFO "User $SUDO_USER added to docker group. Re-login required."
   fi
 }
 
@@ -285,32 +248,66 @@ install_compose() {
   if [[ -n "$COMPOSE_CMD" ]]; then
     local cur
     if [[ "$COMPOSE_CMD" == "docker compose" ]]; then
-      cur=$(docker compose version --short | tr -d 'v' || true)
+      cur=$(docker compose version --short 2>/dev/null | tr -d 'v' || true)
     else
-      cur=$(docker-compose --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+      cur=$(docker-compose --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
     fi
-    if version_ge "${cur:-0}" "$MIN_COMPOSE_VERSION"; then
+    if [[ -n "$cur" ]] && version_ge "$cur" "$MIN_COMPOSE_VERSION"; then
       log INFO "Docker Compose $cur OK"
       return
     fi
   fi
 
-  log INFO "Installing Docker Compose plugin v2…"
-  # If docker-compose-plugin not installed above, install manually
+  log INFO "Installing / upgrading Docker Compose to v2…"
+
+  # 1. Try distro packages (preferred)
+  case "$OS" in
+    ubuntu|debian)
+      install_pkgs docker-buildx-plugin docker-compose-plugin || true
+      ;;
+    centos|rhel|fedora)
+      if command -v dnf >/dev/null 2>&1; then
+        dnf install -y -q docker-buildx-plugin docker-compose-plugin || true
+      else
+        yum install -y -q docker-buildx-plugin docker-compose-plugin || true
+      fi
+      ;;
+  esac
+
+  set_compose_cmd
+  if [[ -n "$COMPOSE_CMD" ]]; then
+    log INFO "Compose plugin installed via package manager"
+    return
+  fi
+
+  # 2. Fallback manual binary from GitHub
   local plugin_dir="/usr/local/libexec/docker/cli-plugins"
   mkdir -p "$plugin_dir"
-  local os_lower=linux arch_lower
+
+  local arch_file
   case "$ARCH" in
-    x86_64|amd64) arch_lower=amd64 ;;
-    aarch64|arm64) arch_lower=arm64 ;;
+    x86_64|amd64)  arch_file=x86_64 ;;
+    aarch64|arm64) arch_file=aarch64 ;;
     *) fatal "Unsupported arch for compose plugin: $ARCH" ;;
   esac
-  local ver="v2.27.1"  # pin or update regularly
-  _fetch "https://github.com/docker/compose/releases/download/${ver}/docker-compose-${os_lower}-${arch_lower}" \
-    -o "${plugin_dir}/docker-compose" || fatal "Failed download compose"
+
+  local ver="v2.27.1"
+  local url="https://github.com/docker/compose/releases/download/${ver}/docker-compose-linux-${arch_file}"
+  log INFO "Downloading compose ${ver} from GitHub (${url})"
+
+  curl -fsSL "$url" -o "${plugin_dir}/docker-compose" || fatal "Failed download compose"
   chmod +x "${plugin_dir}/docker-compose"
+
   set_compose_cmd
-  [[ -z "$COMPOSE_CMD" ]] && fatal "Failed to install docker compose"
+  [[ -z "$COMPOSE_CMD" ]] && fatal "docker compose not found after manual install"
+
+  local final_ver
+  if [[ "$COMPOSE_CMD" == "docker compose" ]]; then
+    final_ver=$(docker compose version --short 2>/dev/null | tr -d 'v' || true)
+  else
+    final_ver=$(docker-compose --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+  fi
+  log INFO "Docker Compose ready (version ${final_ver:-unknown})"
 }
 
 #--------------------------------------
@@ -330,7 +327,7 @@ create_backup() {
 
   cat >"$BACKUP_STAGING_DIR/backup_info.txt" <<EOF
 Backup created: $(date)
-Script version: 3.0
+Script version: 3.1
 OS: $OS $OS_VERSION
 Docker: $(docker --version 2>/dev/null || echo 'not installed')
 Compose: $($COMPOSE_CMD version 2>/dev/null || echo 'not installed')
@@ -354,7 +351,6 @@ restore_backup() {
   mkdir -p "$tmp_dir"
   tar -xzf "$tar_file" -C "$tmp_dir"
 
-  # Detect dir pattern we stored (starts with .blockcast_backup_) or any single dir
   local inner_dir
   inner_dir=$(find "$tmp_dir" -maxdepth 1 -type d -name "*.blockcast_backup_*" -o -type d -mindepth 1 -print | head -1)
   [[ -z "$inner_dir" ]] && fatal "Invalid backup structure"
@@ -362,7 +358,7 @@ restore_backup() {
   [[ -d "$inner_dir/.blockcast" ]] && cp -a "$inner_dir/.blockcast" "$HOME/"
   if [[ -d "$inner_dir/$BEACON_DIR_NAME" ]]; then
     rm -rf "$BEACON_DIR_NAME"
-    cp -a "$inner_dir/$BEACON_DIR_NAME" ./
+    cp -a "$inner_dir/$BEACON_DIR_NAME" ./ 
   fi
 
   rm -rf "$tmp_dir"
@@ -370,7 +366,7 @@ restore_backup() {
 }
 
 #--------------------------------------
-# Clone / start services
+# Repo & services
 #--------------------------------------
 clone_repo() {
   log INFO "Cloning Blockcast repo…"
@@ -393,7 +389,6 @@ start_blockcast() {
   log INFO "Starting services…"
   $COMPOSE_CMD up -d || fatal "Compose up failed"
 
-  # Wait for containers to come up (healthcheck aware if defined)
   log INFO "Waiting for services to initialize…"
   local max_wait=180 step=5 waited=0 ok=0
   while (( waited < max_wait )); do
@@ -411,8 +406,8 @@ start_blockcast() {
 #--------------------------------------
 # Key generation
 #--------------------------------------
-extract_field() { # extract 'Hardware ID: xxxx' style
-  grep -i "$1" | sed "s/.*$1[[:space:]]*:[[:space:]]*//" | tr -d '\r' | sed 's/[[:space:]]*$//' 
+extract_field() {
+  grep -i "$1" | sed "s/.*$1[[:space:]]*:[[:space:]]*//" | tr -d '\r' | sed 's/[[:space:]]*$//'
 }
 
 generate_keys() {
@@ -484,7 +479,8 @@ EOF
   echo "3. Enter the Hardware ID & Challenge Key above (or use Registration URL)"
   echo "4. Provide VM location"
   echo "5. Store the info/keys securely"
-  echo "\n${GREEN}Notes:${NC}"
+  echo ""
+  echo -e "${GREEN}Notes:${NC}"
   echo "• Node should show 'Healthy' after a few minutes"
   echo "• First connectivity test ~6h, rewards ~24h"
   echo "• Monitor logs: $COMPOSE_CMD logs -f"
@@ -517,7 +513,7 @@ uninstall_blockcast() {
 }
 
 #--------------------------------------
-# Dry-run helper
+# Dry-run plan
 #--------------------------------------
 print_plan() {
   cat <<EOF
@@ -549,7 +545,7 @@ install_blockcast() {
 }
 
 #--------------------------------------
-# CLI parsing & dispatch
+# CLI
 #--------------------------------------
 main() {
   touch "$LOG_FILE"
@@ -558,16 +554,17 @@ main() {
   local action="install" dry_run=0 backup_file=""
   while (( $# )); do
     case "$1" in
-      -i|--install)   action="install" ; shift ;;
-      -u|--uninstall) action="uninstall" ; shift ;;
-      -b|--backup)    action="backup" ; shift ;;
-      -r|--restore)   action="restore" ; backup_file="${2:-}"; [[ -z "$backup_file" ]] && fatal "--restore needs a file"; shift 2 ;;
-      -c|--check)     action="check" ; shift ;;
-      -v|--verbose)   DEBUG_LEVEL=1 ; shift ;;
-      --dry-run)      dry_run=1 ; shift ;;
-      -h|--help)      usage; exit 0 ;;
-      *) fatal "Unknown option: $1" ;;
+      -i|--install)   action="install"   ;;
+      -u|--uninstall) action="uninstall" ;;
+      -b|--backup)    action="backup"    ;;
+      -r|--restore)   action="restore"; backup_file="${2:-}"; [[ -z "$backup_file" ]] && fatal "--restore needs a file"; shift ;;
+      -c|--check)     action="check"     ;;
+      -v|--verbose)   DEBUG_LEVEL=1      ;;
+      --dry-run)      dry_run=1          ;;
+      -h|--help)      usage; exit 0      ;;
+      *) fatal "Unknown option: $1"      ;;
     esac
+    shift
   done
 
   case "$action" in
@@ -575,19 +572,24 @@ main() {
       if (( dry_run )); then
         detect_os; check_requirements; print_plan; exit 0
       fi
-      install_blockcast ;;
+      install_blockcast
+      ;;
     uninstall)
       (( dry_run )) && { log INFO "DRY RUN: would uninstall"; exit 0; }
       set_compose_cmd
-      uninstall_blockcast ;;
+      uninstall_blockcast
+      ;;
     backup)
       detect_os
-      create_backup ;;
+      create_backup
+      ;;
     restore)
       detect_os
-      restore_backup "$backup_file" ;;
+      restore_backup "$backup_file"
+      ;;
     check)
-      detect_os; check_requirements; log INFO "System check completed" ;;
+      detect_os; check_requirements; log INFO "System check completed"
+      ;;
   esac
 }
 
