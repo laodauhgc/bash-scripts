@@ -11,61 +11,19 @@ set -eEuo pipefail
 IFS=$'\n\t'
 
 #--------------------------------------
-# Constants / Defaults
-#--------------------------------------
-readonly SCRIPT_NAME="$(basename "$0")"
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly LOG_FILE="${SCRIPT_DIR}/blockcast_setup.log"
-readonly BACKUP_STAGING_DIR="${HOME}/.blockcast_backup_$(date +%Y%m%d_%H%M%S)"
-readonly BACKUP_TAR_PREFIX="blockcast_backup_$(date +%Y%m%d_%H%M%S)"
-readonly BEACON_REPO_URL="https://github.com/Blockcast/beacon-docker-compose.git"
-readonly BEACON_DIR_NAME="beacon-docker-compose"
-readonly MIN_DOCKER_VERSION="20.10.0"
-readonly MIN_COMPOSE_VERSION="2.0.0"
-readonly DISK_MIN_GB=10
-readonly MEM_MIN_GB=2
-
-# Colors
-readonly RED='\033[0;31m'; readonly GREEN='\033[0;32m'; readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'; readonly PURPLE='\033[0;35m'; readonly CYAN='\033[0;36m'
-readonly NC='\033[0m'
-
-# Globals
-OS=""; OS_VERSION=""; OS_CODENAME=""; ARCH=""; COMPOSE_CMD=""
-DEBUG_LEVEL=${DEBUG:-0}
-
-#--------------------------------------
-# Logging
-#--------------------------------------
-log() {
-  local level="$1"; shift
-  local msg="$*"
-  local ts
-  ts="$(date '+%Y-%m-%d %H:%M:%S')"
-  local color=""
-  case "$level" in
-    INFO)  color="$GREEN" ;; 
-    WARN)  color="$YELLOW" ;; 
-    ERROR) color="$RED"   ;; 
-    DEBUG) color="$PURPLE" ;; 
-  esac
-  if [[ "$level" == DEBUG && "$DEBUG_LEVEL" -ne 1 ]]; then
-    echo "[$ts] [DEBUG] $msg" >>"$LOG_FILE"
-    return
-  fi
-  echo -e "${color}[$level]${NC} $msg" | tee -a "$LOG_FILE" >&2
-  [[ "$level" == DEBUG ]] || echo "[$ts] [$level] $msg" >>"$LOG_FILE"
-}
-
-fatal(){ log ERROR "$*"; exit 1; }
-cleanup(){ local code=$?; ((code!=0)) && log ERROR "Script failed ($code). See $LOG_FILE"; tput sgr0 2>/dev/null||true; exit $code; }
-trap cleanup EXIT
-
-#--------------------------------------
 # Utils
 #--------------------------------------
-version_ge(){ dpkg --compare-versions "$1" ge "$2" 2>/dev/null || [[ "$(printf '%s\n' "$2" "$1"|sort -V|head -n1)"=="$2" ]]; }
-_fetch(){ curl -fsSL --proto '=https' --tlsv1.2 "$@"; }
+version_ge(){
+  local v1="$1" v2="$2"
+  if command -v dpkg >/dev/null 2>&1; then
+    dpkg --compare-versions "$v1" ge "$v2"
+  else
+    [[ "$(printf '%s
+' "$v2" "$v1" | sort -V | head -n1)" == "$v2" ]]
+  fi
+}
+
+_fetch(){ curl -fsSL --proto '=https' --tlsv1.2 "$@"; }(){ curl -fsSL --proto '=https' --tlsv1.2 "$@"; }
 set_compose_cmd(){
   if command -v docker &>/dev/null && docker compose version &>/dev/null; then
     COMPOSE_CMD="docker compose"
