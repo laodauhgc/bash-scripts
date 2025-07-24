@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Version: 1.4.0  # Sửa để sử dụng full path cho binary, sửa config.json thành credentials.json, giữ --headless
+# Version: 1.2.9  # Cập nhật để thêm source /root/.profile, credentials.json, libssl-dev, protobuf-compiler, --headless, xóa --max-threads
 # Biến cấu hình
 CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
@@ -303,7 +303,7 @@ EOF
     cat > entrypoint.sh <<EOF
 #!/bin/bash
 set -e
-export PATH="/root/.nexus/bin:\$PATH"
+source /root/.profile  # Source để load PATH từ install script
 # Kiểm tra wallet address
 if [ -z "\$WALLET_ADDRESS" ]; then
     echo "$ERR_MISSING_WALLET"
@@ -313,29 +313,29 @@ fi
 if [ ! -f /root/.nexus/credentials.json ]; then
     # Đăng ký ví
     printf "$REGISTERING_WALLET\n" "\$WALLET_ADDRESS"
-    /root/.nexus/bin/nexus-network register-user --wallet-address "\$WALLET_ADDRESS" &>> /root/nexus.log
+    nexus-network register-user --wallet-address "\$WALLET_ADDRESS" &>> /root/nexus.log
     if [ \$? -ne 0 ]; then
         echo "$ERR_REGISTER_WALLET"
         cat /root/nexus.log
         echo "$SUPPORT_INFO"
-        /root/.nexus/bin/nexus-network --help &>> /root/nexus.log
+        nexus-network --help &>> /root/nexus.log
         cat /root/nexus.log
         exit 1
     fi
     # Đăng ký node
     echo "$REGISTERING_NODE"
-    /root/.nexus/bin/nexus-network register-node &>> /root/nexus.log
+    nexus-network register-node &>> /root/nexus.log
     if [ \$? -ne 0 ]; then
         echo "$ERR_REGISTER_NODE"
         cat /root/nexus.log
         echo "$SUPPORT_INFO"
-        /root/.nexus/bin/nexus-network register-node --help &>> /root/nexus.log
+        nexus-network register-node --help &>> /root/nexus.log
         cat /root/nexus.log
         exit 1
     fi
 fi
 # Chạy node với --headless
-screen -dmS nexus bash -c "/root/.nexus/bin/nexus-network start --headless &>> /root/nexus.log"
+screen -dmS nexus bash -c "nexus-network start --headless &>> /root/nexus.log"
 sleep 3
 if screen -list | grep -q "nexus"; then
     printf "$NODE_STARTED_ENTRY\n" "\$WALLET_ADDRESS"
