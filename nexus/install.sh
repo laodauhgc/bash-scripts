@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Version: 1.3.2  # Cập nhật binary name sang nexus-network, fix exit 127
+# Version: 1.3.3  # Chuyển base sang ubuntu để fix glibc/musl, thêm export PATH
 # Biến cấu hình
 CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
@@ -291,8 +291,10 @@ build_image() {
     cd "$workdir"
 
     cat > Dockerfile <<EOF
-FROM alpine:3.22.0
-RUN apk update && apk add curl screen bash && curl -sSf https://cli.nexus.xyz/ -o install.sh && chmod +x install.sh && NONINTERACTIVE=1 ./install.sh && ln -sf /root/.nexus/bin/nexus-network /usr/local/bin/nexus-network
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y curl screen bash && rm -rf /var/lib/apt/lists/*
+RUN curl -sSL https://cli.nexus.xyz/ | NONINTERACTIVE=1 sh && ln -sf /root/.nexus/bin/nexus-network /usr/local/bin/nexus-network
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
@@ -301,6 +303,7 @@ EOF
     cat > entrypoint.sh <<EOF
 #!/bin/bash
 set -e
+export PATH="/usr/local/bin:/root/.nexus/bin:\$PATH"
 # Kiểm tra wallet address
 if [ -z "\$WALLET_ADDRESS" ]; then
     echo "$ERR_MISSING_WALLET"
