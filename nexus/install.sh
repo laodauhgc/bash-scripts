@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Version: 1.3.3  # Chuyển base sang ubuntu để fix glibc/musl, thêm export PATH
+# Version: 1.3.4  # Thêm source /root/.profile trong entrypoint để fix PATH
 # Biến cấu hình
 CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
@@ -303,7 +303,7 @@ EOF
     cat > entrypoint.sh <<EOF
 #!/bin/bash
 set -e
-export PATH="/usr/local/bin:/root/.nexus/bin:\$PATH"
+source /root/.profile  # Source để load PATH từ install script
 # Kiểm tra wallet address
 if [ -z "\$WALLET_ADDRESS" ]; then
     echo "$ERR_MISSING_WALLET"
