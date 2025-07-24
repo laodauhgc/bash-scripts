@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Version: 1.3.4  # Thêm source /root/.profile trong entrypoint để fix PATH
+# Version: 1.4.0  # Sửa để sử dụng full path cho binary, sửa config.json thành credentials.json, giữ --headless
 # Biến cấu hình
 CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
@@ -293,7 +293,7 @@ build_image() {
     cat > Dockerfile <<EOF
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y curl screen bash && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y curl screen bash libssl-dev protobuf-compiler && rm -rf /var/lib/apt/lists/*
 RUN curl -sSL https://cli.nexus.xyz/ | NONINTERACTIVE=1 sh && ln -sf /root/.nexus/bin/nexus-network /usr/local/bin/nexus-network
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
@@ -303,39 +303,39 @@ EOF
     cat > entrypoint.sh <<EOF
 #!/bin/bash
 set -e
-source /root/.profile  # Source để load PATH từ install script
+export PATH="/root/.nexus/bin:\$PATH"
 # Kiểm tra wallet address
 if [ -z "\$WALLET_ADDRESS" ]; then
     echo "$ERR_MISSING_WALLET"
     exit 1
 fi
-# Check nếu config đã tồn tại (persistent), skip register nếu có
-if [ ! -f /root/.nexus/config.json ]; then
+# Check nếu credentials đã tồn tại (persistent), skip register nếu có
+if [ ! -f /root/.nexus/credentials.json ]; then
     # Đăng ký ví
     printf "$REGISTERING_WALLET\n" "\$WALLET_ADDRESS"
-    nexus-network register-user --wallet-address "\$WALLET_ADDRESS" &>> /root/nexus.log
+    /root/.nexus/bin/nexus-network register-user --wallet-address "\$WALLET_ADDRESS" &>> /root/nexus.log
     if [ \$? -ne 0 ]; then
         echo "$ERR_REGISTER_WALLET"
         cat /root/nexus.log
         echo "$SUPPORT_INFO"
-        nexus-network --help &>> /root/nexus.log
+        /root/.nexus/bin/nexus-network --help &>> /root/nexus.log
         cat /root/nexus.log
         exit 1
     fi
     # Đăng ký node
     echo "$REGISTERING_NODE"
-    nexus-network register-node &>> /root/nexus.log
+    /root/.nexus/bin/nexus-network register-node &>> /root/nexus.log
     if [ \$? -ne 0 ]; then
         echo "$ERR_REGISTER_NODE"
         cat /root/nexus.log
         echo "$SUPPORT_INFO"
-        nexus-network register-node --help &>> /root/nexus.log
+        /root/.nexus/bin/nexus-network register-node --help &>> /root/nexus.log
         cat /root/nexus.log
         exit 1
     fi
 fi
 # Chạy node với --headless
-screen -dmS nexus bash -c "nexus-network start --headless &>> /root/nexus.log"
+screen -dmS nexus bash -c "/root/.nexus/bin/nexus-network start --headless &>> /root/nexus.log"
 sleep 3
 if screen -list | grep -q "nexus"; then
     printf "$NODE_STARTED_ENTRY\n" "\$WALLET_ADDRESS"
