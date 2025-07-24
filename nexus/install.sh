@@ -218,15 +218,101 @@ max_threads=$(nproc)
 ARCH=$(uname -m)
 print_info "$(printf "$ARCH_DETECTED" "$ARCH")"
 CLI_URL="https://github.com/nexus-xyz/nexus-cli/releases/download/v0.10.1/nexus-network-linux-x86_64"
-if [ "$ARCH" = "aarch64" ]; then
+if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
     CLI_URL="https://github.com/nexus-xyz/nexus-cli/releases/download/v0.10.1/nexus-network-linux-arm64"
 fi
 
-# Hàm tạo swap tự động (giữ nguyên như trước)
+# Hàm tạo swap tự động
+create_swap() {
+    if [ "$(uname -s)" != "Linux" ]; then
+        print_warning "$NOT_LINUX"
+        return 0
+    fi
 
-# Kiểm tra và cài đặt Docker (giữ nguyên như trước)
+    total_ram=""
+    if [ -f /proc/meminfo ]; then
+        total_ram=$(awk '/MemTotal/ {print int($2 / 1024)}' /proc/meminfo 2>/dev/null) || true
+    fi
+    if [ -z "$total_ram" ] || [ "$total_ram" -le 0 ]; then
+        total_ram=$(free -m | awk '/^Mem:/{print $2}' 2>/dev/null) || true
+    fi
+    if [ -z "$total_ram" ] || [ "$total_ram" -le 0 ]; then
+        total_ram=$(vmstat -s | awk '/total memory/{print int($1 / 1024)}' 2>/dev/null) || true
+    fi
+    if [ -z "$total_ram" ] || [ "$total_ram" -le 0 ]; then
+        print_warning "$WARN_NO_RAM"
+        return 0
+    fi
 
-# Xây dựng Docker image (sửa phần tải CLI dựa trên CLI_URL)
+    print_info "$(printf "$RAM_DETECTED" "$total_ram")"
+
+    if swapon --show | grep -q "$SWAP_FILE"; then
+        current_swap=$(free -m | awk '/^Swap:/{print $2}' 2>/dev/null) || true
+        if [ -n "$current_swap" ] && [ "$current_swap" -ge "$total_ram" ]; then
+            print_info "$(printf "$SWAP_EXISTS" "$current_swap")"
+            return 0
+        fi
+        swapoff "$SWAP_FILE" 2>/dev/null || true
+    fi
+
+    min_swap=$total_ram
+    max_swap=$((total_ram * 2))
+    available_disk=$(df -BM --output=avail "$(dirname "$SWAP_FILE")" | tail -n 1 | grep -o '[0-9]\+' 2>/dev/null) || true
+    if [ -z "$available_disk" ] || [ "$available_disk" -lt "$min_swap" ]; then
+        print_warning "$(printf "$INSUFFICIENT_DISK" "$available_disk" "$min_swap")"
+        return 0
+    fi
+
+    swap_size=$min_swap
+    if [ "$available_disk" -ge "$max_swap" ]; then
+        swap_size=$max_swap
+    fi
+
+    if [ "$swap_size" -le 0 ]; then
+        print_warning "$(printf "$WARN_INVALID_SWAP_SIZE" "$swap_size")"
+        return 0
+    fi
+
+    print_progress "$(printf "$CREATING_SWAP" "$swap_size")"
+    if ! fallocate -l "${swap_size}M" "$SWAP_FILE" 2>/dev/null; then
+        dd if=/dev/zero of="$SWAP_FILE" bs=1M count="$swap_size" 2>/dev/null || true
+    fi
+    if [ ! -f "$SWAP_FILE" ] || [ $(stat -c %s "$SWAP_FILE" 2>/dev/null) -le 0 ]; then
+        print_warning "$WARN_CREATE_SWAP_FAIL"
+        return 0
+    fi
+    chmod 600 "$SWAP_FILE" 2>/dev/null || true
+    mkswap "$SWAP_FILE" 2>/dev/null || true
+    swapon "$SWAP_FILE" 2>/dev/null || true
+    if ! grep -q "$SWAP_FILE" /etc/fstab; then
+        echo "$SWAP_FILE none swap sw 0 0" >> /etc/fstab 2>/dev/null || true
+    fi
+    print_swap "$(printf "$SWAP_CREATED" "$swap_size")"
+    return 0
+}
+
+# Kiểm tra và cài đặt Docker
+if ! command -v docker >/dev/null 2>&1; then
+    print_progress "$INSTALLING_DOCKER"
+    apt update
+    if ! apt install -y docker.io; then
+        print_error "$ERR_INSTALL_DOCKER"
+        exit 1
+    fi
+    systemctl enable docker
+    systemctl start docker
+    if ! systemctl is-active --quiet docker; then
+        print_error "$ERR_DOCKER_NOT_RUNNING"
+        exit 1
+    fi
+fi
+
+if ! docker ps >/dev/null 2>&1; then
+    print_error "$ERR_DOCKER_PERMISSION"
+    exit 1
+fi
+
+# Xây dựng Docker image
 build_image() {
     print_progress "$(printf "$BUILDING_IMAGE" "$IMAGE_NAME")"
     workdir=$(mktemp -d)
@@ -299,14 +385,88 @@ EOF
     print_success "$(printf "$BUILD_IMAGE_SUCCESS" "$IMAGE_NAME")"
 }
 
-# Hàm thiết lập cron job (giữ nguyên như trước)
+# Hàm thiết lập cron job
+setup_cron() {
+    print_progress "$CRON_SETUP"
+    SCRIPT_PATH="/root/nexus_setup.sh"
+    CRON_JOB="0 * * * * /bin/bash -c \"docker rm -f $CONTAINER_NAME && /bin/bash $SCRIPT_PATH $WALLET_ADDRESS\""
 
-# Chạy container (giữ nguyên như trước)
+    # Lưu script vào /root/nexus_setup.sh nếu chưa tồn tại
+    if [ ! -f "$SCRIPT_PATH" ]; then
+        cp "$0" "$SCRIPT_PATH"
+        chmod +x "$SCRIPT_PATH"
+        print_info "Đã lưu script tại $SCRIPT_PATH"
+    fi
 
-# Tạo swap trước khi chạy node (giữ nguyên như trước)
+    # Kiểm tra xem cron job đã tồn tại chưa
+    if crontab -l 2>/dev/null | grep -q "$CONTAINER_NAME"; then
+        print_warning "Cron job đã tồn tại, bỏ qua thiết lập."
+        return 0
+    fi
+
+    # Thêm cron job
+    (crontab -l 2>/dev/null; echo "$CRON_JOB") | crontab -
+    if [ $? -eq 0 ]; then
+        print_success "$(printf "$CRON_INSTRUCTION" "$CONTAINER_NAME" "$SCRIPT_PATH" "$WALLET_ADDRESS")"
+    else
+        print_error "Lỗi: Không thể thiết lập cron job."
+        exit 1
+    fi
+}
+
+# Chạy container
+run_container() {
+    docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+    mkdir -p "$(dirname "$LOG_FILE")" "$CREDENTIALS_DIR"
+    touch "$LOG_FILE"
+    chmod 644 "$LOG_FILE"
+
+    NODE_ID=""
+    if [ -f "$NODE_ID_FILE" ]; then
+        NODE_ID=$(cat "$NODE_ID_FILE")
+        print_info "$(printf "$USING_EXISTING_NODE_ID" "$NODE_ID")"
+    fi
+
+    docker run -d --name "$CONTAINER_NAME" \
+        --restart unless-stopped \
+        -v "$LOG_FILE":/root/nexus.log \
+        -v "$CREDENTIALS_DIR":/root/.nexus \
+        -e WALLET_ADDRESS="$WALLET_ADDRESS" \
+        -e NODE_ID="$NODE_ID" \
+        "$IMAGE_NAME"
+    print_node "$(printf "$NODE_STARTED" "$WALLET_ADDRESS" "$max_threads")"
+    print_log "$(printf "$LOG_FILE_MSG" "$LOG_FILE")"
+    print_info "$(printf "$VIEW_LOG" "$CONTAINER_NAME")"
+
+    if [ -z "$NODE_ID" ]; then
+        sleep 10
+        if [ -f "$CREDENTIALS_DIR/credentials.json" ]; then
+            NODE_ID=$(jq -r '.node_id' "$CREDENTIALS_DIR/credentials.json" 2>/dev/null)
+            if [ -n "$NODE_ID" ]; then
+                echo "$NODE_ID" > "$NODE_ID_FILE"
+                print_success "$(printf "$NODE_ID_SAVED" "$NODE_ID")"
+            else
+                print_warning "Không thể extract node ID từ credentials.json"
+            fi
+        fi
+    fi
+}
+
+# Tạo swap trước khi chạy node
+if [ "$NO_SWAP" = 1 ]; then
+    print_warning "$SKIP_SWAP_FLAG"
+else
+    create_swap
+fi
 
 # Xây dựng và chạy
 build_image
 run_container
 
-# Thiết lập cron job nếu có flag --setup-cron (giữ nguyên như trước)
+# Thiết lập cron job nếu có flag --setup-cron
+if [ "$SETUP_CRON" = 1 ]; then
+    setup_cron
+fi
+
+# In footer
+print_success "===== Hoàn Tất Cài Đặt ====="
