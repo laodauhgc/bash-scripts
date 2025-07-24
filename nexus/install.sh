@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Version: 1.3.1  # Cập nhật version sau khi update theo CLI mới, thêm --headless, persistent config, và remove --max-threads
+# Version: 1.3.2  # Cập nhật binary name sang nexus-network, fix exit 127
 # Biến cấu hình
 CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
@@ -292,7 +292,7 @@ build_image() {
 
     cat > Dockerfile <<EOF
 FROM alpine:3.22.0
-RUN apk update && apk add curl screen bash && curl -sSf https://cli.nexus.xyz/ -o install.sh && chmod +x install.sh && NONINTERACTIVE=1 ./install.sh && ln -sf /root/.nexus/bin/nexus-cli /usr/local/bin/nexus-cli
+RUN apk update && apk add curl screen bash && curl -sSf https://cli.nexus.xyz/ -o install.sh && chmod +x install.sh && NONINTERACTIVE=1 ./install.sh && ln -sf /root/.nexus/bin/nexus-network /usr/local/bin/nexus-network
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
@@ -310,29 +310,29 @@ fi
 if [ ! -f /root/.nexus/config.json ]; then
     # Đăng ký ví
     printf "$REGISTERING_WALLET\n" "\$WALLET_ADDRESS"
-    nexus-cli register-user --wallet-address "\$WALLET_ADDRESS" &>> /root/nexus.log
+    nexus-network register-user --wallet-address "\$WALLET_ADDRESS" &>> /root/nexus.log
     if [ \$? -ne 0 ]; then
         echo "$ERR_REGISTER_WALLET"
         cat /root/nexus.log
         echo "$SUPPORT_INFO"
-        nexus-cli --help &>> /root/nexus.log
+        nexus-network --help &>> /root/nexus.log
         cat /root/nexus.log
         exit 1
     fi
     # Đăng ký node
     echo "$REGISTERING_NODE"
-    nexus-cli register-node &>> /root/nexus.log
+    nexus-network register-node &>> /root/nexus.log
     if [ \$? -ne 0 ]; then
         echo "$ERR_REGISTER_NODE"
         cat /root/nexus.log
         echo "$SUPPORT_INFO"
-        nexus-cli register-node --help &>> /root/nexus.log
+        nexus-network register-node --help &>> /root/nexus.log
         cat /root/nexus.log
         exit 1
     fi
 fi
 # Chạy node với --headless
-screen -dmS nexus bash -c "nexus-cli start --headless &>> /root/nexus.log"
+screen -dmS nexus bash -c "nexus-network start --headless &>> /root/nexus.log"
 sleep 3
 if screen -list | grep -q "nexus"; then
     printf "$NODE_STARTED_ENTRY\n" "\$WALLET_ADDRESS"
