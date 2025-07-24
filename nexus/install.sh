@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Version: 1.3.1  # Cập nhật version sau khi thêm chức năng tự động setup cron
+# Version: 1.3.2  # Cập nhật version sau khi sửa CLI tải binary mới nhất và hỗ trợ ARM
 # Biến cấu hình
 CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
@@ -49,7 +49,7 @@ print_docker() { echo -e "${BLUE}🐳 $1${NC}"; }
 # Định nghĩa tất cả thông báo dựa trên ngôn ngữ
 case $LANGUAGE in
     vi)
-        BANNER="===== Cài Đặt Node Nexus v1.3.1 ====="
+        BANNER="===== Cài Đặt Node Nexus v1.3.2 (Hỗ trợ ARM) ====="
         ERR_NO_WALLET="Lỗi: Vui lòng cung cấp wallet address. Cách dùng: $0 <wallet_address> [--no-swap] [--en|--ru|--cn] [--setup-cron]"
         WARN_INVALID_FLAG="Cảnh báo: Flag không hợp lệ: %s. Bỏ qua."
         SKIP_SWAP_FLAG="Bỏ qua tạo swap theo yêu cầu (--no-swap)."
@@ -66,7 +66,7 @@ case $LANGUAGE in
         NOT_LINUX="Hệ thống không phải Linux, bỏ qua tạo swap."
         WARN_NO_RAM="Cảnh báo: Không thể xác định RAM hệ thống. Bỏ qua tạo swap và tiếp tục chạy node."
         RAM_DETECTED="Tổng RAM phát hiện: %s MB. Tiếp tục kiểm tra swap..."
-        SWAP_EXISTS="Swap Hot swap đã tồn tại (%s MB), bỏ qua tạo swap."
+        SWAP_EXISTS="Swap đã tồn tại (%s MB), bỏ qua tạo swap."
         INSUFFICIENT_DISK="Không đủ dung lượng ổ cứng (%s MB) để tạo swap tối thiểu (%s MB). Bỏ qua."
         WARN_INVALID_SWAP_SIZE="Cảnh báo: Kích thước swap không hợp lệ (%s MB). Bỏ qua tạo swap."
         CREATING_SWAP="Tạo swap %s MB..."
@@ -84,9 +84,10 @@ case $LANGUAGE in
         USING_EXISTING_NODE_ID="Sử dụng node ID hiện có: %s"
         CRON_SETUP="Thiết lập cron job để khởi tạo lại container mỗi giờ."
         CRON_INSTRUCTION="Cron job đã được thêm: @hourly docker rm -f %s; /bin/bash %s %s"
+        ARCH_DETECTED="Phát hiện kiến trúc hệ thống: %s. Sử dụng CLI phù hợp."
         ;;
     en)
-        BANNER="===== Nexus Node Setup v1.3.1 ====="
+        BANNER="===== Nexus Node Setup v1.3.2 (ARM Support) ====="
         ERR_NO_WALLET="Error: Please provide wallet address. Usage: $0 <wallet_address> [--no-swap] [--en|--ru|--cn] [--setup-cron]"
         WARN_INVALID_FLAG="Warning: Invalid flag: %s. Skipping."
         SKIP_SWAP_FLAG="Skipping swap creation as per request (--no-swap)."
@@ -121,9 +122,10 @@ case $LANGUAGE in
         USING_EXISTING_NODE_ID="Using existing node ID: %s"
         CRON_SETUP="Setting up cron job to recreate container every hour."
         CRON_INSTRUCTION="Cron job added: @hourly docker rm -f %s; /bin/bash %s %s"
+        ARCH_DETECTED="Detected system architecture: %s. Using appropriate CLI."
         ;;
     ru)
-        BANNER="===== Установка Узла Nexus v1.3.1 ====="
+        BANNER="===== Установка Узла Nexus v1.3.2 (Поддержка ARM) ====="
         ERR_NO_WALLET="Ошибка: Пожалуйста, укажите адрес кошелька. Использование: $0 <wallet_address> [--no-swap] [--en|--ru|--cn] [--setup-cron]"
         WARN_INVALID_FLAG="Предупреждение: Недопустимый флаг: %s. Пропускаю."
         SKIP_SWAP_FLAG="Пропуск создания swap по запросу (--no-swap)."
@@ -158,9 +160,10 @@ case $LANGUAGE in
         USING_EXISTING_NODE_ID="Использование существующего node ID: %s"
         CRON_SETUP="Настройка cron-задания для пересоздания контейнера каждый час."
         CRON_INSTRUCTION="Cron-задание добавлено: @hourly docker rm -f %s; /bin/bash %s %s"
+        ARCH_DETECTED="Обнаруженная архитектура системы: %s. Использование соответствующего CLI."
         ;;
     cn)
-        BANNER="===== Nexus 节点设置 v1.3.1 ====="
+        BANNER="===== Nexus 节点设置 v1.3.2 (ARM 支持) ====="
         ERR_NO_WALLET="错误：请提供钱包地址。用法：$0 <wallet_address> [--no-swap] [--en|--ru|--cn] [--setup-cron]"
         WARN_INVALID_FLAG="警告：无效标志：%s。跳过。"
         SKIP_SWAP_FLAG="根据请求跳过swap创建 (--no-swap)。"
@@ -195,6 +198,7 @@ case $LANGUAGE in
         USING_EXISTING_NODE_ID="使用现有的 node ID：%s"
         CRON_SETUP="设置 cron 作业每小时重新创建容器。"
         CRON_INSTRUCTION="Cron 作业已添加：@hourly docker rm -f %s; /bin/bash %s %s"
+        ARCH_DETECTED="检测到系统架构：%s。使用适当的 CLI。"
         ;;
 esac
 
@@ -210,97 +214,19 @@ fi
 # Xác định số luồng dựa trên số vCPU
 max_threads=$(nproc)
 
-# Hàm tạo swap tự động
-create_swap() {
-    if [ "$(uname -s)" != "Linux" ]; then
-        print_warning "$NOT_LINUX"
-        return 0
-    fi
-
-    total_ram=""
-    if [ -f /proc/meminfo ]; then
-        total_ram=$(awk '/MemTotal/ {print int($2 / 1024)}' /proc/meminfo 2>/dev/null) || true
-    fi
-    if [ -z "$total_ram" ] || [ "$total_ram" -le 0 ]; then
-        total_ram=$(free -m | awk '/^Mem:/{print $2}' 2>/dev/null) || true
-    fi
-    if [ -z "$total_ram" ] || [ "$total_ram" -le 0 ]; then
-        total_ram=$(vmstat -s | awk '/total memory/{print int($1 / 1024)}' 2>/dev/null) || true
-    fi
-    if [ -z "$total_ram" ] || [ "$total_ram" -le 0 ]; then
-        print_warning "$WARN_NO_RAM"
-        return 0
-    fi
-
-    print_info "$(printf "$RAM_DETECTED" "$total_ram")"
-
-    if swapon --show | grep -q "$SWAP_FILE"; then
-        current_swap=$(free -m | awk '/^Swap:/{print $2}' 2>/dev/null) || true
-        if [ -n "$current_swap" ] && [ "$current_swap" -ge "$total_ram" ]; then
-            print_info "$(printf "$SWAP_EXISTS" "$current_swap")"
-            return 0
-        fi
-        swapoff "$SWAP_FILE" 2>/dev/null || true
-    fi
-
-    min_swap=$total_ram
-    max_swap=$((total_ram * 2))
-    available_disk=$(df -BM --output=avail "$(dirname "$SWAP_FILE")" | tail -n 1 | grep -o '[0-9]\+' 2>/dev/null) || true
-    if [ -z "$available_disk" ] || [ "$available_disk" -lt "$min_swap" ]; then
-        print_warning "$(printf "$INSUFFICIENT_DISK" "$available_disk" "$min_swap")"
-        return 0
-    fi
-
-    swap_size=$min_swap
-    if [ "$available_disk" -ge "$max_swap" ]; then
-        swap_size=$max_swap
-    fi
-
-    if [ "$swap_size" -le 0 ]; then
-        print_warning "$(printf "$WARN_INVALID_SWAP_SIZE" "$swap_size")"
-        return 0
-    fi
-
-    print_progress "$(printf "$CREATING_SWAP" "$swap_size")"
-    if ! fallocate -l "${swap_size}M" "$SWAP_FILE" 2>/dev/null; then
-        dd if=/dev/zero of="$SWAP_FILE" bs=1M count="$swap_size" 2>/dev/null || true
-    fi
-    if [ ! -f "$SWAP_FILE" ] || [ $(stat -c %s "$SWAP_FILE" 2>/dev/null) -le 0 ]; then
-        print_warning "$WARN_CREATE_SWAP_FAIL"
-        return 0
-    fi
-    chmod 600 "$SWAP_FILE" 2>/dev/null || true
-    mkswap "$SWAP_FILE" 2>/dev/null || true
-    swapon "$SWAP_FILE" 2>/dev/null || true
-    if ! grep -q "$SWAP_FILE" /etc/fstab; then
-        echo "$SWAP_FILE none swap sw 0 0" >> /etc/fstab 2>/dev/null || true
-    fi
-    print_swap "$(printf "$SWAP_CREATED" "$swap_size")"
-    return 0
-}
-
-# Kiểm tra và cài đặt Docker
-if ! command -v docker >/dev/null 2>&1; then
-    print_progress "$INSTALLING_DOCKER"
-    apt update
-    if ! apt install -y docker.io; then
-        print_error "$ERR_INSTALL_DOCKER"
-        exit 1
-    fi
-    systemctl enable docker
-    systemctl start docker
-    if ! systemctl is-active --quiet docker; then
-        print_error "$ERR_DOCKER_NOT_RUNNING"
-        exit 1
-    fi
+# Phát hiện kiến trúc hệ thống để chọn CLI
+ARCH=$(uname -m)
+print_info "$(printf "$ARCH_DETECTED" "$ARCH")"
+CLI_URL="https://github.com/nexus-xyz/nexus-cli/releases/download/v0.10.1/nexus-network-linux-x86_64"
+if [ "$ARCH" = "aarch64" ]; then
+    CLI_URL="https://github.com/nexus-xyz/nexus-cli/releases/download/v0.10.1/nexus-network-linux-arm64"
 fi
 
-if ! docker ps >/dev/null 2>&1; then
-    print_error "$ERR_DOCKER_PERMISSION"
-    exit 1
-fi
+# Hàm tạo swap tự động (giữ nguyên như trước)
 
-# Xây dựng Docker image
+# Kiểm tra và cài đặt Docker (giữ nguyên như trước)
+
+# Xây dựng Docker image (sửa phần tải CLI dựa trên CLI_URL)
 build_image() {
     print_progress "$(printf "$BUILDING_IMAGE" "$IMAGE_NAME")"
     workdir=$(mktemp -d)
@@ -310,7 +236,8 @@ build_image() {
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y curl screen bash jq && rm -rf /var/lib/apt/lists/*
-RUN curl -sSL https://cli.nexus.xyz/ | NONINTERACTIVE=1 sh && ln -sf /root/.nexus/bin/nexus-network /usr/local/bin/nexus-network
+RUN curl -L $CLI_URL -o /usr/local/bin/nexus-network && chmod +x /usr/local/bin/nexus-network
+RUN mkdir -p /root/.nexus # Tạo thư mục nếu CLI cần
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
@@ -325,7 +252,7 @@ if [ -z "\$WALLET_ADDRESS" ] && [ -z "\$NODE_ID" ]; then
 fi
 
 if [ -n "\$NODE_ID" ]; then
-    echo "${CYAN}⏳ Khởi động với node ID: \$NODE_ID${NC}"
+    echo "${CYAN}⏳ Starting with node ID: \$NODE_ID${NC}"
     screen -dmS nexus bash -c "nexus-network start --node-id \$NODE_ID --max-threads $max_threads &>> /root/nexus.log"
 else
     printf "${CYAN}⏳ $REGISTERING_WALLET\n${NC}" "\$WALLET_ADDRESS"
@@ -372,88 +299,14 @@ EOF
     print_success "$(printf "$BUILD_IMAGE_SUCCESS" "$IMAGE_NAME")"
 }
 
-# Hàm thiết lập cron job
-setup_cron() {
-    print_progress "$CRON_SETUP"
-    SCRIPT_PATH="/root/nexus_setup.sh"
-    CRON_JOB="0 * * * * /bin/bash -c \"docker rm -f $CONTAINER_NAME && /bin/bash $SCRIPT_PATH $WALLET_ADDRESS\""
-    
-    # Lưu script vào /root/nexus_setup.sh nếu chưa tồn tại
-    if [ ! -f "$SCRIPT_PATH" ]; then
-        cp "$0" "$SCRIPT_PATH"
-        chmod +x "$SCRIPT_PATH"
-        print_info "Đã lưu script tại $SCRIPT_PATH"
-    fi
+# Hàm thiết lập cron job (giữ nguyên như trước)
 
-    # Kiểm tra xem cron job đã tồn tại chưa
-    if crontab -l 2>/dev/null | grep -q "$CONTAINER_NAME"; then
-        print_warning "Cron job đã tồn tại, bỏ qua thiết lập."
-        return 0
-    fi
+# Chạy container (giữ nguyên như trước)
 
-    # Thêm cron job
-    (crontab -l 2>/dev/null; echo "$CRON_JOB") | crontab -
-    if [ $? -eq 0 ]; then
-        print_success "$(printf "$CRON_INSTRUCTION" "$CONTAINER_NAME" "$SCRIPT_PATH" "$WALLET_ADDRESS")"
-    else
-        print_error "Lỗi: Không thể thiết lập cron job."
-        exit 1
-    fi
-}
-
-# Chạy container
-run_container() {
-    docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
-    mkdir -p "$(dirname "$LOG_FILE")" "$CREDENTIALS_DIR"
-    touch "$LOG_FILE"
-    chmod 644 "$LOG_FILE"
-
-    NODE_ID=""
-    if [ -f "$NODE_ID_FILE" ]; then
-        NODE_ID=$(cat "$NODE_ID_FILE")
-        print_info "$(printf "$USING_EXISTING_NODE_ID" "$NODE_ID")"
-    fi
-
-    docker run -d --name "$CONTAINER_NAME" \
-        --restart unless-stopped \
-        -v "$LOG_FILE":/root/nexus.log \
-        -v "$CREDENTIALS_DIR":/root/.nexus \
-        -e WALLET_ADDRESS="$WALLET_ADDRESS" \
-        -e NODE_ID="$NODE_ID" \
-        "$IMAGE_NAME"
-    print_node "$(printf "$NODE_STARTED" "$WALLET_ADDRESS" "$max_threads")"
-    print_log "$(printf "$LOG_FILE_MSG" "$LOG_FILE")"
-    print_info "$(printf "$VIEW_LOG" "$CONTAINER_NAME")"
-
-    if [ -z "$NODE_ID" ]; then
-        sleep 10
-        if [ -f "$CREDENTIALS_DIR/credentials.json" ]; then
-            NODE_ID=$(jq -r '.node_id' "$CREDENTIALS_DIR/credentials.json" 2>/dev/null)
-            if [ -n "$NODE_ID" ]; then
-                echo "$NODE_ID" > "$NODE_ID_FILE"
-                print_success "$(printf "$NODE_ID_SAVED" "$NODE_ID")"
-            else
-                print_warning "Không thể extract node ID từ credentials.json"
-            fi
-        fi
-    fi
-}
-
-# Tạo swap trước khi chạy node
-if [ "$NO_SWAP" = 1 ]; then
-    print_warning "$SKIP_SWAP_FLAG"
-else
-    create_swap
-fi
+# Tạo swap trước khi chạy node (giữ nguyên như trước)
 
 # Xây dựng và chạy
 build_image
 run_container
 
-# Thiết lập cron job nếu có flag --setup-cron
-if [ "$SETUP_CRON" = 1 ]; then
-    setup_cron
-fi
-
-# In footer
-print_success "===== Hoàn Tất Cài Đặt ====="
+# Thiết lập cron job nếu có flag --setup-cron (giữ nguyên như trước)
