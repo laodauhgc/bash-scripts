@@ -1,11 +1,12 @@
 #!/bin/bash
 set -e
 
-# Version: 1.2.8  # Cập nhật version sau khi thêm hỗ trợ đa ngôn ngữ
+# Version: 1.3.1  # Cập nhật version sau khi update theo CLI mới, thêm --headless, persistent config, và remove --max-threads
 # Biến cấu hình
 CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
 LOG_FILE="/root/nexus_logs/nexus.log"
+CONFIG_DIR="/root/nexus_config"  # Dir trên host để mount persistent config
 SWAP_FILE="/swapfile"
 WALLET_ADDRESS="$1"
 NO_SWAP=0  # Mặc định không skip swap
@@ -44,9 +45,6 @@ if [ -z "$WALLET_ADDRESS" ]; then
     exit 1
 fi
 
-# Xác định số luồng dựa trên số vCPU
-max_threads=$(nproc)
-
 # Định nghĩa tất cả thông báo dựa trên ngôn ngữ
 case $LANGUAGE in
     vi)
@@ -60,7 +58,7 @@ case $LANGUAGE in
         BUILDING_IMAGE="Bắt đầu xây dựng image %s…"
         ERR_BUILD_IMAGE="Lỗi: Không thể xây dựng image %s"
         BUILD_IMAGE_SUCCESS="Xây dựng image %s thành công."
-        NODE_STARTED="Đã chạy node với wallet_address=%s, max_threads=%s"
+        NODE_STARTED="Đã chạy node với wallet_address=%s"
         LOG_FILE_MSG="Log: %s"
         VIEW_LOG="Xem log theo thời gian thực: docker logs -f %s"
         NOT_LINUX="Hệ thống không phải Linux, bỏ qua tạo swap."
@@ -79,7 +77,7 @@ case $LANGUAGE in
         SUPPORT_INFO="Thông tin hỗ trợ:"
         REGISTERING_NODE="Đăng ký node..."
         ERR_REGISTER_NODE="Lỗi: Không thể đăng ký node. Xem log:"
-        NODE_STARTED_ENTRY="Node đã khởi động với wallet_address=%s, max_threads=%s. Log: /root/nexus.log"
+        NODE_STARTED_ENTRY="Node đã khởi động với wallet_address=%s. Log: /root/nexus.log"
         STARTUP_FAILED="Khởi động thất bại. Xem log:"
         ;;
     en)
@@ -93,7 +91,7 @@ case $LANGUAGE in
         BUILDING_IMAGE="Starting to build image %s..."
         ERR_BUILD_IMAGE="Error: Unable to build image %s"
         BUILD_IMAGE_SUCCESS="Built image %s successfully."
-        NODE_STARTED="Node started with wallet_address=%s, max_threads=%s"
+        NODE_STARTED="Node started with wallet_address=%s"
         LOG_FILE_MSG="Log: %s"
         VIEW_LOG="View real-time log: docker logs -f %s"
         NOT_LINUX="System is not Linux, skipping swap creation."
@@ -112,7 +110,7 @@ case $LANGUAGE in
         SUPPORT_INFO="Support information:"
         REGISTERING_NODE="Registering node..."
         ERR_REGISTER_NODE="Error: Unable to register node. Check log:"
-        NODE_STARTED_ENTRY="Node started with wallet_address=%s, max_threads=%s. Log: /root/nexus.log"
+        NODE_STARTED_ENTRY="Node started with wallet_address=%s. Log: /root/nexus.log"
         STARTUP_FAILED="Startup failed. Check log:"
         ;;
     ru)
@@ -126,7 +124,7 @@ case $LANGUAGE in
         BUILDING_IMAGE="Начало сборки изображения %s..."
         ERR_BUILD_IMAGE="Ошибка: Не удается собрать изображение %s"
         BUILD_IMAGE_SUCCESS="Изображение %s собрано успешно."
-        NODE_STARTED="Узел запущен с wallet_address=%s, max_threads=%s"
+        NODE_STARTED="Узел запущен с wallet_address=%s"
         LOG_FILE_MSG="Лог: %s"
         VIEW_LOG="Просмотр лога в реальном времени: docker logs -f %s"
         NOT_LINUX="Система не Linux, пропуск создания swap."
@@ -145,7 +143,7 @@ case $LANGUAGE in
         SUPPORT_INFO="Информация поддержки:"
         REGISTERING_NODE="Регистрация узла..."
         ERR_REGISTER_NODE="Ошибка: Не удается зарегистрировать узел. Проверьте лог:"
-        NODE_STARTED_ENTRY="Узел запущен с wallet_address=%s, max_threads=%s. Лог: /root/nexus.log"
+        NODE_STARTED_ENTRY="Узел запущен с wallet_address=%s. Лог: /root/nexus.log"
         STARTUP_FAILED="Запуск неудачен. Проверьте лог:"
         ;;
     cn)
@@ -159,7 +157,7 @@ case $LANGUAGE in
         BUILDING_IMAGE="开始构建图像 %s..."
         ERR_BUILD_IMAGE="错误：无法构建图像 %s"
         BUILD_IMAGE_SUCCESS="图像 %s 构建成功。"
-        NODE_STARTED="节点已启动，wallet_address=%s, max_threads=%s"
+        NODE_STARTED="节点已启动，wallet_address=%s"
         LOG_FILE_MSG="日志：%s"
         VIEW_LOG="查看实时日志：docker logs -f %s"
         NOT_LINUX="系统不是Linux，跳过swap创建。"
@@ -178,7 +176,7 @@ case $LANGUAGE in
         SUPPORT_INFO="支持信息："
         REGISTERING_NODE="正在注册节点..."
         ERR_REGISTER_NODE="错误：无法注册节点。检查日志："
-        NODE_STARTED_ENTRY="节点已启动，wallet_address=%s, max_threads=%s。日志：/root/nexus.log"
+        NODE_STARTED_ENTRY="节点已启动，wallet_address=%s。日志：/root/nexus.log"
         STARTUP_FAILED="启动失败。检查日志："
         ;;
 esac
@@ -189,7 +187,7 @@ if [ -z "$WALLET_ADDRESS" ]; then
     exit 1
 fi
 
-# Hàm tạo swap tự động (thay echo bằng biến)
+# Hàm tạo swap tự động
 create_swap() {
     # Kiểm tra nếu là Linux, nếu không thì skip swap
     if [ "$(uname -s)" != "Linux" ]; then
@@ -293,10 +291,8 @@ build_image() {
     cd "$workdir"
 
     cat > Dockerfile <<EOF
-FROM ubuntu:24.04
-ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y curl screen bash && rm -rf /var/lib/apt/lists/*
-RUN curl -sSL https://cli.nexus.xyz/ | NONINTERACTIVE=1 sh && ln -sf /root/.nexus/bin/nexus-network /usr/local/bin/nexus-network
+FROM alpine:3.22.0
+RUN apk update && apk add curl screen bash && curl -sSf https://cli.nexus.xyz/ -o install.sh && chmod +x install.sh && NONINTERACTIVE=1 ./install.sh && ln -sf /root/.nexus/bin/nexus-cli /usr/local/bin/nexus-cli
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
@@ -310,33 +306,36 @@ if [ -z "\$WALLET_ADDRESS" ]; then
     echo "$ERR_MISSING_WALLET"
     exit 1
 fi
-# Đăng ký ví
-printf "$REGISTERING_WALLET\n" "\$WALLET_ADDRESS"
-nexus-network register-user --wallet-address "\$WALLET_ADDRESS" &>> /root/nexus.log
-if [ \$? -ne 0 ]; then
-    echo "$ERR_REGISTER_WALLET"
-    cat /root/nexus.log
-    echo "$SUPPORT_INFO"
-    nexus-network --help &>> /root/nexus.log
-    cat /root/nexus.log
-    exit 1
+# Check nếu config đã tồn tại (persistent), skip register nếu có
+if [ ! -f /root/.nexus/config.json ]; then
+    # Đăng ký ví
+    printf "$REGISTERING_WALLET\n" "\$WALLET_ADDRESS"
+    nexus-cli register-user --wallet-address "\$WALLET_ADDRESS" &>> /root/nexus.log
+    if [ \$? -ne 0 ]; then
+        echo "$ERR_REGISTER_WALLET"
+        cat /root/nexus.log
+        echo "$SUPPORT_INFO"
+        nexus-cli --help &>> /root/nexus.log
+        cat /root/nexus.log
+        exit 1
+    fi
+    # Đăng ký node
+    echo "$REGISTERING_NODE"
+    nexus-cli register-node &>> /root/nexus.log
+    if [ \$? -ne 0 ]; then
+        echo "$ERR_REGISTER_NODE"
+        cat /root/nexus.log
+        echo "$SUPPORT_INFO"
+        nexus-cli register-node --help &>> /root/nexus.log
+        cat /root/nexus.log
+        exit 1
+    fi
 fi
-# Đăng ký node
-echo "$REGISTERING_NODE"
-nexus-network register-node &>> /root/nexus.log
-if [ \$? -ne 0 ]; then
-    echo "$ERR_REGISTER_NODE"
-    cat /root/nexus.log
-    echo "$SUPPORT_INFO"
-    nexus-network register-node --help &>> /root/nexus.log
-    cat /root/nexus.log
-    exit 1
-fi
-# Chạy node
-screen -dmS nexus bash -c "nexus-network start --max-threads $max_threads &>> /root/nexus.log"
+# Chạy node với --headless
+screen -dmS nexus bash -c "nexus-cli start --headless &>> /root/nexus.log"
 sleep 3
 if screen -list | grep -q "nexus"; then
-    printf "$NODE_STARTED_ENTRY\n" "\$WALLET_ADDRESS" "$max_threads"
+    printf "$NODE_STARTED_ENTRY\n" "\$WALLET_ADDRESS"
 else
     echo "$STARTUP_FAILED"
     cat /root/nexus.log
@@ -362,13 +361,15 @@ run_container() {
     mkdir -p "$(dirname "$LOG_FILE")"
     touch "$LOG_FILE"
     chmod 644 "$LOG_FILE"
+    mkdir -p "$CONFIG_DIR"  # Tạo dir cho config trên host
 
     docker run -d --name "$CONTAINER_NAME" \
         --restart unless-stopped \
         -v "$LOG_FILE":/root/nexus.log \
+        -v "$CONFIG_DIR":/root/.nexus \
         -e WALLET_ADDRESS="$WALLET_ADDRESS" \
         "$IMAGE_NAME"
-    printf "$NODE_STARTED\n" "$WALLET_ADDRESS" "$max_threads"
+    printf "$NODE_STARTED\n" "$WALLET_ADDRESS"
     printf "$LOG_FILE_MSG\n" "$LOG_FILE"
     printf "$VIEW_LOG\n" "$CONTAINER_NAME"
 }
