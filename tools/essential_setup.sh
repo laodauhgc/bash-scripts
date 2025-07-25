@@ -2,7 +2,7 @@
 # ==============================================================================
 # Ubuntu Development Environment Setup Script
 # Optimized version with essential packages and robust error handling
-# Version 2.0.5
+# Version 2.0.5 - 2nd
 # ==============================================================================
 
 set -euo pipefail
@@ -352,6 +352,24 @@ fix_apt() {
     success "✅ Hoàn tất sửa lỗi APT"
 }
 
+# ==== Update System ====
+update_system() {
+    header "🔄 Cập nhật hệ thống"
+    
+    if [[ $DRY_RUN -eq 1 ]]; then
+        info "DRY RUN: Sẽ chạy apt update && apt upgrade"
+        return 0
+    fi
+    
+    info "Updating package lists..."
+    eval "$UPDATE_CMD" || die "❌ Không thể update package list"
+    
+    info "Upgrading installed packages..."
+    apt upgrade -y || warn "⚠️ Một số packages không thể upgrade"
+    
+    success "✅ System update completed"
+}
+
 # ==== Install Packages ====
 install_packages() {
     [[ $UPDATE_ONLY -eq 1 ]] && return 0
@@ -523,10 +541,12 @@ main() {
     parse_args "$@"
     
     cat << EOF
-===================
-Ubuntu Setup Script v$SCRIPT_VERSION
-Professional Development Environment
-===================
+${BOLD}${CYAN}
+╔══════════════════════════════════════════════════════════╗
+║                Ubuntu Setup Script v$SCRIPT_VERSION                ║
+║            Professional Development Environment          ║
+╚══════════════════════════════════════════════════════════╝
+${RESET}
 EOF
     
     info "🚀 Starting Ubuntu setup process..."
