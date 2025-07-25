@@ -2,7 +2,7 @@
 # ==============================================================================
 # Ubuntu Development Environment Setup Script
 # Optimized version with essential packages and robust error handling
-# Version 2.0.7
+# Version 2.0.8 
 # ==============================================================================
 
 set -euo pipefail
@@ -11,7 +11,7 @@ export DEBIAN_FRONTEND=noninteractive
 export LANG=C.UTF-8
 
 # ==== Script Configuration ====
-readonly SCRIPT_VERSION="2.0.7"
+readonly SCRIPT_VERSION="2.0.8"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly LOG_FILE="/tmp/${SCRIPT_NAME%.*}.log"
 readonly LOCK_FILE="/tmp/${SCRIPT_NAME%.*}.lock"
@@ -184,7 +184,7 @@ get_system_info() {
 
     readonly KERNEL_VERSION="$(uname -r)"
     readonly ARCHITECTURE="$(uname -m)"
-    readonly TOTAL_RAM="$(free -h | awk '/^Mem:/ {print $2}')"
+    readonly TOTAL_RAM="$(free -h | awk '/^Mem: / {print $2}')"
     readonly AVAILABLE_SPACE="$(df -h / | awk 'NR==2 {print $4}')"
 
     info "OS: $OS_NAME ($OS_VERSION)"
@@ -312,7 +312,12 @@ readonly CORE_PACKAGES=(
 # ==== Check Package Installation Status ====
 is_package_installed() {
     local package="$1"
-    dpkg -l "$package" 2>/dev/null | grep -q "^ii"
+    # Wrap in subshell to avoid pipefail exit script
+    if dpkg -l "$package" 2>/dev/null | grep -q "^ii"; then
+        return 0
+    else
+        return 1
+    fi
 }
 
 # ==== Get Packages to Install ====
@@ -321,6 +326,7 @@ get_packages_to_install() {
     local -n result_ref=$2
     
     result_ref=()
+    debug "Danh sách core packages: ${packages_ref[*]}"
     for package in "${packages_ref[@]}"; do
         info "Kiểm tra package: $package"
         if ! is_package_installed "$package"; then
@@ -340,6 +346,9 @@ fix_apt() {
         return 0
     fi
     
+    info "Chạy dpkg --configure -a để fix interrupted nếu có..."
+    dpkg --configure -a || warn "⚠️ Không thể configure dpkg, có thể hang hoặc không cần"
+
     info "Chạy apt update --fix-missing..."
     apt-get update --fix-missing || warn "⚠️ Không thể sửa lỗi missing packages"
     
