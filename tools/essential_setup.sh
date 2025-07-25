@@ -2,7 +2,7 @@
 # ==============================================================================
 # Ubuntu Development Environment Setup Script
 # Optimized version with essential packages and robust error handling
-# Version 2.0.4
+# Version 2.0.5
 # ==============================================================================
 
 set -euo pipefail
@@ -11,7 +11,7 @@ export DEBIAN_FRONTEND=noninteractive
 export LANG=C.UTF-8
 
 # ==== Script Configuration ====
-readonly SCRIPT_VERSION="2.0.4"
+readonly SCRIPT_VERSION="2.0.5"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly LOG_FILE="/tmp/${SCRIPT_NAME%.*}.log"
 readonly LOCK_FILE="/tmp/${SCRIPT_NAME%.*}.lock"
@@ -76,13 +76,13 @@ acquire_lock() {
 # ==== Help Function ====
 show_help() {
     cat << EOF
-${BOLD}$SCRIPT_NAME v$SCRIPT_VERSION${RESET}
+$SCRIPT_NAME v$SCRIPT_VERSION
 Ubuntu Development Environment Setup Script
 
-${BOLD}USAGE:${RESET}
+USAGE:
     $SCRIPT_NAME [OPTIONS]
 
-${BOLD}OPTIONS:${RESET}
+OPTIONS:
     -h, --help          Hiển thị help này
     -v, --verbose       Bật chế độ debug verbose
     -n, --dry-run       Chỉ hiển thị những gì sẽ được cài đặt
@@ -91,7 +91,7 @@ ${BOLD}OPTIONS:${RESET}
     --nodejs-version    Chỉ định version Node.js (mặc định: lts)
     --backup            Tạo backup trước khi thay đổi
 
-${BOLD}EXAMPLES:${RESET}
+EXAMPLES:
     $SCRIPT_NAME                           # Cài đặt mặc định
     $SCRIPT_NAME --verbose --backup        # Verbose mode với backup
     $SCRIPT_NAME --nodejs-version 18      # Cài Node.js v18
@@ -157,20 +157,36 @@ parse_args() {
 get_system_info() {
     info "🔍 Đang thu thập thông tin hệ thống..."
     
+    OS_ID="unknown"
+    OS_NAME="unknown"
+    OS_VERSION="unknown"
+    
     if [[ -f /etc/os-release ]]; then
         source /etc/os-release
-        readonly OS_ID="$ID"
-        readonly OS_NAME="$NAME"
-        readonly OS version="$VERSION_ID"
-    else
-        die "Không thể xác định hệ điều hành!"
+        OS_ID="${ID:-unknown}"
+        OS_NAME="${NAME:-unknown}"
+        OS_VERSION="${VERSION_ID:-unknown}"
     fi
+    
+    if [[ "$OS_VERSION" == "unknown" && -f /etc/lsb-release ]]; then
+        source /etc/lsb-release
+        OS_VERSION="${DISTRIB_RELEASE:-unknown}"
+    fi
+    
+    if [[ "$OS_VERSION" == "unknown" ]]; then
+        warn "⚠️ Không thể xác định phiên bản OS. Giả định Ubuntu 22.04."
+        OS_VERSION="22.04"
+    fi
+    
+    readonly OS_ID
+    readonly OS_NAME
+    readonly OS_VERSION
 
     readonly KERNEL_VERSION="$(uname -r)"
     readonly ARCHITECTURE="$(uname -m)"
     readonly TOTAL_RAM="$(free -h | awk '/^Mem:/ {print $2}')"
     readonly AVAILABLE_SPACE="$(df -h / | awk 'NR==2 {print $4}')"
-    
+
     info "OS: $OS_NAME ($OS_VERSION)"
     info "Kernel: $KERNEL_VERSION"
     info "Architecture: $ARCHITECTURE"
@@ -278,19 +294,19 @@ create_backup() {
 
 # ==== Essential Package List ====
 readonly CORE_PACKAGES=(
-    "build-essential"  # For compiling software
-    "git"              # Version control
-    "vim"              # Text editor
-    "curl"             # Data transfer
-    "wget"             # File download
-    "htop"             # System monitoring
-    "zip"              # Archive tools
+    "build-essential"
+    "git"
+    "vim"
+    "curl"
+    "wget"
+    "htop"
+    "zip"
     "unzip"
-    "rsync"            # File sync
-    "python3"          # Python ecosystem
+    "rsync"
+    "python3"
     "python3-pip"
     "python3-venv"
-    "openssh-client"   # SSH client
+    "openssh-client"
 )
 
 # ==== Check Package Installation Status ====
@@ -507,12 +523,10 @@ main() {
     parse_args "$@"
     
     cat << EOF
-${BOLD}${CYAN}
-╔══════════════════════════════════════════════════════════╗
-║                Ubuntu Setup Script v$SCRIPT_VERSION                ║
-║            Professional Development Environment          ║
-╚══════════════════════════════════════════════════════════╝
-${RESET}
+===================
+Ubuntu Setup Script v$SCRIPT_VERSION
+Professional Development Environment
+===================
 EOF
     
     info "🚀 Starting Ubuntu setup process..."
