@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Ubuntu Development Environment Setup Script
-# Optimized version with enhanced features and error handling
-# Reduced package list for essential packages only
+# Optimized version with essential packages and robust error handling
+# Version 2.0.4
 # ==============================================================================
 
 set -euo pipefail
@@ -11,7 +11,7 @@ export DEBIAN_FRONTEND=noninteractive
 export LANG=C.UTF-8
 
 # ==== Script Configuration ====
-readonly SCRIPT_VERSION="2.0.3"  # Updated version
+readonly SCRIPT_VERSION="2.0.4"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly LOG_FILE="/tmp/${SCRIPT_NAME%.*}.log"
 readonly LOCK_FILE="/tmp/${SCRIPT_NAME%.*}.lock"
@@ -161,7 +161,7 @@ get_system_info() {
         source /etc/os-release
         readonly OS_ID="$ID"
         readonly OS_NAME="$NAME"
-        readonly OS_VERSION="$VERSION_ID"
+        readonly OS version="$VERSION_ID"
     else
         die "Không thể xác định hệ điều hành!"
     fi
@@ -207,31 +207,28 @@ setup_package_manager() {
     fi
     
     readonly PKG_MANAGER="apt"
-    readonly UPDATE_CMD="apt update -qq"
+    readonly UPDATE_CMD="apt update"
     readonly INSTALL_CMD="apt install -y --no-install-recommends"
     readonly SEARCH_CMD="apt list --installed"
     
     success "✅ Package manager: apt"
 }
 
-# ==== Enable Additional Repositories ====
+# ==== Enable Universe Repository ====
 enable_repositories() {
-    header "🛠️ Kích hoạt các kho lưu trữ cần thiết"
+    header "🛠️ Kích hoạt kho universe"
     
     if [[ $DRY_RUN -eq 1 ]]; then
-        info "DRY RUN: Sẽ kích hoạt universe và multiverse repositories"
+        info "DRY RUN: Sẽ kích hoạt universe repository"
         return 0
     fi
     
     info "Kích hoạt universe repository..."
-    add-apt-repository universe -y >/dev/null 2>&1 || warn "⚠️ Universe repository đã được kích hoạt"
+    add-apt-repository universe -y || warn "⚠️ Universe repository đã được kích hoạt"
     
-    info "Kích hoạt multiverse repository..."
-    add-apt-repository multiverse -y >/dev/null 2>&1 || warn "⚠️ Multiverse repository đã được kích hoạt"
+    eval "$UPDATE_CMD" || die "❌ Không thể update package list sau khi kích hoạt repository"
     
-    eval "$UPDATE_CMD" || die "❌ Không thể update package list sau khi kích hoạt repositories"
-    
-    success "✅ Các kho lưu trữ đã được kích hoạt"
+    success "✅ Kho universe đã được kích hoạt"
 }
 
 # ==== Network Connectivity Check ====
@@ -279,21 +276,21 @@ create_backup() {
     success "✅ Backup completed: $BACKUP_DIR"
 }
 
-# ==== Essential Package List (Reduced) ====
+# ==== Essential Package List ====
 readonly CORE_PACKAGES=(
     "build-essential"  # For compiling software
-    "git"               # Version control
-    "vim"               # Text editor
-    "curl"              # Data transfer
-    "wget"              # File download
-    "htop"              # System monitoring
-    "zip"               # Archive tools
+    "git"              # Version control
+    "vim"              # Text editor
+    "curl"             # Data transfer
+    "wget"             # File download
+    "htop"             # System monitoring
+    "zip"              # Archive tools
     "unzip"
-    "rsync"             # File sync
-    "python3"           # Python ecosystem
+    "rsync"            # File sync
+    "python3"          # Python ecosystem
     "python3-pip"
     "python3-venv"
-    "openssh-client"    # SSH client
+    "openssh-client"   # SSH client
 )
 
 # ==== Check Package Installation Status ====
@@ -321,22 +318,22 @@ get_packages_to_install() {
     done
 }
 
-# ==== System Update ====
-update_system() {
-    header "🔄 Cập nhật hệ thống"
+# ==== Fix APT Issues ====
+fix_apt() {
+    header "🛠️ Sửa lỗi APT nếu có"
     
     if [[ $DRY_RUN -eq 1 ]]; then
-        info "DRY RUN: Sẽ chạy apt update && apt upgrade"
+        info "DRY RUN: Sẽ sửa lỗi APT"
         return 0
     fi
     
-    info "Updating package lists..."
-    eval "$UPDATE_CMD" || die "❌ Không thể update package list"
+    info "Chạy apt update --fix-missing..."
+    apt-get update --fix-missing || warn "⚠️ Không thể sửa lỗi missing packages"
     
-    info "Upgrading installed packages..."
-    apt upgrade -y || warn "⚠️ Một số packages không thể upgrade"
+    info "Chạy apt install -f..."
+    apt-get install -f -y || warn "⚠️ Không thể sửa lỗi dependencies"
     
-    success "✅ System update completed"
+    success "✅ Hoàn tất sửa lỗi APT"
 }
 
 # ==== Install Packages ====
@@ -363,28 +360,17 @@ install_packages() {
         return 0
     fi
     
-    local batch_size=5  # Reduced batch size for safety
     local installed_count=0
     local failed_packages=()
     
-    for ((i=0; i<${#packages_to_install[@]}; i+=batch_size)); do
-        local batch=("${packages_to_install[@]:i:batch_size}")
-        info "Installing batch $((i/batch_size + 1)): ${batch[*]}"
-        
-        if timeout 300 eval "$INSTALL_CMD ${batch[*]}"; then
-            installed_count=$((installed_count + ${#batch[@]}))
-            success "✅ Batch installed successfully"
+    for package in "${packages_to_install[@]}"; do
+        info "Cài đặt package: $package"
+        if eval "$INSTALL_CMD $package"; then
+            installed_count=$((installed_count + 1))
+            success "✅ $package installed"
         else
-            warn "⚠️ Batch installation failed, trying individual packages..."
-            for package in "${batch[@]}"; do
-                if timeout 300 eval "$INSTALL_CMD $package"; then
-                    installed_count=$((installed_count + 1))
-                    debug "✅ $package installed"
-                else
-                    failed_packages+=("$package")
-                    error "❌ Failed to install: $package"
-                fi
-            done
+            failed_packages+=("$package")
+            error "❌ Failed to install: $package"
         fi
     done
     
@@ -419,11 +405,11 @@ install_nodejs() {
         info "Adding NodeSource repository..."
         curl -fsSL https://deb.nodesource.com/setup_${NODEJS_VERSION}.x | bash - || {
             warn "⚠️ Không thể thêm NodeSource repo, cài đặt từ Ubuntu repo..."
-            timeout 300 eval "$INSTALL_CMD nodejs npm" || error "❌ Failed to install nodejs npm"
+            eval "$INSTALL_CMD nodejs npm" || error "❌ Failed to install nodejs npm"
         }
-        timeout 300 eval "$INSTALL_CMD nodejs" || error "❌ Failed to install nodejs"
+        eval "$INSTALL_CMD nodejs" || error "❌ Failed to install nodejs"
     else
-        timeout 300 eval "$INSTALL_CMD nodejs npm" || error "❌ Failed to install nodejs npm"
+        eval "$INSTALL_CMD nodejs npm" || error "❌ Failed to install nodejs npm"
     fi
     
     if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
@@ -539,6 +525,7 @@ EOF
     enable_repositories
     check_network
     create_backup
+    fix_apt
     update_system
     install_packages
     install_nodejs
