@@ -2,7 +2,7 @@
 # ==============================================================================
 # Ubuntu Development Environment Setup Script
 # Optimized version with essential packages and robust error handling
-# Version 2.0.8 
+# Version 2.0.9 (sửa lỗi array assignment qua nameref)
 # ==============================================================================
 
 set -euo pipefail
@@ -11,7 +11,7 @@ export DEBIAN_FRONTEND=noninteractive
 export LANG=C.UTF-8
 
 # ==== Script Configuration ====
-readonly SCRIPT_VERSION="2.0.8"
+readonly SCRIPT_VERSION="2.0.9"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly LOG_FILE="/tmp/${SCRIPT_NAME%.*}.log"
 readonly LOCK_FILE="/tmp/${SCRIPT_NAME%.*}.lock"
@@ -382,7 +382,7 @@ install_packages() {
     
     header "📦 Cài đặt packages cần thiết"
     
-    local packages_to_install
+    local -a packages_to_install
     get_packages_to_install CORE_PACKAGES packages_to_install
     
     if [[ ${#packages_to_install[@]} -eq 0 ]]; then
