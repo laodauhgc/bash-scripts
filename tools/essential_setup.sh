@@ -10,7 +10,7 @@ export DEBIAN_FRONTEND=noninteractive
 export LANG=C.UTF-8
 
 # ==== Script Configuration ====
-readonly SCRIPT_VERSION="2.0.0"
+readonly SCRIPT_VERSION="2.0.1"  # Updated version
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly LOG_FILE="/tmp/${SCRIPT_NAME%.*}.log"
 readonly LOCK_FILE="/tmp/${SCRIPT_NAME%.*}.lock"
@@ -68,7 +68,7 @@ acquire_lock() {
             rm -f "$LOCK_FILE"
         fi
     fi
-    echo $ > "$LOCK_FILE"
+    echo $$ > "$LOCK_FILE"
     trap cleanup EXIT
 }
 
@@ -213,6 +213,26 @@ setup_package_manager() {
     success "✅ Package manager: apt"
 }
 
+# ==== Enable Additional Repositories ====
+enable_repositories() {
+    header "🛠️ Kích hoạt các kho lưu trữ cần thiết"
+    
+    if [[ $DRY_RUN -eq 1 ]]; then
+        info "DRY RUN: Sẽ kích hoạt universe và multiverse repositories"
+        return 0
+    fi
+    
+    info "Kích hoạt universe repository..."
+    add-apt-repository universe -y >/dev/null 2>&1 || warn "⚠️ Universe repository đã được kích hoạt"
+    
+    info "Kích hoạt multiverse repository..."
+    add-apt-repository multiverse -y >/dev/null 2>&1 || warn "⚠️ Multiverse repository đã được kích hoạt"
+    
+    eval "$UPDATE_CMD" || die "❌ Không thể update package list sau khi kích hoạt repositories"
+    
+    success "✅ Các kho lưu trữ đã được kích hoạt"
+}
+
 # ==== Network Connectivity Check ====
 check_network() {
     info "🌐 Kiểm tra kết nối mạng..."
@@ -280,7 +300,7 @@ readonly CORE_PACKAGES=(
     "tmux" "screen"
     
     # File sync and transfer
-    "rsync" "scp" "sftp"
+    "rsync"
     
     # Security and certificates
     "openssl" "ca-certificates" "gnupg" "software-properties-common"
@@ -319,7 +339,12 @@ get_packages_to_install() {
     result_ref=()
     for package in "${packages_ref[@]}"; do
         if ! is_package_installed "$package"; then
-            result_ref+=("$package")
+            # Check if package exists in repository
+            if apt-cache show "$package" >/dev/null 2>&1; then
+                result_ref+=("$package")
+            else
+                warn "⚠️ Package $package không tồn tại trong kho lưu trữ, bỏ qua..."
+            fi
         else
             debug "Package already installed: $package"
         fi
@@ -359,6 +384,7 @@ install_packages() {
     fi
     
     info "Packages cần cài đặt: ${#packages_to_install[@]} packages"
+    info "Danh sách: ${packages_to_install[*]}"
     debug "Package list: ${packages_to_install[*]}"
     
     if [[ $DRY_RUN -eq 1 ]]; then
@@ -376,18 +402,18 @@ install_packages() {
         local batch=("${packages_to_install[@]:i:batch_size}")
         info "Installing batch $((i/batch_size + 1)): ${batch[*]}"
         
-        if eval "$INSTALL_CMD ${batch[*]}" 2>/dev/null; then
+        if eval "$INSTALL_CMD ${batch[*]}"; then
             installed_count=$((installed_count + ${#batch[@]}))
             success "✅ Batch installed successfully"
         else
             warn "⚠️ Batch installation failed, trying individual packages..."
             for package in "${batch[@]}"; do
-                if eval "$INSTALL_CMD $package" 2>/dev/null; then
+                if eval "$INSTALL_CMD $package"; then
                     installed_count=$((installed_count + 1))
                     debug "✅ $package installed"
                 else
                     failed_packages+=("$package")
-                    warn "❌ Failed to install: $package"
+                    error "❌ Failed to install: $package"
                 fi
             done
         fi
@@ -397,6 +423,7 @@ install_packages() {
     
     if [[ ${#failed_packages[@]} -gt 0 ]]; then
         warn "⚠️ Failed packages: ${failed_packages[*]}"
+        warn "Vui lòng kiểm tra và cài đặt thủ công các package trên nếu cần."
     fi
 }
 
@@ -422,7 +449,7 @@ install_nodejs() {
     # Install NodeSource repository for latest versions
     if [[ "$NODEJS_VERSION" != "system" ]]; then
         info "Adding NodeSource repository..."
-        curl -fsSL https://deb.nodesource.com/setup_${NODEJS_VERSION}.x | bash - >/dev/null 2>&1 || {
+        curl -fsSL https://deb.nodesource.com/setup_${NODEJS_VERSION}.x | bash - || {
             warn "⚠️ Không thể thêm NodeSource repo, cài đặt từ Ubuntu repo..."
             eval "$INSTALL_CMD nodejs npm"
         }
@@ -551,6 +578,7 @@ EOF
     get_system_info
     check_ubuntu_version
     setup_package_manager
+    enable_repositories  # Added to ensure repositories are enabled
     check_network
     
     # Create backup if requested
