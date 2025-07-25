@@ -2,7 +2,7 @@
 # ==============================================================================
 # Ubuntu Development Environment Setup Script
 # Optimized version with essential packages and robust error handling
-# Version 2.0.6
+# Version 2.0.6 - 2nd
 # ==============================================================================
 
 set -euo pipefail
@@ -235,7 +235,7 @@ enable_repositories() {
     header "🛠️ Kích hoạt kho universe"
     
     if [[ $DRY_RUN -eq 1 ]]; then
-        info"DRY RUN: Sẽ kích hoạt universe repository"
+        info "DRY RUN: Sẽ kích hoạt universe repository"
         return 0
     fi
     
@@ -324,11 +324,7 @@ get_packages_to_install() {
     for package in "${packages_ref[@]}"; do
         info "Kiểm tra package: $package"
         if ! is_package_installed "$package"; then
-            if apt-cache show "$package" >/dev/null 2>&1; then
-                result_ref+=("$package")
-            else
-                warn "⚠️ Package $package không tồn tại trong kho lưu trữ, bỏ qua..."
-            fi
+            result_ref+=("$package")
         else
             debug "Package already installed: $package"
         fi
