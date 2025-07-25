@@ -10,7 +10,7 @@ export DEBIAN_FRONTEND=noninteractive
 export LANG=C.UTF-8
 
 # ==== Script Configuration ====
-readonly SCRIPT_VERSION="2.0.1"  # Updated version
+readonly SCRIPT_VERSION="2.0.2"  # Updated version
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly LOG_FILE="/tmp/${SCRIPT_NAME%.*}.log"
 readonly LOCK_FILE="/tmp/${SCRIPT_NAME%.*}.lock"
@@ -207,7 +207,7 @@ setup_package_manager() {
     
     readonly PKG_MANAGER="apt"
     readonly UPDATE_CMD="apt update -qq"
-    readonly INSTALL_CMD="apt install -y --no-install-recommends -qq"
+    readonly INSTALL_CMD="apt install -y --no-install-recommends"
     readonly SEARCH_CMD="apt list --installed"
     
     success "✅ Package manager: apt"
@@ -260,7 +260,6 @@ create_backup() {
     info "📦 Tạo backup trong $BACKUP_DIR..."
     mkdir -p "$BACKUP_DIR"
     
-    # Backup important configs
     local backup_files=(
         "/etc/apt/sources.list"
         "/etc/environment"
@@ -285,7 +284,7 @@ readonly CORE_PACKAGES=(
     "build-essential" "gcc" "g++" "make" "cmake" "autoconf" "automake" "libtool"
     
     # Development tools
-    "git" "vim" "nano" "tree" "jq" "yq" "xmlstarlet"
+    "git" "vim" "nano" "tree" "jq" "xmlstarlet"
     
     # Network tools
     "curl" "wget" "net-tools" "dnsutils" "traceroute" "nmap" "tcpdump" "netstat-nat"
@@ -332,6 +331,7 @@ is_package_installed() {
     dpkg -l "$package" 2>/dev/null | grep -q "^ii"
 }
 
+# ==== Get Packages to Install ====
 get_packages_to_install() {
     local -n packages_ref=$1
     local -n result_ref=$2
@@ -339,7 +339,6 @@ get_packages_to_install() {
     result_ref=()
     for package in "${packages_ref[@]}"; do
         if ! is_package_installed "$package"; then
-            # Check if package exists in repository
             if apt-cache show "$package" >/dev/null 2>&1; then
                 result_ref+=("$package")
             else
@@ -349,6 +348,32 @@ get_packages_to_install() {
             debug "Package already installed: $package"
         fi
     done
+}
+
+# ==== Install yq via pip3 ====
+install_yq() {
+    [[ $DRY_RUN -eq 1 ]] && return 0
+    
+    header "📦 Cài đặt yq qua pip3"
+    
+    if command -v yq >/dev/null 2>&1; then
+        local current_version=$(yq --version 2>/dev/null || echo "unknown")
+        warn "yq đã được cài đặt: $current_version"
+        return 0
+    fi
+    
+    if [[ $DRY_RUN -eq 1 ]]; then
+        info "DRY RUN: Sẽ cài đặt yq qua pip3"
+        return 0
+    fi
+    
+    info "Cài đặt yq..."
+    pip3 install yq || {
+        error "❌ Không thể cài đặt yq qua pip3"
+        return 1
+    }
+    
+    success "✅ yq đã được cài đặt"
 }
 
 # ==== System Update ====
@@ -364,7 +389,7 @@ update_system() {
     eval "$UPDATE_CMD" || die "❌ Không thể update package list"
     
     info "Upgrading installed packages..."
-    apt upgrade -y -qq || warn "⚠️ Một số packages không thể upgrade"
+    apt upgrade -y || warn "⚠️ Một số packages không thể upgrade"
     
     success "✅ System update completed"
 }
@@ -393,7 +418,6 @@ install_packages() {
         return 0
     fi
     
-    # Install in batches to handle potential failures
     local batch_size=10
     local installed_count=0
     local failed_packages=()
@@ -402,13 +426,13 @@ install_packages() {
         local batch=("${packages_to_install[@]:i:batch_size}")
         info "Installing batch $((i/batch_size + 1)): ${batch[*]}"
         
-        if eval "$INSTALL_CMD ${batch[*]}"; then
+        if timeout 300 eval "$INSTALL_CMD ${batch[*]}"; then
             installed_count=$((installed_count + ${#batch[@]}))
             success "✅ Batch installed successfully"
         else
             warn "⚠️ Batch installation failed, trying individual packages..."
             for package in "${batch[@]}"; do
-                if eval "$INSTALL_CMD $package"; then
+                if timeout 300 eval "$INSTALL_CMD $package"; then
                     installed_count=$((installed_count + 1))
                     debug "✅ $package installed"
                 else
@@ -427,7 +451,7 @@ install_packages() {
     fi
 }
 
-# ==== Node.js Installation (Enhanced) ====
+# ==== Node.js Installation ====
 install_nodejs() {
     [[ $SKIP_NODEJS -eq 1 ]] && return 0
     
@@ -446,25 +470,22 @@ install_nodejs() {
     
     info "Cài đặt Node.js $NODEJS_VERSION..."
     
-    # Install NodeSource repository for latest versions
     if [[ "$NODEJS_VERSION" != "system" ]]; then
         info "Adding NodeSource repository..."
         curl -fsSL https://deb.nodesource.com/setup_${NODEJS_VERSION}.x | bash - || {
             warn "⚠️ Không thể thêm NodeSource repo, cài đặt từ Ubuntu repo..."
-            eval "$INSTALL_CMD nodejs npm"
+            timeout 300 eval "$INSTALL_CMD nodejs npm" || error "❌ Failed to install nodejs npm"
         }
-        eval "$INSTALL_CMD nodejs"
+        timeout 300 eval "$INSTALL_CMD nodejs" || error "❌ Failed to install nodejs"
     else
-        eval "$INSTALL_CMD nodejs npm"
+        timeout 300 eval "$INSTALL_CMD nodejs npm" || error "❌ Failed to install nodejs npm"
     fi
     
-    # Verify installation
     if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
         local node_version=$(node --version)
         local npm_version=$(npm --version)
         success "✅ Node.js $node_version và npm $npm_version đã được cài đặt"
         
-        # Configure npm for non-root users
         info "Configuring npm global directory..."
         mkdir -p /usr/local/lib/node_modules
         npm config set prefix /usr/local
@@ -482,12 +503,10 @@ optimize_system() {
         return 0
     fi
     
-    # Clean package cache
     info "Cleaning package cache..."
-    apt autoremove -y -qq >/dev/null 2>&1 || true
-    apt autoclean -qq >/dev/null 2>&1 || true
+    apt autoremove -y >/dev/null 2>&1 || true
+    apt autoclean >/dev/null 2>&1 || true
     
-    # Update locate database
     if command -v updatedb >/dev/null 2>&1; then
         info "Updating locate database..."
         updatedb &
@@ -516,6 +535,7 @@ generate_report() {
         echo "----------------------------"
         command -v git >/dev/null && echo "Git: $(git --version)"
         command -v python3 >/dev/null && echo "Python: $(python3 --version)"
+        command -v yq >/dev/null && echo "yq: $(yq --version)"
         command -v node >/dev/null && echo "Node.js: $(node --version)"
         command -v npm >/dev/null && echo "npm: $(npm --version)"
         command -v docker >/dev/null && echo "Docker: $(docker --version)"
@@ -538,13 +558,11 @@ post_installation_setup() {
         return 0
     fi
     
-    # Enable SSH service
     if systemctl is-available ssh >/dev/null 2>&1; then
         systemctl enable ssh >/dev/null 2>&1 || true
         info "✅ SSH service enabled"
     fi
     
-    # Set up firewall basic rules (if ufw is available)
     if command -v ufw >/dev/null 2>&1; then
         info "Setting up basic firewall rules..."
         ufw --force enable >/dev/null 2>&1 || true
@@ -556,11 +574,9 @@ post_installation_setup() {
 
 # ==== Main Function ====
 main() {
-    # Initialize
     acquire_lock
     parse_args "$@"
     
-    # Print banner
     cat << EOF
 ${BOLD}${CYAN}
 ╔══════════════════════════════════════════════════════════╗
@@ -573,28 +589,21 @@ EOF
     info "🚀 Starting Ubuntu setup process..."
     info "📝 Log file: $LOG_FILE"
     
-    # Pre-flight checks
     check_root
     get_system_info
     check_ubuntu_version
     setup_package_manager
-    enable_repositories  # Added to ensure repositories are enabled
+    enable_repositories
     check_network
-    
-    # Create backup if requested
     create_backup
-    
-    # Main installation process
     update_system
     install_packages
+    install_yq
     install_nodejs
     optimize_system
     post_installation_setup
-    
-    # Generate report
     generate_report
     
-    # Final message
     header "🎉 HOÀN THÀNH!"
     success "✅ Ubuntu development environment đã được setup thành công!"
     info "📝 Vui lòng chạy 'source ~/.bashrc' hoặc mở terminal mới"
