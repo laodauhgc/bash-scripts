@@ -2,7 +2,7 @@
 # ==============================================================================
 # Ubuntu Development Environment Setup Script
 # Optimized version with essential packages and robust error handling
-# Version 2.0.5 - 2nd
+# Version 2.0.6
 # ==============================================================================
 
 set -euo pipefail
@@ -11,7 +11,7 @@ export DEBIAN_FRONTEND=noninteractive
 export LANG=C.UTF-8
 
 # ==== Script Configuration ====
-readonly SCRIPT_VERSION="2.0.5"
+readonly SCRIPT_VERSION="2.0.6"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly LOG_FILE="/tmp/${SCRIPT_NAME%.*}.log"
 readonly LOCK_FILE="/tmp/${SCRIPT_NAME%.*}.lock"
@@ -162,14 +162,14 @@ get_system_info() {
     OS_VERSION="unknown"
     
     if [[ -f /etc/os-release ]]; then
-        source /etc/os-release
+        . /etc/os-release
         OS_ID="${ID:-unknown}"
         OS_NAME="${NAME:-unknown}"
         OS_VERSION="${VERSION_ID:-unknown}"
     fi
     
     if [[ "$OS_VERSION" == "unknown" && -f /etc/lsb-release ]]; then
-        source /etc/lsb-release
+        . /etc/lsb-release
         OS_VERSION="${DISTRIB_RELEASE:-unknown}"
     fi
     
@@ -235,7 +235,7 @@ enable_repositories() {
     header "🛠️ Kích hoạt kho universe"
     
     if [[ $DRY_RUN -eq 1 ]]; then
-        info "DRY RUN: Sẽ kích hoạt universe repository"
+        info"DRY RUN: Sẽ kích hoạt universe repository"
         return 0
     fi
     
@@ -322,6 +322,7 @@ get_packages_to_install() {
     
     result_ref=()
     for package in "${packages_ref[@]}"; do
+        info "Kiểm tra package: $package"
         if ! is_package_installed "$package"; then
             if apt-cache show "$package" >/dev/null 2>&1; then
                 result_ref+=("$package")
