@@ -2,6 +2,7 @@
 # ==============================================================================
 # Ubuntu Development Environment Setup Script
 # Optimized version with enhanced features and error handling
+# Reduced package list for essential packages only
 # ==============================================================================
 
 set -euo pipefail
@@ -10,7 +11,7 @@ export DEBIAN_FRONTEND=noninteractive
 export LANG=C.UTF-8
 
 # ==== Script Configuration ====
-readonly SCRIPT_VERSION="2.0.2"  # Updated version
+readonly SCRIPT_VERSION="2.0.3"  # Updated version
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly LOG_FILE="/tmp/${SCRIPT_NAME%.*}.log"
 readonly LOCK_FILE="/tmp/${SCRIPT_NAME%.*}.lock"
@@ -278,51 +279,21 @@ create_backup() {
     success "✅ Backup completed: $BACKUP_DIR"
 }
 
-# ==== Enhanced Package Lists ====
+# ==== Essential Package List (Reduced) ====
 readonly CORE_PACKAGES=(
-    # Build essentials
-    "build-essential" "gcc" "g++" "make" "cmake" "autoconf" "automake" "libtool"
-    
-    # Development tools
-    "git" "vim" "nano" "tree" "jq" "xmlstarlet"
-    
-    # Network tools
-    "curl" "wget" "net-tools" "dnsutils" "traceroute" "nmap" "tcpdump" "netstat-nat"
-    
-    # System monitoring
-    "htop" "iotop" "lsof" "strace" "sysstat" "ncdu"
-    
-    # Archive tools
-    "zip" "unzip" "p7zip-full" "rar" "unrar"
-    
-    # Terminal multiplexers
-    "tmux" "screen"
-    
-    # File sync and transfer
-    "rsync"
-    
-    # Security and certificates
-    "openssl" "ca-certificates" "gnupg" "software-properties-common"
-    
-    # Python ecosystem
-    "python3" "python3-pip" "python3-venv" "python3-dev"
-    
-    # SSH and remote access
-    "openssh-server" "openssh-client"
-)
-
-readonly OPTIONAL_PACKAGES=(
-    # Additional development
-    "docker.io" "docker-compose"
-    
-    # Database clients
-    "mysql-client" "postgresql-client" "sqlite3"
-    
-    # Media tools
-    "ffmpeg" "imagemagick"
-    
-    # Additional utilities
-    "ranger" "fzf" "ripgrep" "fd-find"
+    "build-essential"  # For compiling software
+    "git"               # Version control
+    "vim"               # Text editor
+    "curl"              # Data transfer
+    "wget"              # File download
+    "htop"              # System monitoring
+    "zip"               # Archive tools
+    "unzip"
+    "rsync"             # File sync
+    "python3"           # Python ecosystem
+    "python3-pip"
+    "python3-venv"
+    "openssh-client"    # SSH client
 )
 
 # ==== Check Package Installation Status ====
@@ -348,32 +319,6 @@ get_packages_to_install() {
             debug "Package already installed: $package"
         fi
     done
-}
-
-# ==== Install yq via pip3 ====
-install_yq() {
-    [[ $DRY_RUN -eq 1 ]] && return 0
-    
-    header "📦 Cài đặt yq qua pip3"
-    
-    if command -v yq >/dev/null 2>&1; then
-        local current_version=$(yq --version 2>/dev/null || echo "unknown")
-        warn "yq đã được cài đặt: $current_version"
-        return 0
-    fi
-    
-    if [[ $DRY_RUN -eq 1 ]]; then
-        info "DRY RUN: Sẽ cài đặt yq qua pip3"
-        return 0
-    fi
-    
-    info "Cài đặt yq..."
-    pip3 install yq || {
-        error "❌ Không thể cài đặt yq qua pip3"
-        return 1
-    }
-    
-    success "✅ yq đã được cài đặt"
 }
 
 # ==== System Update ====
@@ -418,7 +363,7 @@ install_packages() {
         return 0
     fi
     
-    local batch_size=10
+    local batch_size=5  # Reduced batch size for safety
     local installed_count=0
     local failed_packages=()
     
@@ -535,10 +480,8 @@ generate_report() {
         echo "----------------------------"
         command -v git >/dev/null && echo "Git: $(git --version)"
         command -v python3 >/dev/null && echo "Python: $(python3 --version)"
-        command -v yq >/dev/null && echo "yq: $(yq --version)"
         command -v node >/dev/null && echo "Node.js: $(node --version)"
         command -v npm >/dev/null && echo "npm: $(npm --version)"
-        command -v docker >/dev/null && echo "Docker: $(docker --version)"
         
         echo ""
         echo "Log file: $LOG_FILE"
@@ -598,7 +541,6 @@ EOF
     create_backup
     update_system
     install_packages
-    install_yq
     install_nodejs
     optimize_system
     post_installation_setup
