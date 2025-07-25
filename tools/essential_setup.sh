@@ -2,7 +2,7 @@
 # ==============================================================================
 # Ubuntu Development Environment Setup Script
 # Optimized version with essential packages and robust error handling
-# Version 2.0.6 - 3nd
+# Version 2.0.7
 # ==============================================================================
 
 set -euo pipefail
@@ -11,7 +11,7 @@ export DEBIAN_FRONTEND=noninteractive
 export LANG=C.UTF-8
 
 # ==== Script Configuration ====
-readonly SCRIPT_VERSION="2.0.6"
+readonly SCRIPT_VERSION="2.0.7"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly LOG_FILE="/tmp/${SCRIPT_NAME%.*}.log"
 readonly LOCK_FILE="/tmp/${SCRIPT_NAME%.*}.lock"
@@ -322,6 +322,7 @@ get_packages_to_install() {
     
     result_ref=()
     for package in "${packages_ref[@]}"; do
+        info "Kiểm tra package: $package"
         if ! is_package_installed "$package"; then
             result_ref+=("$package")
         else
