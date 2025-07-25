@@ -2,7 +2,7 @@
 # ==============================================================================
 # Ubuntu Development Environment Setup Script
 # Optimized version with essential packages and robust error handling
-# Version 2.0.6 - 2nd
+# Version 2.0.6 - 3nd
 # ==============================================================================
 
 set -euo pipefail
@@ -322,7 +322,6 @@ get_packages_to_install() {
     
     result_ref=()
     for package in "${packages_ref[@]}"; do
-        info "Kiểm tra package: $package"
         if ! is_package_installed "$package"; then
             result_ref+=("$package")
         else
