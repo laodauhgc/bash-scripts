@@ -36,10 +36,10 @@ echo $$ >"$LOCK_FILE"; trap 'rm -f "$LOCK_FILE"' EXIT
 
 # ---------- Pretty banner ----------------------------------------------------
 if command -v figlet &>/dev/null; then
-  echo -e "${C_CYA}$(figlet -w 120 "Ubuntu Core Setup v$SCRIPT_VERSION")${C_RST}"
+  echo -e "${C_GRN}$(figlet -w 120 "Ubuntu Core Setup v$SCRIPT_VERSION")${C_RST}"
 else
-  echo -e "${C_CYA}╔══════════════════════════════════════════════════════════╗
-║            Ubuntu Core Setup Script  v$SCRIPT_VERSION            ║
+  echo -e "${C_GRN}╔══════════════════════════════════════════════════════════╗
+║            Ubuntu Core Setup Script  v$SCRIPT_VERSION              ║
 ╚══════════════════════════════════════════════════════════╝${C_RST}"
 fi
 
