@@ -1,238 +1,156 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Ubuntu Development Environment Setup Script
-# Version 2.1.2 – 2025‑07‑26
+# Version 3.0.0 – 26‑Jul‑2025
 # ==============================================================================
 
 set -Eeuo pipefail
-trap 'err_report $LINENO "$BASH_COMMAND"' ERR
+trap 'echo -e "\033[0;31m❌ Lỗi tại dòng $LINENO: $BASH_COMMAND\033[0m"; exit 1' ERR
 
 export DEBIAN_FRONTEND=noninteractive
 export LANG=C.UTF-8
 
 # -------- Metadata -----------------------------------------------------------
-readonly SCRIPT_VERSION="2.1.2"
-readonly SCRIPT_NAME="$(basename "$0")"
-readonly LOG_FILE="/tmp/${SCRIPT_NAME%.*}.log"
-readonly LOCK_FILE="/tmp/${SCRIPT_NAME%.*}.lock"
-readonly BACKUP_DIR="/tmp/setup_backup_$(date +%Y%m%d_%H%M%S)"
+SCRIPT_VERSION="3.0.0"
+SCRIPT_NAME="$(basename "$0")"
+LOG_FILE="/tmp/${SCRIPT_NAME%.*}.log"
+LOCK_FILE="/tmp/${SCRIPT_NAME%.*}.lock"
+BACKUP_DIR="/tmp/setup_backup_$(date +%Y%m%d_%H%M%S)"
 
-# -------- Colours ------------------------------------------------------------
+# -------- Colour -------------------------------------------------------------
 if [[ -t 1 ]]; then
-  RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-  BLUE='\033[0;34m'; PURPLE='\033[0;35m'; CYAN='\033[0;36m'
-  WHITE='\033[1;37m'; RESET='\033[0m'; BOLD='\033[1m'
-else RED='' GREEN='' YELLOW='' BLUE='' PURPLE='' CYAN='' WHITE='' RESET='' BOLD=''; fi
+  C_RED='\033[0;31m'; C_GRN='\033[0;32m'; C_YLW='\033[1;33m'
+  C_BLU='\033[0;34m'; C_CYA='\033[0;36m'; C_MAG='\033[0;35m'
+  C_RST='\033[0m'; C_BOLD='\033[1m'
+else C_RED=''; C_GRN=''; C_YLW=''; C_BLU=''; C_CYA=''; C_MAG=''; C_RST=''; C_BOLD=''; fi
 
-# -------- Logging ------------------------------------------------------------
-ts()     { date '+%Y-%m-%d %H:%M:%S'; }
-log()    { echo -e "${2:-$GREEN}[ $(ts) ] $1${RESET}" | tee -a "$LOG_FILE"; }
-info()   { log "ℹ️  $1" "$BLUE"; }
-success(){ log "✅ $1" "$GREEN"; }
-warn()   { log "⚠️  $1" "$YELLOW"; }
-error()  { log "❌ $1" "$RED"; }
-debug()  { [[ "${DEBUG:-0}" == 1 ]] && log "🐛 $1" "$PURPLE"; }
-header() { log "\n${BOLD}$1${RESET}" "$CYAN"; }
-err_report(){ error "Lỗi tại dòng $1: $2"; cleanup; exit 1; }
+# -------- Logger (màu ra màn hình, log sạch) ---------------------------------
+_strip() { sed -r 's/\x1b\[[0-9;]*[mK]//g'; }
+_log()   { local t; t=$(date '+%F %T'); echo -e "${2}[ ${t} ] $1${C_RST}"
+           echo -e "$(_log_color_off "$1")" >> "$LOG_FILE"; }
+_log_color_off(){ echo -e "$1" | _strip; }
+info()   { _log "ℹ️  $1" "$C_BLU"; }
+ok()     { _log "✅ $1" "$C_GRN"; }
+warn()   { _log "⚠️  $1" "$C_YLW"; }
+err()    { _log "❌ $1" "$C_RED"; }
 
-# -------- Cleanup & Lock -----------------------------------------------------
-cleanup(){ [[ -f "$LOCK_FILE" ]] && rm -f "$LOCK_FILE"; }
-acquire_lock(){
-  if [[ -f "$LOCK_FILE" ]]; then
-    local pid ; pid=$(cat "$LOCK_FILE" || true)
-    if [[ -n "$pid" && -d /proc/$pid ]]; then
-      die "Script đang chạy (PID $pid); xoá $LOCK_FILE hoặc đợi."
-    else warn "Phát hiện lock cũ – xoá..."; rm -f "$LOCK_FILE"; fi
-  fi
-  echo $$ > "$LOCK_FILE"; trap cleanup EXIT
-}
-die(){ error "$1"; exit 1; }
-
-# -------- Args ----------------------------------------------------------------
-DRY_RUN=0; SKIP_NODEJS=0; UPDATE_ONLY=0; CREATE_BACKUP=0; NODEJS_VERSION="lts"
-show_help(){ cat <<EOF
-$SCRIPT_NAME v$SCRIPT_VERSION – Ubuntu Dev‑Env installer
-  -h|--help            Trợ giúp
-  -v|--verbose         Debug
-  -n|--dry-run         Chỉ mô phỏng
-  -s|--skip-nodejs     Bỏ Node.js
-  -u|--update-only     Chỉ update
-  --nodejs-version v   Chọn version Node.js
-  --backup             Sao lưu cấu hình
+# -------- Arg parse ----------------------------------------------------------
+PROFILE="core" ; SKIP_NODE=0 ; BACKUP=0 ; DEBUG=0
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --profile)        PROFILE=${2,,}; shift 2 ;;
+    -s|--skip-nodejs) SKIP_NODE=1; shift ;;
+    --backup)         BACKUP=1; shift ;;
+    -v|--verbose)     DEBUG=1; set -x; shift ;;
+    -h|--help) cat <<EOF
+$SCRIPT_NAME v$SCRIPT_VERSION
+Options:
+  --profile {core|full}   Chế độ cài (core: mặc định, full: nhiều gói hơn)
+  -s | --skip-nodejs      Bỏ qua cài Node.js
+  --backup                Backup file cấu hình quan trọng
+  -v | --verbose          Debug chi tiết
 EOF
-}
-parse_args(){
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      -h|--help)      show_help; exit 0 ;;
-      -v|--verbose)   DEBUG=1; set -x; shift ;;
-      -n|--dry-run)   DRY_RUN=1; shift ;;
-      -s|--skip-nodejs)SKIP_NODEJS=1; shift ;;
-      -u|--update-only)UPDATE_ONLY=1; shift ;;
-      --nodejs-version) NODEJS_VERSION=$2; shift 2 ;;
-      --backup)       CREATE_BACKUP=1; shift ;;
-      *) die "Tùy chọn không hợp lệ: $1" ;;
-    esac
-  done
-}
+                exit 0 ;;
+    *) err "Tùy chọn không hợp lệ: $1"; exit 1 ;;
+  esac
+done
 
-# -------- System info --------------------------------------------------------
-get_system_info(){
-  info "🔍 Thu thập thông tin hệ thống..."
-  source /etc/os-release
-  OS_ID="$ID"; OS_NAME="$NAME"; OS_VERSION="$VERSION_ID"
-  KERNEL_VERSION="$(uname -r)"; ARCHITECTURE="$(uname -m)"
-  TOTAL_RAM="$(free -h | awk '/^Mem:/ {print $2}')"
-  AVAILABLE_SPACE="$(df -h / | awk 'NR==2 {print $4}')"
-  info "OS: $OS_NAME $OS_VERSION • Kernel: $KERNEL_VERSION • Arch: $ARCHITECTURE"
+# -------- Lock ---------------------------------------------------------------
+[[ -e $LOCK_FILE ]] && { err "Đã chạy trước đó. Xoá $LOCK_FILE để tiếp tục."; exit 1; }
+echo $$ > "$LOCK_FILE"; trap 'rm -f "$LOCK_FILE"' EXIT
+
+# -------- Banner -------------------------------------------------------------
+print_banner(){
+  if command -v figlet >/dev/null 2>&1; then
+    echo -e "${C_CYA}$(figlet -w 120 "Ubuntu Setup v$SCRIPT_VERSION")${C_RST}"
+  else cat <<EOF
+${C_CYA}${C_BOLD}
+╔══════════════════════════════════════════════════════════╗
+║                Ubuntu Setup Script v$SCRIPT_VERSION               ║
+╚══════════════════════════════════════════════════════════╝
+${C_RST}
+EOF
+  fi
 }
-check_root(){ [[ $EUID -eq 0 ]] || die "Cần chạy với sudo/root."; success "Đang chạy với quyền root"; }
-check_ubuntu(){ [[ "$OS_ID" == "ubuntu" ]] || die "Chỉ hỗ trợ Ubuntu."; }
+print_banner
+
+# -------- System checks ------------------------------------------------------
+[[ $EUID -eq 0 ]] || { err "Cần chạy với sudo/root."; exit 1; }
+. /etc/os-release
+[[ $ID == ubuntu ]] || { err "Chỉ hỗ trợ Ubuntu."; exit 1; }
+
+info "OS: $PRETTY_NAME – Kernel $(uname -r)"
 
 # -------- APT helpers --------------------------------------------------------
-UPDATE_CMD="apt-get update"
-INSTALL_CMD="apt-get install -y --no-install-recommends"
+apt_update(){ apt-get update -y -qq; }
+apt_install(){ apt-get install -y --no-install-recommends "$@"; }
 
-ensure_pkg_tools(){
-  if ! command -v add-apt-repository &>/dev/null; then
-    info "Cài software-properties-common…"; $INSTALL_CMD software-properties-common >/dev/null
-  fi
-}
+info "Cập nhật danh sách gói…"; apt_update
 
-enable_universe(){
-  header "🛠️ Kích hoạt kho universe"
-  if [[ $DRY_RUN == 1 ]]; then info "DRY‑RUN: add‑apt‑repository universe"; return 0; fi
-  add-apt-repository universe -y || warn "Universe đã bật."
-  $UPDATE_CMD
-}
-
-check_network(){
-  info "🌐 Kiểm tra kết nối mạng…"
-  ping -c1 -W3 8.8.8.8 &>/dev/null || ping -c1 -W3 google.com &>/dev/null \
-    || die "Không có kết nối mạng."
-  success "Kết nối mạng OK."
-}
-
-fix_apt(){
-  header "🛠️ Sửa lỗi APT"
-  if [[ $DRY_RUN == 1 ]]; then info "DRY‑RUN: dpkg/apt fix"; return 0; fi
-  dpkg --configure -a || true
-  apt-get update --fix-missing || true
-  apt-get install -f -y || true
-  success "Hoàn tất sửa lỗi APT"
-}
-
-update_system(){
-  header "🔄 Cập nhật hệ thống"
-  if [[ $DRY_RUN == 1 ]]; then info "DRY‑RUN: apt update/upgrade"; return 0; fi
-  $UPDATE_CMD
-  apt-get upgrade -y || warn "apt‑upgrade gặp lỗi nhỏ, bỏ qua."
-}
-
-# -------- Core packages ------------------------------------------------------
+# -------- Package lists ------------------------------------------------------
 CORE_PACKAGES=(
   build-essential git vim curl wget htop rsync zip unzip
   python3 python3-pip python3-venv
   openssh-client ca-certificates gnupg lsb-release software-properties-common
-  plocate
+  plocate bash-completion
 )
-install_core_packages(){
-  if [[ $UPDATE_ONLY == 1 ]]; then return 0; fi
-  header "📦 Cài đặt core packages"
-  local missing=()
-  for p in "${CORE_PACKAGES[@]}"; do dpkg -s "$p" &>/dev/null || missing+=("$p"); done
-  if [[ ${#missing[@]} -eq 0 ]]; then success "Tất cả core packages đã có."; return 0; fi
-  info "Sẽ cài ${#missing[@]} gói: ${missing[*]}"
-  if [[ $DRY_RUN == 1 ]]; then printf '  • %s\n' "${missing[@]}"; return 0; fi
-  $INSTALL_CMD "${missing[@]}" || {
-    warn "Cài batch lỗi – thử từng gói..."
-    local fail=(); for p in "${missing[@]}"; do $INSTALL_CMD "$p" || fail+=("$p"); done
-    [[ ${#fail[@]} -eq 0 ]] || warn "Gói lỗi: ${fail[*]}"
-  }
-  return 0
-}
+
+EXTRA_PACKAGES_FULL=(
+  # CLI / debug
+  tree tmux jq lsof iotop iproute2 net-tools dnsutils traceroute telnet nmap
+  # build & libs
+  make cmake pkg-config gcc g++ clang gdb autoconf automake libtool gettext
+  libssl-dev libbz2-dev zlib1g-dev libreadline-dev libsqlite3-dev libffi-dev
+  liblzma-dev libncurses5-dev libncursesw5-dev
+  # compression
+  p7zip-full rar unrar
+  # fonts & comfort
+  fonts-powerline nano less
+  # docker
+  docker.io docker-compose
+  # ssh server & firewall
+  openssh-server ufw
+)
+
+[[ $PROFILE == "full" ]] && PACKAGE_LIST=("${CORE_PACKAGES[@]}" "${EXTRA_PACKAGES_FULL[@]}") \
+                         || PACKAGE_LIST=("${CORE_PACKAGES[@]}")
+
+# -------- Install packages ---------------------------------------------------
+to_install=()
+for pkg in "${PACKAGE_LIST[@]}"; do dpkg -s "$pkg" &>/dev/null || to_install+=("$pkg"); done
+if [[ ${#to_install[@]} -gt 0 ]]; then
+  info "Cài ${#to_install[@]} gói (${PROFILE} profile)…"
+  apt_install "${to_install[@]}"
+else ok "Tất cả gói (${PROFILE}) đã cài."; fi
 
 # -------- Node.js ------------------------------------------------------------
-install_nodejs(){
-  if [[ $SKIP_NODEJS == 1 ]]; then return 0; fi
-  header "📦 Cài đặt Node.js ($NODEJS_VERSION)"
-  if command -v node &>/dev/null; then warn "Node.js đã có: $(node -v)"; return 0; fi
-  if [[ $DRY_RUN == 1 ]]; then info "DRY‑RUN: cài Node.js $NODEJS_VERSION"; return 0; fi
-  curl -fsSL "https://deb.nodesource.com/setup_${NODEJS_VERSION}.x" | bash - \
-    || warn "Không thêm NodeSource – dùng repo Ubuntu."
-  $INSTALL_CMD nodejs
-  command -v npm &>/dev/null || $INSTALL_CMD npm
-  if command -v node &>/dev/null; then
-    success "Node.js $(node -v) / npm $(npm -v) đã cài."
-    npm config set prefix /usr/local || true
-  else error "Cài Node.js thất bại."; fi
-  return 0
-}
+if [[ $SKIP_NODE -eq 0 ]]; then
+  if command -v node >/dev/null; then warn "Node.js đã có: $(node -v)"
+  else
+    info "Cài Node.js LTS…"
+    curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
+    apt_install nodejs
+    ok "Node.js $(node -v) / npm $(npm -v) đã sẵn sàng."
+  fi
+fi
 
-# -------- Optimise & post ----------------------------------------------------
-optimise_system(){
-  header "⚡ Dọn dẹp & tối ưu"
-  if [[ $DRY_RUN == 1 ]]; then info "DRY‑RUN: autoremove"; return 0; fi
-  apt-get autoremove -y || true
-  apt-get autoclean -y  || true
-  updatedb &>/dev/null || true
-  return 0
-}
+# -------- Docker post step ---------------------------------------------------
+if [[ $PROFILE == "full" && $SKIP_NODE -eq 0 ]]; then
+  usermod -aG docker "${SUDO_USER:-root}" || true
+  ok "Thêm user $(whoami) vào nhóm docker (cần logout/login)."
+fi
 
-post_install(){
-  header "🔧 Thiết lập sau cài đặt"
-  if [[ $DRY_RUN == 1 ]]; then info "DRY‑RUN: post‑install"; return 0; fi
-  if systemctl list-unit-files | grep -q '^ssh.service'; then systemctl enable --now ssh; fi
-  if command -v ufw &>/dev/null; then ufw --force enable; ufw allow ssh; info "UFW bật với rule SSH."; fi
-  return 0
-}
-
-# -------- Backup & report ----------------------------------------------------
-create_backup(){
-  if [[ $CREATE_BACKUP != 1 ]]; then return 0; fi
-  header "📦 Backup file cấu hình"
+# -------- Backup -------------------------------------------------------------
+if [[ $BACKUP -eq 1 ]]; then
+  info "Backup cấu hình về $BACKUP_DIR…"
   mkdir -p "$BACKUP_DIR"
-  local files=(/etc/apt/sources.list /etc/environment /etc/profile "$HOME/.bashrc" "$HOME/.profile")
-  for f in "${files[@]}"; do [[ -f "$f" ]] && cp -a "$f" "$BACKUP_DIR/"; done
-  success "Đã backup vào $BACKUP_DIR"
-  return 0
-}
+  cp -a /etc/apt/sources.list{,.d} "$BACKUP_DIR/" 2>/dev/null || true
+  cp -a "$HOME"/.{bashrc,profile} "$BACKUP_DIR/" 2>/dev/null || true
+  ok "Backup hoàn tất."
+fi
 
-generate_report(){
-  local report="/tmp/setup_report_$(date +%Y%m%d_%H%M%S).txt"
-  {
-    echo "=== Ubuntu Setup Report ($SCRIPT_VERSION) ==="
-    echo "Date: $(date)"
-    echo "OS: $OS_NAME $OS_VERSION ($KERNEL_VERSION)  Arch: $ARCHITECTURE"
-    command -v git     &>/dev/null && git  --version
-    command -v python3 &>/dev/null && python3 --version
-    command -v node    &>/dev/null && node --version
-    command -v npm     &>/dev/null && npm  --version
-    echo "Log: $LOG_FILE"
-    [[ $CREATE_BACKUP == 1 ]] && echo "Backup: $BACKUP_DIR"
-  } 2>&1 | tee "$report" || true   # luôn tiếp tục, kể cả khi lệnh bên trong trả về mã ≠ 0
-  info "📄 Report lưu tại $report"
-  return 0
-}
+# -------- Clean up -----------------------------------------------------------
+info "Dọn dẹp APT cache…"; apt-get autoremove -y -qq; apt-get clean -qq
 
-# -------- Main ---------------------------------------------------------------
-main(){
-  acquire_lock; parse_args "$@"
-  cat <<EOF
-${BOLD}${CYAN}
-╔══════════════════════════════════════════════════════════╗
-║                Ubuntu Setup Script v$SCRIPT_VERSION               ║
-║       (Professional Development Environment Installer)   ║
-╚══════════════════════════════════════════════════════════╝
-${RESET}
-EOF
-  info "🚀 Bắt đầu setup… (log: $LOG_FILE)"
-  check_root; get_system_info; check_ubuntu
-  ensure_pkg_tools; enable_universe; check_network
-  fix_apt; update_system; create_backup
-  install_core_packages; install_nodejs
-  optimise_system; post_install; generate_report
-  header "🎉 HOÀN TẤT!"; success "Môi trường phát triển Ubuntu đã sẵn sàng."
-}
-
-[[ "${BASH_SOURCE[0]}" == "$0" ]] && main "$@"
+ok "🎉 Hoàn tất – Môi trường $PROFILE đã sẵn sàng!"
+echo "→ Xem log chi tiết: $LOG_FILE"
