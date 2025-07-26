@@ -66,7 +66,7 @@ print_banner(){
   else cat <<EOF
 ${C_CYA}${C_BOLD}
 ╔══════════════════════════════════════════════════════════╗
-║                Ubuntu Setup Script v$SCRIPT_VERSION      ║
+              Ubuntu Setup Script v$SCRIPT_VERSION      
 ╚══════════════════════════════════════════════════════════╝
 ${C_RST}
 EOF
