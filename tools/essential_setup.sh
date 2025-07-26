@@ -2,7 +2,7 @@
 # ==============================================================================
 # Ubuntu Development Environment Setup Script
 # Optimized version with essential packages and robust error handling
-# Version 2.0.12 (sử dụng dpkg-query để lấy list installed, <<< để feed grep)
+# Version 2.0.13 (kiểm tra từng package riêng biệt để tránh lỗi list lớn)
 # ==============================================================================
 
 set -euo pipefail
@@ -12,7 +12,7 @@ export DEBIAN_FRONTEND=noninteractive
 export LANG=C.UTF-8
 
 # ==== Script Configuration ====
-readonly SCRIPT_VERSION="2.0.12"
+readonly SCRIPT_VERSION="2.0.13"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly LOG_FILE="/tmp/${SCRIPT_NAME%.*}.log"
 readonly LOCK_FILE="/tmp/${SCRIPT_NAME%.*}.lock"
@@ -354,18 +354,16 @@ install_packages() {
     
     header "📦 Cài đặt packages cần thiết"
     
-    info "Thu thập danh sách packages đã cài đặt..."
-    local installed_packages=$(dpkg-query -l 2>/dev/null | awk '/^ii/ {print $2}')
-    
     local packages_to_install=()
     
     for package in "${CORE_PACKAGES[@]}"; do
         info "Kiểm tra package: $package"
-        if grep -q "^$package$" <<< "$installed_packages"; then
+        if dpkg-query -s "$package" 2>/dev/null | grep -q '^Status: install ok installed'; then
             debug "Package already installed: $package"
         else
             packages_to_install+=("$package")
         fi
+        debug "Checked $package"
     done
     
     if [[ ${#packages_to_install[@]} -eq 0 ]]; then
