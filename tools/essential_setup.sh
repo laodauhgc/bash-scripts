@@ -2,16 +2,17 @@
 # ==============================================================================
 # Ubuntu Development Environment Setup Script
 # Optimized version with essential packages and robust error handling
-# Version 2.0.9 (sửa lỗi array assignment qua nameref)
+# Version 2.0.11 (thay đổi cách kiểm tra package đã cài để tránh lỗi dpkg)
 # ==============================================================================
 
 set -euo pipefail
+trap 'error "Error on line $LINENO: $BASH_COMMAND"' ERR
 
 export DEBIAN_FRONTEND=noninteractive
 export LANG=C.UTF-8
 
 # ==== Script Configuration ====
-readonly SCRIPT_VERSION="2.0.9"
+readonly SCRIPT_VERSION="2.0.11"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly LOG_FILE="/tmp/${SCRIPT_NAME%.*}.log"
 readonly LOCK_FILE="/tmp/${SCRIPT_NAME%.*}.lock"
@@ -184,7 +185,7 @@ get_system_info() {
 
     readonly KERNEL_VERSION="$(uname -r)"
     readonly ARCHITECTURE="$(uname -m)"
-    readonly TOTAL_RAM="$(free -h | awk '/^Mem: / {print $2}')"
+    readonly TOTAL_RAM="$(free -h | awk '/^Mem:/ {print $2}')"
     readonly AVAILABLE_SPACE="$(df -h / | awk 'NR==2 {print $4}')"
 
     info "OS: $OS_NAME ($OS_VERSION)"
@@ -225,7 +226,6 @@ setup_package_manager() {
     readonly PKG_MANAGER="apt"
     readonly UPDATE_CMD="apt update"
     readonly INSTALL_CMD="apt install -y --no-install-recommends"
-    readonly SEARCH_CMD="apt list --installed"
     
     success "✅ Package manager: apt"
 }
@@ -309,34 +309,6 @@ readonly CORE_PACKAGES=(
     "openssh-client"
 )
 
-# ==== Check Package Installation Status ====
-is_package_installed() {
-    local package="$1"
-    # Wrap in subshell to avoid pipefail exit script
-    if dpkg -l "$package" 2>/dev/null | grep -q "^ii"; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-# ==== Get Packages to Install ====
-get_packages_to_install() {
-    local -n packages_ref=$1
-    local -n result_ref=$2
-    
-    result_ref=()
-    debug "Danh sách core packages: ${packages_ref[*]}"
-    for package in "${packages_ref[@]}"; do
-        info "Kiểm tra package: $package"
-        if ! is_package_installed "$package"; then
-            result_ref+=("$package")
-        else
-            debug "Package already installed: $package"
-        fi
-    done
-}
-
 # ==== Fix APT Issues ====
 fix_apt() {
     header "🛠️ Sửa lỗi APT nếu có"
@@ -382,8 +354,19 @@ install_packages() {
     
     header "📦 Cài đặt packages cần thiết"
     
-    local -a packages_to_install
-    get_packages_to_install CORE_PACKAGES packages_to_install
+    info "Thu thập danh sách packages đã cài đặt..."
+    local installed_packages=$(apt list --installed 2>/dev/null)
+    
+    local packages_to_install=()
+    
+    for package in "${CORE_PACKAGES[@]}"; do
+        info "Kiểm tra package: $package"
+        if echo "$installed_packages" | grep -q "^$package/"; then
+            debug "Package already installed: $package"
+        else
+            packages_to_install+=("$package")
+        fi
+    done
     
     if [[ ${#packages_to_install[@]} -eq 0 ]]; then
         success "✅ Tất cả core packages đã được cài đặt"
