@@ -2,7 +2,7 @@
 
 # install_v2ray.sh: Tự động cài đặt V2Ray trên Ubuntu 22.04 và cấu hình firewall
 # Yêu cầu: Chạy với quyền root hoặc sudo
-# version v0.2
+# version v0.2.1
 
 set -euo pipefail
 
@@ -91,5 +91,5 @@ chmod 600 "$INFO_FILE"
 echo "Installation successful. Connection details saved to $INFO_FILE"
 
 echo "============"
-cat $INFO_FILE
+cat "$INFO_FILE"
 echo "============"
