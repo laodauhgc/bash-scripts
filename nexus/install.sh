@@ -85,6 +85,8 @@ case $LANGUAGE in
         CRON_SETUP="Thiết lập cron job để khởi tạo lại container mỗi giờ."
         CRON_INSTRUCTION="Cron job đã được thêm: @hourly docker rm -f %s; /bin/bash %s %s"
         ARCH_DETECTED="Phát hiện kiến trúc hệ thống: %s. Sử dụng CLI phù hợp."
+        WAIT_NODE_ID="Đang chờ node ID được tạo... (timeout sau %s giây)"
+        ERR_NO_NODE_ID="Lỗi: Không thể lấy node ID sau thời gian chờ."
         ;;
     en)
         BANNER="===== Nexus Node Setup v1.3.2 (ARM Support) ====="
@@ -123,6 +125,8 @@ case $LANGUAGE in
         CRON_SETUP="Setting up cron job to recreate container every hour."
         CRON_INSTRUCTION="Cron job added: @hourly docker rm -f %s; /bin/bash %s %s"
         ARCH_DETECTED="Detected system architecture: %s. Using appropriate CLI."
+        WAIT_NODE_ID="Waiting for node ID to be created... (timeout after %s seconds)"
+        ERR_NO_NODE_ID="Error: Unable to get node ID after waiting time."
         ;;
     ru)
         BANNER="===== Установка Узла Nexus v1.3.2 (Поддержка ARM) ====="
@@ -159,6 +163,8 @@ case $LANGUAGE in
         NODE_ID_SAVED="Node ID сохранен: %s"
         USING_EXISTING_NODE_ID="Использование существующего node ID: %s"
         ARCH_DETECTED="Обнаруженная архитектура системы: %s. Использование соответствующего CLI."
+        WAIT_NODE_ID="Ожидание создания node ID... (таймаут после %s секунд)"
+        ERR_NO_NODE_ID="Ошибка: Не удалось получить node ID после ожидания."
         ;;
     cn)
         BANNER="===== Nexus 节点设置 v1.3.2 (ARM 支持) ====="
@@ -195,6 +201,8 @@ case $LANGUAGE in
         NODE_ID_SAVED="Node ID 已保存：%s"
         USING_EXISTING_NODE_ID="使用现有的 node ID：%s"
         ARCH_DETECTED="检测到系统架构：%s。使用适当的 CLI。"
+        WAIT_NODE_ID="正在等待节点ID创建...（超时后 %s 秒）"
+        ERR_NO_NODE_ID="错误：等待时间后无法获取节点ID。"
         ;;
 esac
 
@@ -361,9 +369,9 @@ else
         cat /root/nexus.log
         exit 1
     fi
-    NODE_ID=\$(jq -r '.node_id' /root/.nexus/credentials.json 2>/dev/null)
+    NODE_ID=\$(jq -r '.node_id' /root/.nexus/config.json 2>/dev/null)
     if [ -z "\$NODE_ID" ]; then
-        echo "${RED}❌ Không thể extract node ID từ credentials.json${NC}"
+        echo "${RED}❌ Không thể extract node ID từ config.json${NC}"
         exit 1
     fi
     screen -dmS nexus bash -c "nexus-network start --node-id \$NODE_ID &>> /root/nexus.log"
@@ -415,16 +423,23 @@ run_container() {
     print_info "$(printf "$VIEW_LOG" "$CONTAINER_NAME")"
 
     if [ -z "$NODE_ID" ]; then
-        sleep 10
-        if [ -f "$CREDENTIALS_DIR/credentials.json" ]; then
-            NODE_ID=$(jq -r '.node_id' "$CREDENTIALS_DIR/credentials.json" 2>/dev/null)
-            if [ -n "$NODE_ID" ]; then
-                echo "$NODE_ID" > "$NODE_ID_FILE"
-                print_success "$(printf "$NODE_ID_SAVED" "$NODE_ID")"
-            else
-                print_warning "Không thể extract node ID từ credentials.json"
+        TIMEOUT=120  # Tăng thời gian chờ tối đa lên 120 giây
+        WAIT_TIME=0
+        print_progress "$(printf "$WAIT_NODE_ID" "$TIMEOUT")"
+        while [ $WAIT_TIME -lt $TIMEOUT ]; do
+            if [ -f "$CREDENTIALS_DIR/config.json" ]; then
+                NODE_ID=$(jq -r '.node_id // empty' "$CREDENTIALS_DIR/config.json" 2>/dev/null)
+                if [ -n "$NODE_ID" ]; then
+                    echo "$NODE_ID" > "$NODE_ID_FILE"
+                    print_success "$(printf "$NODE_ID_SAVED" "$NODE_ID")"
+                    return
+                fi
             fi
-        fi
+            sleep 5
+            WAIT_TIME=$((WAIT_TIME + 5))
+        done
+        print_error "$ERR_NO_NODE_ID"
+        exit 1
     fi
 }
 
@@ -438,6 +453,14 @@ fi
 # Xây dựng và chạy
 build_image
 run_container
+
+# Thiết lập cron nếu yêu cầu
+if [ "$SETUP_CRON" = 1 ]; then
+    print_info "$CRON_SETUP"
+    CRON_JOB="@hourly docker rm -f $CONTAINER_NAME; /bin/bash $0 $WALLET_ADDRESS"
+    (crontab -l 2>/dev/null; echo "$CRON_JOB") | crontab -
+    print_success "$(printf "$CRON_INSTRUCTION" "$CONTAINER_NAME" "$0" "$WALLET_ADDRESS")"
+fi
 
 # In footer
 print_success "===== Hoàn Tất Cài Đặt ====="
