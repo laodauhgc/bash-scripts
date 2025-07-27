@@ -361,7 +361,12 @@ else
         cat /root/nexus.log
         exit 1
     fi
-    screen -dmS nexus bash -c "nexus-network start &>> /root/nexus.log"
+    NODE_ID=\$(jq -r '.node_id' /root/.nexus/credentials.json 2>/dev/null)
+    if [ -z "\$NODE_ID" ]; then
+        echo "${RED}❌ Không thể extract node ID từ credentials.json${NC}"
+        exit 1
+    fi
+    screen -dmS nexus bash -c "nexus-network start --node-id \$NODE_ID &>> /root/nexus.log"
 fi
 sleep 3
 if screen -list | grep -q "nexus"; then
