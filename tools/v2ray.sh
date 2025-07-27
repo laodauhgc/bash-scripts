@@ -89,3 +89,7 @@ EOL
 chmod 600 "$INFO_FILE"
 
 echo "Installation successful. Connection details saved to $INFO_FILE"
+
+echo "============"
+cat /root/v2ray_info_2025-07-27_105252.txt
+echo "============"
