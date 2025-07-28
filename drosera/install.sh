@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# drosera.sh version v0.1.4
+# drosera.sh version v0.1.5
 # Automated installer for Drosera Operator on VPS
 set -euo pipefail
 
@@ -11,7 +11,7 @@ RED="\e[1;31m"
 RESET="\e[0m"
 
 # Banner
-echo -e "${BLUE}🛠️  drosera.sh v0.1.4 - Automated Installer for Drosera Operator 🛠️${RESET}"
+echo -e "${BLUE}🛠️  drosera.sh v0.1.5 - Automated Installer for Drosera Operator 🛠️${RESET}"
 
 # Print functions
 title() { echo -e "\n${YELLOW}➤ ${1}${RESET}"; }
@@ -62,6 +62,12 @@ if [[ -z "${DRO_ETH_PRIVATE_KEY}" ]]; then
 fi
 # Strip 0x prefix if present
 DRO_ETH_PRIVATE_KEY=${DRO_ETH_PRIVATE_KEY#0x}
+# Check length is exactly 64 hex chars
+if [[ ! "$DRO_ETH_PRIVATE_KEY" =~ ^[0-9a-fA-F]{64}$ ]]; then
+  error "Invalid private key length: must be 64 hex characters (32 bytes)."
+  exit 1
+fi
+info "Private key format OK"
 
 # 1. Install dependencies
 title "Installing dependencies"
@@ -90,24 +96,27 @@ if ! droseraup >/dev/null; then
   error "droseraup failed to install CLI. Exiting."
   exit 1
 fi
+info "Drosera CLI installed/updated"
 
 # 3. Register operator
 title "Registering operator"
 info "Registering with RPC: ${DRO_RPC_URL}"
 if ! command -v drosera-operator &>/dev/null; then
-  error "drosera-operator CLI not found after installation. Exiting."
+  error "drosera-operator CLI not found after installation. Exiting.";
   exit 1
 fi
 
 drosera-operator register \
   --eth-rpc-url "${DRO_RPC_URL}" \
   --eth-private-key "${DRO_ETH_PRIVATE_KEY}"
+info "Operator registration complete"
 
 # 4. Prepare database directory
 title "Preparing database directory"
 info "Creating ${DRO_DB_DIR}"
 mkdir -p "${DRO_DB_DIR}"
 chmod 700 "${DRO_DB_DIR}"
+info "Database directory ready"
 
 # 5. Retrieve external IP
 title "Retrieving external IP"
@@ -155,6 +164,7 @@ info "Starting drosera-operator.service"
 systemctl start drosera-operator.service
 info "Enabling drosera-operator.service on boot"
 systemctl enable drosera-operator.service
+info "Service is running"
 
 # 8. Configure firewall
 title "Configuring UFW firewall"
@@ -166,9 +176,10 @@ info "Allowing RPC port (${DRO_SERVER_PORT})"
 ufw allow "${DRO_SERVER_PORT}"/tcp
 info "Enabling UFW"
 yes | ufw enable
+info "Firewall configured"
 
 # Done
 title "Installation complete"
-info "Drosera Operator is running"
+info "Drosera Operator is installed and running"
 info "Check status: systemctl status drosera-operator.service"
 info "View logs: journalctl -u drosera-operator.service -f"
