@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# drosera.sh version v0.1.8
+# drosera.sh version v0.1.9
 # Automated installer for Drosera Operator on VPS
 set -euo pipefail
 
@@ -32,9 +32,36 @@ usage() {
 : "${DRO_P2P_PORT:=31313}"
 : "${DRO_SERVER_PORT:=31314}"
 : "${DRO_DB_DIR:=/var/lib/drosera-data}"
+: "${DRO_DROSERA_SEED_URL:=https://relay.hoodi.drosera.io}"
+LISTEN_ADDR="0.0.0.0"
+# You can override the seed node RPC endpoint with --seed-rpc-url <url> if needed
+: "${DRO_ETH_PRIVATE_KEY:=}"
+: "${DRO_DROSERA_ADDRESS:=0x91cB447BaFc6e0EA0F4Fe056F5a9b1F14bb06e5D}"
+: "${DRO_RPC_URL:=https://ethereum-hoodi-rpc.publicnode.com}"
+: "${DRO_BACKUP_RPC_URL:=https://1rpc.io/hoodi}"
+: "${DRO_CHAIN_ID:=56048}"
+: "${DRO_P2P_PORT:=31313}"
+: "${DRO_SERVER_PORT:=31314}"
+: "${DRO_DB_DIR:=/var/lib/drosera-data}"
 LISTEN_ADDR="0.0.0.0"
 
 # Parse flags
+title "Parsing flags"
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --pk)           DRO_ETH_PRIVATE_KEY="$2";    shift 2 ;;  
+    --rpc)          DRO_RPC_URL="$2";            shift 2 ;;  
+    --backup-rpc)   DRO_BACKUP_RPC_URL="$2";     shift 2 ;;  
+    --contract)     DRO_DROSERA_ADDRESS="$2";   shift 2 ;;  
+    --chain-id)     DRO_CHAIN_ID="$2";           shift 2 ;;  
+    --p2p-port)     DRO_P2P_PORT="$2";           shift 2 ;;  
+    --rpc-port)     DRO_SERVER_PORT="$2";        shift 2 ;;  
+    --db-dir)       DRO_DB_DIR="$2";             shift 2 ;;  
+    --seed-rpc-url) DRO_DROSERA_SEED_URL="$2";   shift 2 ;;  
+    --help)         usage ;;  
+    *) error "Unknown flag: $1"; usage ;;  
+  esac
+done
 title "Parsing flags"
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -121,16 +148,24 @@ mkdir -p "${DRO_DB_DIR}"
 chmod 700 "${DRO_DB_DIR}"
 info "Database directory ready"
 
-# 5. Retrieve external IP
-title "Retrieving external IP"
-EXTERNAL_IP=$(curl -s https://ifconfig.co)
+# 5. Retrieve external IP (IPv4 only)
+title "Retrieving external IPv4"
+# Try primary endpoint with IPv4 forcing
+EXTERNAL_IP=$(curl -4 -s https://ifconfig.co)
+# Fallback to icanhazip if empty
+default_ip="$(curl -4 -s https://ipv4.icanhazip.com)"
 if [[ -z "${EXTERNAL_IP}" ]]; then
-  error "Failed to retrieve external IP. Exiting.";
+  EXTERNAL_IP=${default_ip}
+fi
+# Remove any whitespace or newline
+EXTERNAL_IP=$(echo "${EXTERNAL_IP}" | tr -d '[:space:]')
+if [[ -z "${EXTERNAL_IP}" ]]; then
+  error "Failed to retrieve external IPv4 address. Exiting.";
   exit 1
 fi
-info "External IP is ${EXTERNAL_IP}"
+info "External IPv4 is ${EXTERNAL_IP}"
 
-# 6. Create systemd service
+# 6. Create systemd service file
 title "Creating systemd service file"
 SERVICE_FILE="/etc/systemd/system/drosera-operator.service"
 cat > "${SERVICE_FILE}" <<EOF
@@ -144,26 +179,22 @@ Type=simple
 Restart=always
 Environment="DRO__DB_FILE_PATH=${DRO_DB_DIR}/drosera.db"
 Environment="DRO__DROSERA_ADDRESS=${DRO_DROSERA_ADDRESS}"
-Environment="DRO__DROSERA__RPC_URL=${DRO_RPC_URL}"
-Environment="DRO__LISTEN_ADDRESS=${LISTEN_ADDR}"
+Environment="DRO__DROSERA__RPC_URL=${DRO_DROSERA_SEED_URL}"
 Environment="DRO__ETH__CHAIN_ID=${DRO_CHAIN_ID}"
 Environment="DRO__ETH__RPC_URL=${DRO_RPC_URL}"
 Environment="DRO__ETH__BACKUP_RPC_URL=${DRO_BACKUP_RPC_URL}"
 Environment="DRO__ETH__PRIVATE_KEY=${DRO_ETH_PRIVATE_KEY}"
 Environment="DRO__NETWORK__P2P_PORT=${DRO_P2P_PORT}"
-Environment="DRO__NETWORK__SECRET_KEY=${DRO_ETH_PRIVATE_KEY}"
 Environment="DRO__NETWORK__EXTERNAL_P2P_ADDRESS=${EXTERNAL_IP}"
-Environment="DRO__NETWORK__EXTERNAL_RPC_ADDRESS=http://${EXTERNAL_IP}:${DRO_SERVER_PORT}"
 Environment="DRO__SERVER__PORT=${DRO_SERVER_PORT}"
-Environment="DRO__DISABLE_DNR_CONFIRMATION=true"
-ExecStart=${HOME}/.drosera/bin/drosera-operator node
+ExecStart=${HOME}/.drosera/bin/drosera-operator node=${HOME}/.drosera/bin/drosera-operator node
 
 [Install]
 WantedBy=multi-user.target
 EOF
 info "Service file written to ${SERVICE_FILE}"
 
-# 7. Start & enable service
+# 7. Start & enable service & enable service
 title "Starting and enabling service"
 info "Reloading systemd daemon"
 systemctl daemon-reload
