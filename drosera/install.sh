@@ -23,7 +23,7 @@ usage() {
   exit 1
 }
 
-# Defaults (override via environment if needed)
+# Defaults (can override via environment)
 : "${DRO_ETH_PRIVATE_KEY:=}"
 : "${DRO_DROSERA_ADDRESS:=0x91cB447BaFc6e0EA0F4Fe056F5a9b1F14bb06e5D}"
 : "${DRO_RPC_URL:=https://ethereum-hoodi-rpc.publicnode.com}"
@@ -54,15 +54,13 @@ done
 # Validate private key
 title "Validating private key"
 if [[ -z "${DRO_ETH_PRIVATE_KEY}" ]]; then
-  read -rp "🔑 Enter your Ethereum private key (hex, with or without 0x): " DRO_ETH_PRIVATE_KEY
+  read -rp "🔑 Enter your Ethereum private key (hex, with 0x prefix): " DRO_ETH_PRIVATE_KEY
   if [[ -z "${DRO_ETH_PRIVATE_KEY}" ]]; then
     error "Private key required. Exiting."
     exit 1
   fi
 fi
-# Strip 0x prefix if present
-DRO_ETH_PRIVATE_KEY=${DRO_ETH_PRIVATE_KEY#0x}
-info "Using provided private key"
+info "Using provided private key: ${DRO_ETH_PRIVATE_KEY}"
 
 # 1. Install dependencies
 title "Installing dependencies"
@@ -71,7 +69,7 @@ apt-get update -qq
 info "Installing required packages"
 apt-get install -y curl clang libssl-dev tar ufw >/dev/null
 
-# 2. Install Drosera CLI
+# 2. Install/Update Drosera CLI
 title "Installing/Updating Drosera CLI"
 if [[ ! -x "${HOME}/.drosera/bin/droseraup" ]]; then
   info "Installing droseraup"
@@ -80,27 +78,23 @@ else
   info "droseraup found, updating"
 fi
 
-# Ensure CLI directory in PATH
+# Configure path for CLI
 title "Configuring PATH for Drosera CLI"
 export PATH="${HOME}/.drosera/bin:$PATH"
 hash -r
 
-# Run droseraup to install/update binaries
+# Update CLI
 title "Running droseraup"
-if ! droseraup >/dev/null; then
-  error "droseraup failed to install CLI. Exiting."
-  exit 1
-fi
+droseraup >/dev/null || { error "droseraup installation failed"; exit 1; }
 info "Drosera CLI installed/updated"
 
 # 3. Register operator
 title "Registering operator"
-info "Registering with RPC: ${DRO_RPC_URL}"
+info "RPC endpoint: ${DRO_RPC_URL}"
 if ! command -v drosera-operator &>/dev/null; then
-  error "drosera-operator CLI not found after installation. Exiting.";
+  error "drosera-operator CLI not found. Exiting.";
   exit 1
 fi
-
 drosera-operator register \
   --eth-rpc-url "${DRO_RPC_URL}" \
   --eth-private-key "${DRO_ETH_PRIVATE_KEY}"
@@ -117,7 +111,7 @@ info "Database directory ready"
 title "Retrieving external IP"
 EXTERNAL_IP=$(curl -s https://ifconfig.co)
 if [[ -z "${EXTERNAL_IP}" ]]; then
-  error "Failed to retrieve external IP. Exiting."
+  error "Failed to retrieve external IP. Exiting.";
   exit 1
 fi
 info "External IP is ${EXTERNAL_IP}"
