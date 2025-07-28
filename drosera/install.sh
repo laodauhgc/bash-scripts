@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# drosera.sh version v0.1.3
+# drosera.sh version v0.1.4
 # Automated installer for Drosera Operator on VPS
 set -euo pipefail
 
@@ -11,7 +11,7 @@ RED="\e[1;31m"
 RESET="\e[0m"
 
 # Banner
-echo -e "${BLUE}🛠️  drosera.sh v0.1.3 - Automated Installer for Drosera Operator 🛠️${RESET}"
+echo -e "${BLUE}🛠️  drosera.sh v0.1.4 - Automated Installer for Drosera Operator 🛠️${RESET}"
 
 # Print functions
 title() { echo -e "\n${YELLOW}➤ ${1}${RESET}"; }
@@ -54,12 +54,14 @@ done
 # Validate private key
 title "Validating private key"
 if [[ -z "${DRO_ETH_PRIVATE_KEY}" ]]; then
-  read -rp "🔑 Enter your Ethereum private key (hex, no 0x): " DRO_ETH_PRIVATE_KEY
+  read -rp "🔑 Enter your Ethereum private key (hex, with or without 0x): " DRO_ETH_PRIVATE_KEY
   if [[ -z "${DRO_ETH_PRIVATE_KEY}" ]]; then
     error "Private key required. Exiting."
     exit 1
   fi
 fi
+# Strip 0x prefix if present
+DRO_ETH_PRIVATE_KEY=${DRO_ETH_PRIVATE_KEY#0x}
 
 # 1. Install dependencies
 title "Installing dependencies"
@@ -84,13 +86,17 @@ hash -r
 
 # Run droseraup to install/update binaries
 title "Running droseraup"
-droseraup >/dev/null || { error "droseraup failed"; exit 1; }
+if ! droseraup >/dev/null; then
+  error "droseraup failed to install CLI. Exiting."
+  exit 1
+fi
 
 # 3. Register operator
 title "Registering operator"
 info "Registering with RPC: ${DRO_RPC_URL}"
 if ! command -v drosera-operator &>/dev/null; then
-  error "drosera-operator not found after installation"; exit 1;
+  error "drosera-operator CLI not found after installation. Exiting."
+  exit 1
 fi
 
 drosera-operator register \
