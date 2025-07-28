@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# drosera.sh version v0.1.0
+# drosera.sh version v0.1.1
 # Automated installer for Drosera Operator on VPS
 set -euo pipefail
 
@@ -10,42 +10,24 @@ BLUE="\e[1;34m"
 RED="\e[1;31m"
 RESET="\e[0m"
 
-# Header
-echo -e "${BLUE}🛠️  drosera.sh v0.1.0 - Automated Installer for Drosera Operator 🛠️${RESET}"
+# Banner
+echo -e "${BLUE}🛠️  drosera.sh v0.1.1 - Automated Installer for Drosera Operator 🛠️${RESET}"
 
-title() {
-  echo -e "\n${YELLOW}➤ ${1}${RESET}"
-}
-error() {
-  echo -e "${RED}❌ ${1}${RESET}" >&2
-}
-info() {
-  echo -e "${GREEN}✅ ${1}${RESET}"
-}
-
+# Print functions
+title() { echo -e "\n${YELLOW}➤ ${1}${RESET}"; }
+error() { echo -e "${RED}❌ ${1}${RESET}" >&2; }
+info()  { echo -e "${GREEN}✅ ${1}${RESET}"; }
 usage() {
-  echo -e "${BLUE}Usage:${RESET} $0 [--pk <private_key>] [--rpc <rpc_url>] [--backup-rpc <backup_rpc_url>]"
-  echo -e "         [--contract <drosera_address>] [--chain-id <chain_id>] [--p2p-port <p2p_port>]"
-  echo -e "         [--rpc-port <rpc_port>] [--db-dir <db_directory>] [--help]"
-  echo
-  echo -e "Flags:"
-  echo -e "  --pk             Ethereum private key (hex, no 0x)"
-  echo -e "  --rpc            Primary RPC endpoint (default: $DRO_RPC_URL)"
-  echo -e "  --backup-rpc     Backup RPC endpoint (default: $DRO_BACKUP_RPC_URL)"
-  echo -e "  --contract       Drosera contract address (default: $DRO_DROSERA_ADDRESS)"
-  echo -e "  --chain-id       Chain ID (default: $DRO_CHAIN_ID)"
-  echo -e "  --p2p-port       P2P port (default: $DRO_P2P_PORT)"
-  echo -e "  --rpc-port       RPC/HTTP port (default: $DRO_SERVER_PORT)"
-  echo -e "  --db-dir         Data directory (default: $DRO_DB_DIR)"
-  echo -e "  --help           Display this help message"
+  echo -e "${BLUE}Usage:${RESET} $0 --pk <private_key> [--rpc <rpc_url>] [--backup-rpc <backup_rpc_url>]"
+  echo -e "         [--contract <drosera_address>] [--chain-id <chain_id>] [--p2p-port <p2p_port>] [--rpc-port <rpc_port>] [--db-dir <db_directory>] [--help]"
   exit 1
 }
 
-# Defaults (can override via env)
-: "${DRO_ETH_PRIVATE_KEY:=}" 
+# Defaults (can override via environment)
+: "${DRO_ETH_PRIVATE_KEY:=}"
 : "${DRO_DROSERA_ADDRESS:=0x91cB447BaFc6e0EA0F4Fe056F5a9b1F14bb06e5D}"
-: "${DRO_RPC_URL:=https://1rpc.io/hoodi}"
-: "${DRO_BACKUP_RPC_URL:=https://ethereum-hoodi-rpc.publicnode.com}"
+: "${DRO_RPC_URL:=https://ethereum-hoodi-rpc.publicnode.com}"
+: "${DRO_BACKUP_RPC_URL:=https://1rpc.io/hoodi}"
 : "${DRO_CHAIN_ID:=56048}"
 : "${DRO_P2P_PORT:=31313}"
 : "${DRO_SERVER_PORT:=31314}"
@@ -56,20 +38,20 @@ LISTEN_ADDR="0.0.0.0"
 title "Parsing flags"
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --pk)        DRO_ETH_PRIVATE_KEY="$2"; shift 2 ;;  
-    --rpc)       DRO_RPC_URL="$2"; shift 2 ;;  
-    --backup-rpc)DRO_BACKUP_RPC_URL="$2"; shift 2 ;;  
-    --contract)  DRO_DROSERA_ADDRESS="$2"; shift 2 ;;  
-    --chain-id)  DRO_CHAIN_ID="$2"; shift 2 ;;  
-    --p2p-port)  DRO_P2P_PORT="$2"; shift 2 ;;  
-    --rpc-port)  DRO_SERVER_PORT="$2"; shift 2 ;;  
-    --db-dir)    DRO_DB_DIR="$2"; shift 2 ;;  
-    --help)      usage ;;  
-    *) error "Unknown flag: $1"; usage ;;  
+    --pk)         DRO_ETH_PRIVATE_KEY="$2"; shift 2 ;;
+    --rpc)        DRO_RPC_URL="$2";         shift 2 ;;
+    --backup-rpc) DRO_BACKUP_RPC_URL="$2";  shift 2 ;;
+    --contract)   DRO_DROSERA_ADDRESS="$2"; shift 2 ;;
+    --chain-id)   DRO_CHAIN_ID="$2";        shift 2 ;;
+    --p2p-port)   DRO_P2P_PORT="$2";        shift 2 ;;
+    --rpc-port)   DRO_SERVER_PORT="$2";     shift 2 ;;
+    --db-dir)     DRO_DB_DIR="$2";          shift 2 ;;
+    --help)       usage ;;
+    *) error "Unknown flag: $1"; usage ;;
   esac
 done
 
-# Check private key
+# Validate private key
 title "Validating private key"
 if [[ -z "${DRO_ETH_PRIVATE_KEY}" ]]; then
   read -rp "🔑 Enter your Ethereum private key (hex, no 0x): " DRO_ETH_PRIVATE_KEY
@@ -83,39 +65,46 @@ fi
 title "Installing dependencies"
 info "Updating package list"
 apt-get update -qq
-info "Installing curl, clang, libssl-dev, tar, ufw"
+info "Installing required packages"
 apt-get install -y curl clang libssl-dev tar ufw >/dev/null
 
-# 2. Install Drosera CLI
+# 2. Install/Update Drosera CLI
 title "Installing Drosera CLI"
 if [[ ! -x "${HOME}/.drosera/bin/droseraup" ]]; then
-  info "Installing droseraup"
+  info "Installing droseraup script"
   curl -sL https://app.drosera.io/install | bash
-  source "${HOME}/.bashrc"
 else
   info "droseraup found, updating"
 fi
-info "Running droseraup to update CLI"
-droseraup >/dev/null
+info "Running droseraup to install/update Drosera Operator"
+droseraup >/dev/null || true
+
+# 2a. Load CLI into current shell
+title "Loading Drosera CLI into PATH"
+set +u
+if [[ -f "${HOME}/.bashrc" ]]; then
+  source "${HOME}/.bashrc" 2>/dev/null || true
+fi
+set -u
 
 # 3. Register operator
 title "Registering operator"
-info "Register with RPC: ${DRO_RPC_URL}"
+info "Registering with RPC: ${DRO_RPC_URL}"
 drosera-operator register \
   --eth-rpc-url "${DRO_RPC_URL}" \
-  --eth-private-key "${DRO_ETH_PRIVATE_KEY}" >/dev/null
+  --eth-private-key "${DRO_ETH_PRIVATE_KEY}"
 
-# 4. Prepare database folder
+# 4. Prepare database directory
 title "Preparing database directory"
 info "Creating ${DRO_DB_DIR}"
 mkdir -p "${DRO_DB_DIR}"
 chmod 700 "${DRO_DB_DIR}"
 
-# 5. Get external IP
+# 5. Retrieve external IP
 title "Retrieving external IP"
 EXTERNAL_IP=$(curl -s https://ifconfig.co)
-if [[ -z "$EXTERNAL_IP" ]]; then
-  error "Failed to get external IP. Exiting."
+if [[ -z "${EXTERNAL_IP}" ]]; then
+  error "Failed to retrieve external IP. Exiting."
   exit 1
 fi
 info "External IP is ${EXTERNAL_IP}"
@@ -123,7 +112,7 @@ info "External IP is ${EXTERNAL_IP}"
 # 6. Create systemd service
 title "Creating systemd service file"
 SERVICE_FILE="/etc/systemd/system/drosera-operator.service"
-cat <<EOF > "$SERVICE_FILE"
+cat > "${SERVICE_FILE}" <<EOF
 [Unit]
 Description=Drosera Operator Service
 Requires=network.target
@@ -167,7 +156,7 @@ ufw allow "${DRO_P2P_PORT}"/tcp
 info "Allowing RPC port (${DRO_SERVER_PORT})"
 ufw allow "${DRO_SERVER_PORT}"/tcp
 info "Enabling UFW"
-ye | ufw enable
+yes | ufw enable
 
 # Done
 title "Installation complete"
