@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# drosera.sh version v0.1.6
+# drosera.sh version v0.1.7
 # Automated installer for Drosera Operator on VPS
 set -euo pipefail
 
@@ -11,7 +11,7 @@ RED="\e[1;31m"
 RESET="\e[0m"
 
 # Banner
-echo -e "${BLUE}🛠️  drosera.sh v0.1.6 - Automated Installer for Drosera Operator 🛠️${RESET}"
+echo -e "${BLUE}🛠️  drosera.sh v0.1.7 - Automated Installer for Drosera Operator 🛠️${RESET}"
 
 # Print functions
 title() { echo -e "\n${YELLOW}➤ ${1}${RESET}"; }
@@ -149,7 +149,7 @@ WantedBy=multi-user.target
 EOF
 info "Service file written to ${SERVICE_FILE}"
 
-# 7. Start & enable service Start & enable service
+# 7. Start & enable service
 title "Starting and enabling service"
 info "Reloading systemd daemon"
 systemctl daemon-reload
@@ -159,7 +159,7 @@ info "Enabling drosera-operator.service on boot"
 systemctl enable drosera-operator.service
 info "Service is running"
 
-# 8. Configure firewall
+# 8. Configure UFW firewall
 title "Configuring UFW firewall"
 info "Allowing SSH (22)"
 ufw allow 22/tcp
