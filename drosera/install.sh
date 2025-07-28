@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# drosera.sh version v0.1.7
+# drosera.sh version v0.1.8
 # Automated installer for Drosera Operator on VPS
 set -euo pipefail
 
