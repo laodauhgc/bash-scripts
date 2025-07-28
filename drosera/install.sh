@@ -89,18 +89,32 @@ droseraup >/dev/null || { error "droseraup installation failed"; exit 1; }
 info "Drosera CLI installed/updated"
 
 # 3. Register operator
+# *** Updated: added handling for already-registered operator ***
 title "Registering operator"
 info "RPC endpoint: ${DRO_RPC_URL}"
 if ! command -v drosera-operator &>/dev/null; then
   error "drosera-operator CLI not found. Exiting.";
   exit 1
 fi
-drosera-operator register \
-  --eth-rpc-url "${DRO_RPC_URL}" \
-  --eth-private-key "${DRO_ETH_PRIVATE_KEY}"
-info "Operator registration complete"
 
-# 4. Prepare database directory
+# Attempt registration, handle already-registered case
+set +e
+REGISTER_OUTPUT=$(drosera-operator register \
+  --eth-rpc-url "${DRO_RPC_URL}" \
+  --eth-private-key "${DRO_ETH_PRIVATE_KEY}" 2>&1)
+REGISTER_EXIT=$?
+set -e
+if [ $REGISTER_EXIT -eq 0 ]; then
+  info "Operator registration complete"
+elif echo "$REGISTER_OUTPUT" | grep -q "OperatorAlreadyRegistered"; then
+  info "Operator already registered, skipping registration"
+else
+  error "Failed to register operator:"
+  echo "$REGISTER_OUTPUT" >&2
+  exit $REGISTER_EXIT
+fi
+
+# 4. Prepare database directory. Prepare database directory" Prepare database directory
 title "Preparing database directory"
 info "Creating ${DRO_DB_DIR}"
 mkdir -p "${DRO_DB_DIR}"
