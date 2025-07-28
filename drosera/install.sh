@@ -130,14 +130,18 @@ Type=simple
 Restart=always
 Environment="DRO__DB_FILE_PATH=${DRO_DB_DIR}/drosera.db"
 Environment="DRO__DROSERA_ADDRESS=${DRO_DROSERA_ADDRESS}"
+Environment="DRO__DROSERA__RPC_URL=${DRO_RPC_URL}"
 Environment="DRO__LISTEN_ADDRESS=${LISTEN_ADDR}"
 Environment="DRO__ETH__CHAIN_ID=${DRO_CHAIN_ID}"
 Environment="DRO__ETH__RPC_URL=${DRO_RPC_URL}"
 Environment="DRO__ETH__BACKUP_RPC_URL=${DRO_BACKUP_RPC_URL}"
 Environment="DRO__ETH__PRIVATE_KEY=${DRO_ETH_PRIVATE_KEY}"
 Environment="DRO__NETWORK__P2P_PORT=${DRO_P2P_PORT}"
+Environment="DRO__NETWORK__SECRET_KEY=${DRO_ETH_PRIVATE_KEY}"
 Environment="DRO__NETWORK__EXTERNAL_P2P_ADDRESS=${EXTERNAL_IP}"
+Environment="DRO__NETWORK__EXTERNAL_RPC_ADDRESS=http://${EXTERNAL_IP}:${DRO_SERVER_PORT}"
 Environment="DRO__SERVER__PORT=${DRO_SERVER_PORT}"
+Environment="DRO__DISABLE_DNR_CONFIRMATION=true"
 ExecStart=${HOME}/.drosera/bin/drosera-operator node
 
 [Install]
@@ -145,7 +149,7 @@ WantedBy=multi-user.target
 EOF
 info "Service file written to ${SERVICE_FILE}"
 
-# 7. Start & enable service
+# 7. Start & enable service Start & enable service
 title "Starting and enabling service"
 info "Reloading systemd daemon"
 systemctl daemon-reload
