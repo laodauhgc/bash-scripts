@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# drosera.sh version v0.1.5
+# drosera.sh version v0.1.6
 # Automated installer for Drosera Operator on VPS
 set -euo pipefail
 
@@ -11,7 +11,7 @@ RED="\e[1;31m"
 RESET="\e[0m"
 
 # Banner
-echo -e "${BLUE}🛠️  drosera.sh v0.1.5 - Automated Installer for Drosera Operator 🛠️${RESET}"
+echo -e "${BLUE}🛠️  drosera.sh v0.1.6 - Automated Installer for Drosera Operator 🛠️${RESET}"
 
 # Print functions
 title() { echo -e "\n${YELLOW}➤ ${1}${RESET}"; }
@@ -62,12 +62,7 @@ if [[ -z "${DRO_ETH_PRIVATE_KEY}" ]]; then
 fi
 # Strip 0x prefix if present
 DRO_ETH_PRIVATE_KEY=${DRO_ETH_PRIVATE_KEY#0x}
-# Check length is exactly 64 hex chars
-if [[ ! "$DRO_ETH_PRIVATE_KEY" =~ ^[0-9a-fA-F]{64}$ ]]; then
-  error "Invalid private key length: must be 64 hex characters (32 bytes)."
-  exit 1
-fi
-info "Private key format OK"
+info "Using provided private key"
 
 # 1. Install dependencies
 title "Installing dependencies"
