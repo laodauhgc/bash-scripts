@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# drosera.sh version v0.1.2
+# drosera.sh version v0.1.3
 # Automated installer for Drosera Operator on VPS
 set -euo pipefail
 
@@ -11,7 +11,7 @@ RED="\e[1;31m"
 RESET="\e[0m"
 
 # Banner
-echo -e "${BLUE}🛠️  drosera.sh v0.1.2 - Automated Installer for Drosera Operator 🛠️${RESET}"
+echo -e "${BLUE}🛠️  drosera.sh v0.1.3 - Automated Installer for Drosera Operator 🛠️${RESET}"
 
 # Print functions
 title() { echo -e "\n${YELLOW}➤ ${1}${RESET}"; }
@@ -68,25 +68,31 @@ apt-get update -qq
 info "Installing required packages"
 apt-get install -y curl clang libssl-dev tar ufw >/dev/null
 
-# 2. Install/Update Drosera CLI
-title "Installing Drosera CLI"
+# 2. Install Drosera CLI
+title "Installing/Updating Drosera CLI"
 if [[ ! -x "${HOME}/.drosera/bin/droseraup" ]]; then
-  info "Installing droseraup script"
+  info "Installing droseraup"
   curl -sL https://app.drosera.io/install | bash
 else
   info "droseraup found, updating"
 fi
-info "Running droseraup to install/update Drosera Operator"
-droseraup >/dev/null || true
 
-# 2a. Ensure CLI on PATH
+# Ensure CLI directory in PATH
 title "Configuring PATH for Drosera CLI"
 export PATH="${HOME}/.drosera/bin:$PATH"
 hash -r
 
+# Run droseraup to install/update binaries
+title "Running droseraup"
+droseraup >/dev/null || { error "droseraup failed"; exit 1; }
+
 # 3. Register operator
 title "Registering operator"
 info "Registering with RPC: ${DRO_RPC_URL}"
+if ! command -v drosera-operator &>/dev/null; then
+  error "drosera-operator not found after installation"; exit 1;
+fi
+
 drosera-operator register \
   --eth-rpc-url "${DRO_RPC_URL}" \
   --eth-private-key "${DRO_ETH_PRIVATE_KEY}"
