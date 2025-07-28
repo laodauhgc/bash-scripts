@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# drosera.sh version v0.1.1
+# drosera.sh version v0.1.2
 # Automated installer for Drosera Operator on VPS
 set -euo pipefail
 
@@ -11,7 +11,7 @@ RED="\e[1;31m"
 RESET="\e[0m"
 
 # Banner
-echo -e "${BLUE}🛠️  drosera.sh v0.1.1 - Automated Installer for Drosera Operator 🛠️${RESET}"
+echo -e "${BLUE}🛠️  drosera.sh v0.1.2 - Automated Installer for Drosera Operator 🛠️${RESET}"
 
 # Print functions
 title() { echo -e "\n${YELLOW}➤ ${1}${RESET}"; }
@@ -23,7 +23,7 @@ usage() {
   exit 1
 }
 
-# Defaults (can override via environment)
+# Defaults (override via environment if needed)
 : "${DRO_ETH_PRIVATE_KEY:=}"
 : "${DRO_DROSERA_ADDRESS:=0x91cB447BaFc6e0EA0F4Fe056F5a9b1F14bb06e5D}"
 : "${DRO_RPC_URL:=https://ethereum-hoodi-rpc.publicnode.com}"
@@ -38,16 +38,16 @@ LISTEN_ADDR="0.0.0.0"
 title "Parsing flags"
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --pk)         DRO_ETH_PRIVATE_KEY="$2"; shift 2 ;;
-    --rpc)        DRO_RPC_URL="$2";         shift 2 ;;
-    --backup-rpc) DRO_BACKUP_RPC_URL="$2";  shift 2 ;;
-    --contract)   DRO_DROSERA_ADDRESS="$2"; shift 2 ;;
-    --chain-id)   DRO_CHAIN_ID="$2";        shift 2 ;;
-    --p2p-port)   DRO_P2P_PORT="$2";        shift 2 ;;
-    --rpc-port)   DRO_SERVER_PORT="$2";     shift 2 ;;
-    --db-dir)     DRO_DB_DIR="$2";          shift 2 ;;
-    --help)       usage ;;
-    *) error "Unknown flag: $1"; usage ;;
+    --pk)         DRO_ETH_PRIVATE_KEY="$2"; shift 2 ;;  
+    --rpc)        DRO_RPC_URL="$2";         shift 2 ;;  
+    --backup-rpc) DRO_BACKUP_RPC_URL="$2";  shift 2 ;;  
+    --contract)   DRO_DROSERA_ADDRESS="$2"; shift 2 ;;  
+    --chain-id)   DRO_CHAIN_ID="$2";        shift 2 ;;  
+    --p2p-port)   DRO_P2P_PORT="$2";        shift 2 ;;  
+    --rpc-port)   DRO_SERVER_PORT="$2";     shift 2 ;;  
+    --db-dir)     DRO_DB_DIR="$2";          shift 2 ;;  
+    --help)       usage ;;  
+    *) error "Unknown flag: $1"; usage ;;  
   esac
 done
 
@@ -79,13 +79,10 @@ fi
 info "Running droseraup to install/update Drosera Operator"
 droseraup >/dev/null || true
 
-# 2a. Load CLI into current shell
-title "Loading Drosera CLI into PATH"
-set +u
-if [[ -f "${HOME}/.bashrc" ]]; then
-  source "${HOME}/.bashrc" 2>/dev/null || true
-fi
-set -u
+# 2a. Ensure CLI on PATH
+title "Configuring PATH for Drosera CLI"
+export PATH="${HOME}/.drosera/bin:$PATH"
+hash -r
 
 # 3. Register operator
 title "Registering operator"
