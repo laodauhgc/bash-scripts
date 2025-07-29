@@ -2,7 +2,7 @@
 
 # Script to automate Kaisar Provider CLI installation and execution
 # Usage: ./kaisar-auto-setup.sh [FLAGS]
-# Version v0.1.2
+
 # Function to display usage information
 usage() {
     echo "Usage: $0 [options]"
@@ -118,12 +118,18 @@ setup_kaisar() {
     curl -O https://raw.githubusercontent.com/Kaisar-Network/kaisar-releases/main/kaisar-provider-setup.sh
     chmod +x kaisar-provider-setup.sh
     echo "Running Kaisar setup script..."
+    # Source nvm again before running the Kaisar setup script to ensure Node.js 22.17.1 is used
+    [ -s "$HOME/.nvm/nvm.sh" ] && \. "$HOME/.nvm/nvm.sh"
+    nvm use 22.17.1
     sudo ./kaisar-provider-setup.sh
 }
 
 # Function to verify installation
 verify_installation() {
     echo "Verifying Kaisar CLI installation..."
+    # Source nvm to ensure the correct Node.js version is used
+    [ -s "$HOME/.nvm/nvm.sh" ] && \. "$HOME/.nvm/nvm.sh"
+    nvm use 22.17.1
     if command -v kaisar >/dev/null 2>&1; then
         echo "Kaisar CLI installed successfully. Version: $(kaisar --version 2>/dev/null || echo 'unknown')"
         return 0
@@ -136,65 +142,15 @@ verify_installation() {
 # Function to ensure Kaisar Provider is running
 ensure_provider_running() {
     echo "Checking if Kaisar Provider is running..."
+    # Source nvm to ensure the correct Node.js version is used
+    [ -s "$HOME/.nvm/nvm.sh" ] && \. "$HOME/.nvm/nvm.sh"
+    nvm use 22.17.1
     if kaisar status 2>/dev/null | grep -q "Kaisar Provider is not running"; then
         echo "Kaisar Provider is not running. Starting it now..."
         kaisar start || {
-            echo "Error: Failed to start Kaisar Provider App."
-            exit 1
-        }
-        # Wait a few seconds to ensure the provider starts
-        sleep 5
-    else
-        echo "Kaisar Provider is already running."
+warden Provider CLI setup and execution completed."
     fi
 }
-
-# Function to validate private key format
-validate_private_key() {
-    local key=$1
-    # Check if the key is a 64-character hexadecimal string (with or without 0x prefix)
-    if [[ "$key" =~ ^(0x)?[0-9a-fA-F]{64}$ ]]; then
-        return 0
-    else
-        echo "Error: Invalid private key format. Must be a 64-character hexadecimal string (with or without '0x' prefix)."
-        return 1
-    fi
-}
-
-# Parse command-line flags
-START=false
-CREATE_WALLET=false
-IMPORT_WALLET=false
-CHECK_STATUS=false
-CHECK_LOG=false
-EMAIL=""
-PRIVATE_KEY=""
-PASSWORD=""
-
-while [[ "$#" -gt 0 ]]; do
-    case $1 in
-        -s|--start) START=true ;;
-        -c|--create-wallet) CREATE_WALLET=true; EMAIL="$2"; shift ;;
-        -i|--import-wallet) IMPORT_WALLET=true; EMAIL="$2"; PRIVATE_KEY="$3"; shift 2 ;;
-        -p|--password) PASSWORD="$2"; shift ;;
-        -t|--status) CHECK_STATUS=true ;;
-        -l|--log) CHECK_LOG=true ;;
-        -h|--help) usage ;;
-        *) echo "Unknown option: $1"; usage ;;
-    esac
-    shift
-done
-
-# Main execution
-check_requirements
-install_dependencies
-setup_kaisar
-verify_installation
-
-# Start the provider if any dependent command is requested
-if $CREATE_WALLET || $IMPORT_WALLET || $CHECK_STATUS || $CHECK_LOG; then
-    ensure_provider_running
-fi
 
 # Execute user-specified commands
 if $START; then
