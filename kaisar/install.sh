@@ -2,6 +2,7 @@
 
 # Script to automate Kaisar Provider CLI installation and execution
 # Usage: ./kaisar-auto-setup.sh [FLAGS]
+# Version: v0.1.0
 
 # Function to display usage information
 usage() {
@@ -103,11 +104,28 @@ setup_kaisar() {
 # Function to verify installation
 verify_installation() {
     echo "Verifying Kaisar CLI installation..."
-    if command -v kaisar >/dev/null 2>&1 && kaisar --version >/dev/null 2>&1; then
-        echo "Kaisar CLI installed successfully. Version: $(kaisar --version)"
+    if command -v kaisar >/dev/null 2>&1; then
+        echo "Kaisar CLI installed successfully. Version: $(kaisar --version 2>/dev/null || echo 'unknown')"
+        return 0
     else
-        echo "Warning: Kaisar CLI verification failed, but proceeding with requested commands."
-        return 1
+        echo "Error: Kaisar CLI installation failed. The 'kaisar' command is not available."
+        exit 1
+    fi
+}
+
+# Function to ensure Kaisar Provider is running
+ensure_provider_running() {
+    echo "Checking if Kaisar Provider is running..."
+    if kaisar status 2>/dev/null | grep -q "Kaisar Provider is not running"; then
+        echo "Kaisar Provider is not running. Starting it now..."
+        kaisar start || {
+            echo "Error: Failed to start Kaisar Provider App."
+            exit 1
+        }
+        # Wait a few seconds to ensure the provider starts
+        sleep 5
+    else
+        echo "Kaisar Provider is already running."
     fi
 }
 
@@ -137,7 +155,12 @@ done
 check_requirements
 install_dependencies
 setup_kaisar
-verify_installation || true  # Continue even if verification fails
+verify_installation
+
+# Start the provider if any dependent command is requested
+if $CREATE_WALLET || $IMPORT_WALLET || $CHECK_STATUS || $CHECK_LOG; then
+    ensure_provider_running
+fi
 
 # Execute user-specified commands
 if $START; then
