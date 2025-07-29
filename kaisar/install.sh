@@ -2,7 +2,7 @@
 
 # Script to automate Kaisar Provider CLI installation and execution
 # Usage: ./kaisar-auto-setup.sh [FLAGS]
-# Version v0.2.0
+
 # Function to display usage information
 usage() {
     echo "Usage: $0 [options]"
@@ -108,6 +108,8 @@ install_dependencies() {
     # Install pm2
     if ! command -v pm2 >/dev/null 2>&1; then
         echo "Installing pm2..."
+        [ -s "$HOME/.nvm/nvm.sh" ] && \. "$HOME/.nvm/nvm.sh"
+        nvm use 22.17.1
         npm install -g pm2
     fi
 }
@@ -118,7 +120,7 @@ setup_kaisar() {
     curl -O https://raw.githubusercontent.com/Kaisar-Network/kaisar-releases/main/kaisar-provider-setup.sh
     chmod +x kaisar-provider-setup.sh
     echo "Running Kaisar setup script..."
-    # Source nvm again before running the Kaisar setup script to ensure Node.js 22.17.1 is used
+    # Source nvm to ensure Node.js 22.17.1 is used
     [ -s "$HOME/.nvm/nvm.sh" ] && \. "$HOME/.nvm/nvm.sh"
     nvm use 22.17.1
     sudo ./kaisar-provider-setup.sh
@@ -148,13 +150,70 @@ ensure_provider_running() {
     if kaisar status 2>/dev/null | grep -q "Kaisar Provider is not running"; then
         echo "Kaisar Provider is not running. Starting it now..."
         kaisar start || {
-warden Provider CLI setup and execution completed."
+            echo "Error: Failed to start Kaisar Provider App."
+            exit 1
+        }
+        # Wait a few seconds to ensure the provider starts
+        sleep 5
+        echo "Kaisar Provider started successfully."
+    else
+        echo "Kaisar Provider is already running."
     fi
 }
+
+# Function to validate private key format
+validate_private_key() {
+    local key=$1
+    # Check if the key is a 64-character hexadecimal string (with or without 0x prefix)
+    if [[ "$key" =~ ^(0x)?[0-9a-fA-F]{64}$ ]]; then
+        return 0
+    else
+        echo "Error: Invalid private key format. Must be a 64-character hexadecimal string (with or without '0x' prefix)."
+        return 1
+    fi
+}
+
+# Parse command-line flags
+START=false
+CREATE_WALLET=false
+IMPORT_WALLET=false
+CHECK_STATUS=false
+CHECK_LOG=false
+EMAIL=""
+PRIVATE_KEY=""
+PASSWORD=""
+
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        -s|--start) START=true ;;
+        -c|--create-wallet) CREATE_WALLET=true; EMAIL="$2"; shift ;;
+        -i|--import-wallet) IMPORT_WALLET=true; EMAIL="$2"; PRIVATE_KEY="$3"; shift 2 ;;
+        -p|--password) PASSWORD="$2"; shift ;;
+        -t|--status) CHECK_STATUS=true ;;
+        -l|--log) CHECK_LOG=true ;;
+        -h|--help) usage ;;
+        *) echo "Unknown option: $1"; usage ;;
+    esac
+    shift
+done
+
+# Main execution
+check_requirements
+install_dependencies
+setup_kaisar
+verify_installation
+
+# Start the provider if any dependent command is requested
+if $CREATE_WALLET || $IMPORT_WALLET || $CHECK_STATUS || $CHECK_LOG; then
+    ensure_provider_running
+fi
 
 # Execute user-specified commands
 if $START; then
     echo "Starting Kaisar Provider App..."
+    # Source nvm to ensure the correct Node.js version is used
+    [ -s "$HOME/.nvm/nvm.sh" ] && \. "$HOME/.nvm/nvm.sh"
+    nvm use 22.17.1
     kaisar start || echo "Error: Failed to start Kaisar Provider App."
 fi
 
@@ -164,6 +223,9 @@ if $CREATE_WALLET; then
         exit 1
     fi
     echo "Creating wallet with email: $EMAIL..."
+    # Source nvm to ensure the correct Node.js version is used
+    [ -s "$HOME/.nvm/nvm.sh" ] && \. "$HOME/.nvm/nvm.sh"
+    nvm use 22.17.1
     kaisar create-wallet -e "$EMAIL" || echo "Error: Failed to create wallet."
 fi
 
@@ -181,6 +243,9 @@ if $IMPORT_WALLET; then
         echo "Skipping wallet import due to invalid private key."
     else
         echo "Importing wallet with email: $EMAIL..."
+        # Source nvm to ensure the correct Node.js version is used
+        [ -s "$HOME/.nvm/nvm.sh" ] && \. "$HOME/.nvm/nvm.sh"
+        nvm use 22.17.1
         # Try with the provided key first
         /usr/bin/expect <<EOF
             spawn kaisar import-wallet -e "$EMAIL" -k "$PRIVATE_KEY"
@@ -200,18 +265,28 @@ EOF
 EOF
             if [[ $? -ne 0 ]]; then
                 echo "Error: Failed to import wallet. Please verify the private key and password."
+            else
+                echo "Wallet imported successfully without '0x' prefix."
             fi
+        else
+            echo "Wallet imported successfully."
         fi
     fi
 fi
 
 if $CHECK_STATUS; then
     echo "Checking node status..."
+    # Source nvm to ensure the correct Node.js version is used
+    [ -s "$HOME/.nvm/nvm.sh" ] && \. "$HOME/.nvm/nvm.sh"
+    nvm use 22.17.1
     kaisar status || echo "Error: Failed to check node status."
 fi
 
 if $CHECK_LOG; then
     echo "Checking Provider App logs..."
+    # Source nvm to ensure the correct Node.js version is used
+    [ -s "$HOME/.nvm/nvm.sh" ] && \. "$HOME/.nvm/nvm.sh"
+    nvm use 22.17.1
     kaisar log || echo "Error: Failed to retrieve logs."
 fi
 
