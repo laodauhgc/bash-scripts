@@ -2,7 +2,7 @@
 
 # Script to automate Kaisar Provider CLI installation and execution
 # Usage: ./kaisar-auto-setup.sh [FLAGS]
-
+# Version v0.1.2
 # Function to display usage information
 usage() {
     echo "Usage: $0 [options]"
