@@ -2,7 +2,6 @@
 
 # Script to automate Kaisar Provider CLI installation and execution
 # Usage: ./kaisar-auto-setup.sh [FLAGS]
-# Version: v0.1.0
 
 # Function to display usage information
 usage() {
@@ -11,6 +10,7 @@ usage() {
     echo "  -s, --start                Start the Kaisar Provider App"
     echo "  -c, --create-wallet EMAIL  Create a new wallet with the specified email"
     echo "  -i, --import-wallet EMAIL KEY  Import an existing wallet with email and private key"
+    echo "  -p, --password PASS        Password for importing wallet (required with -i)"
     echo "  -t, --status               Check node status"
     echo "  -l, --log                  Check detailed logs of the Provider App"
     echo "  -h, --help                 Display this help message"
@@ -62,13 +62,24 @@ check_requirements() {
         exit 1
     fi
 
+    # Check if expect is installed
+    if ! command -v expect >/dev/null 2>&1; then
+        echo "Installing expect for password automation..."
+        if [[ "$ID" == "ubuntu" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y expect
+        elif [[ "$ID" == "centos" ]]; then
+            sudo yum install -y expect
+        fi
+    fi
+
     echo "System requirements met."
 }
 
 # Function to install dependencies
 install_dependencies() {
     echo "Installing dependencies..."
-    # Update package list
+    # Update package list and install curl, tar, git
     if [[ "$ID" == "ubuntu" ]]; then
         sudo apt-get update
         sudo apt-get install -y curl tar git
@@ -76,19 +87,28 @@ install_dependencies() {
         sudo yum install -y curl tar git
     fi
 
-    # Install Node.js and npm
-    if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
-        curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-        if [[ "$ID" == "ubuntu" ]]; then
-            sudo apt-get install -y nodejs
-        elif [[ "$ID" == "centos" ]]; then
-            sudo yum install -y nodejs
+    # Install nvm and Node.js 22.17.1
+    if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1 || [[ "$(node -v)" != "v22.17.1" ]]; then
+        echo "Installing nvm and Node.js 22.17.1..."
+        curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+        # Source nvm to make it available in the current session
+        [ -s "$HOME/.nvm/nvm.sh" ] && \. "$HOME/.nvm/nvm.sh"
+        # Install Node.js 22.17.1
+        nvm install 22.17.1
+        # Verify installation
+        if [[ "$(node -v)" != "v22.17.1" ]]; then
+            echo "Error: Failed to install Node.js 22.17.1."
+            exit 1
         fi
+        echo "Node.js $(node -v) and npm $(npm -v) installed successfully."
+    else
+        echo "Node.js $(node -v) and npm $(npm -v) already installed."
     fi
 
     # Install pm2
     if ! command -v pm2 >/dev/null 2>&1; then
-        sudo npm install -g pm2
+        echo "Installing pm2..."
+        npm install -g pm2
     fi
 }
 
@@ -129,6 +149,18 @@ ensure_provider_running() {
     fi
 }
 
+# Function to validate private key format
+validate_private_key() {
+    local key=$1
+    # Check if the key is a 64-character hexadecimal string (with or without 0x prefix)
+    if [[ "$key" =~ ^(0x)?[0-9a-fA-F]{64}$ ]]; then
+        return 0
+    else
+        echo "Error: Invalid private key format. Must be a 64-character hexadecimal string (with or without '0x' prefix)."
+        return 1
+    fi
+}
+
 # Parse command-line flags
 START=false
 CREATE_WALLET=false
@@ -137,12 +169,14 @@ CHECK_STATUS=false
 CHECK_LOG=false
 EMAIL=""
 PRIVATE_KEY=""
+PASSWORD=""
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         -s|--start) START=true ;;
         -c|--create-wallet) CREATE_WALLET=true; EMAIL="$2"; shift ;;
         -i|--import-wallet) IMPORT_WALLET=true; EMAIL="$2"; PRIVATE_KEY="$3"; shift 2 ;;
+        -p|--password) PASSWORD="$2"; shift ;;
         -t|--status) CHECK_STATUS=true ;;
         -l|--log) CHECK_LOG=true ;;
         -h|--help) usage ;;
@@ -182,8 +216,37 @@ if $IMPORT_WALLET; then
         echo "Error: Email and private key required for importing wallet."
         exit 1
     fi
-    echo "Importing wallet with email: $EMAIL..."
-    kaisar import-wallet -e "$EMAIL" -k "$PRIVATE_KEY" || echo "Error: Failed to import wallet."
+    if [[ -z "$PASSWORD" ]]; then
+        echo "Error: Password required for importing wallet. Use -p or --password flag."
+        exit 1
+    fi
+    # Validate private key format
+    if ! validate_private_key "$PRIVATE_KEY"; then
+        echo "Skipping wallet import due to invalid private key."
+    else
+        echo "Importing wallet with email: $EMAIL..."
+        # Try with the provided key first
+        /usr/bin/expect <<EOF
+            spawn kaisar import-wallet -e "$EMAIL" -k "$PRIVATE_KEY"
+            expect "Enter password:"
+            send "$PASSWORD\r"
+            expect eof
+EOF
+        if [[ $? -ne 0 ]]; then
+            echo "Retrying wallet import without '0x' prefix..."
+            # Strip '0x' prefix if present and retry
+            CLEAN_KEY=$(echo "$PRIVATE_KEY" | sed 's/^0x//')
+            /usr/bin/expect <<EOF
+                spawn kaisar import-wallet -e "$EMAIL" -k "$CLEAN_KEY"
+                expect "Enter password:"
+                send "$PASSWORD\r"
+                expect eof
+EOF
+            if [[ $? -ne 0 ]]; then
+                echo "Error: Failed to import wallet. Please verify the private key and password."
+            fi
+        fi
+    fi
 fi
 
 if $CHECK_STATUS; then
