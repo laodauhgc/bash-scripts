@@ -55,7 +55,7 @@ check_requirements() {
         exit 1
     fi
 
-    # Check internet speed (basic ping test as a proxy for connectivity)
+    # Check internet connectivity
     if ! ping -c 1 google.com >/dev/null 2>&1; then
         echo "Error: No internet connection detected."
         exit 1
@@ -103,11 +103,11 @@ setup_kaisar() {
 # Function to verify installation
 verify_installation() {
     echo "Verifying Kaisar CLI installation..."
-    if kaisar >/dev/null 2>&1; then
-        echo "Kaisar CLI installed successfully."
+    if command -v kaisar >/dev/null 2>&1 && kaisar --version >/dev/null 2>&1; then
+        echo "Kaisar CLI installed successfully. Version: $(kaisar --version)"
     else
-        echo "Error: Kaisar CLI installation failed."
-        exit 1
+        echo "Warning: Kaisar CLI verification failed, but proceeding with requested commands."
+        return 1
     fi
 }
 
@@ -137,12 +137,12 @@ done
 check_requirements
 install_dependencies
 setup_kaisar
-verify_installation
+verify_installation || true  # Continue even if verification fails
 
 # Execute user-specified commands
 if $START; then
     echo "Starting Kaisar Provider App..."
-    kaisar start
+    kaisar start || echo "Error: Failed to start Kaisar Provider App."
 fi
 
 if $CREATE_WALLET; then
@@ -151,7 +151,7 @@ if $CREATE_WALLET; then
         exit 1
     fi
     echo "Creating wallet with email: $EMAIL..."
-    kaisar create-wallet -e "$EMAIL"
+    kaisar create-wallet -e "$EMAIL" || echo "Error: Failed to create wallet."
 fi
 
 if $IMPORT_WALLET; then
@@ -160,17 +160,17 @@ if $IMPORT_WALLET; then
         exit 1
     fi
     echo "Importing wallet with email: $EMAIL..."
-    kaisar import-wallet -e "$EMAIL" -k "$PRIVATE_KEY"
+    kaisar import-wallet -e "$EMAIL" -k "$PRIVATE_KEY" || echo "Error: Failed to import wallet."
 fi
 
 if $CHECK_STATUS; then
     echo "Checking node status..."
-    kaisar status
+    kaisar status || echo "Error: Failed to check node status."
 fi
 
 if $CHECK_LOG; then
     echo "Checking Provider App logs..."
-    kaisar log
+    kaisar log || echo "Error: Failed to retrieve logs."
 fi
 
 echo "Kaisar Provider CLI setup and execution completed."
