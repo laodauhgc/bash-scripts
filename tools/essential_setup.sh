@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # 🚀 Ubuntu Core Development Environment Setup Script
-# 📦 Version 3.2.5  –  30‑Jul‑2025
+# 📦 Version 3.2.6  –  30‑Jul‑2025
 # 🌟 Installs core packages, Node.js, Bun.js, PM2, and Docker
 # ==============================================================================
 
@@ -12,7 +12,7 @@ export DEBIAN_FRONTEND=noninteractive
 export LANG=C.UTF-8
 
 # ---------- Metadata ----------------------------------------------------------
-readonly SCRIPT_VERSION="3.2.5"
+readonly SCRIPT_VERSION="3.2.6"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly LOG_FILE="/tmp/${SCRIPT_NAME%.*}.log"
 readonly LOCK_FILE="/tmp/${SCRIPT_NAME%.*}.lock"
@@ -45,7 +45,7 @@ log() {
   fi
 }
 info() { log "ℹ️  $1" "$CI"; }
-ok() { log "✅ $1" "$CB"; }  # Sửa lỗi cú pháp: thay "ok)" bằng "ok()"
+ok() { log "✅ $1" "$CB"; }
 warn() { log "⚠️  $1" "$CY"; }
 err() { log "❌ $1" "$CR"; }
 header() { log "🌟 $1" "$CH"; }
@@ -81,7 +81,7 @@ trap 'rm -f "$LOCK_FILE"' EXIT
 echo -e "${CH}
 ╔════════════════════════════════════════════════════════╗
 ║ 🚀  Ubuntu Core Setup Script  v$SCRIPT_VERSION  🚀            ║
-╚════════════════════════════════════════════════════════╝${CN}"
+╚════════════════════════════════════════════════════════╝${CN"
 
 # ---------- Checks -----------------------------------------------------------
 [[ $EUID -eq 0 ]] || { err "🔐 Hãy chạy bằng sudo/root."; exit 1; }
@@ -90,17 +90,26 @@ echo -e "${CH}
 [[ ${VERSION_ID%%.*} -ge 20 ]] || { err "📋 Yêu cầu Ubuntu 20.04 hoặc mới hơn."; exit 1; }
 info "🔍 Phát hiện: $PRETTY_NAME – Kernel $(uname -r)"
 
+# ---------- Tool check -------------------------------------------------------
+info "🔧 Kiểm tra công cụ cần thiết..."
+command -v curl >/dev/null 2>&1 || { err "❌ Yêu cầu 'curl' để tải các gói. Cài đặt trước khi tiếp tục."; exit 1; }
+ok "✅ Công cụ cần thiết đã sẵn sàng."
+
 # ---------- Network check ----------------------------------------------------
-if ! ping -c 1 google.com >/dev/null 2>&1; then
-  err "🌐 Không có kết nối mạng. Vui lòng kiểm tra kết nối."
+info "🌐 Kiểm tra kết nối mạng..."
+if ! timeout 5 curl -Is http://google.com >/dev/null 2>&1; then
+  err "❌ Không có kết nối mạng hoặc DNS không hoạt động. Vui lòng kiểm tra kết nối."
   exit 1
 fi
+ok "✅ Kết nối mạng ổn định."
 
 # ---------- Disk space check -------------------------------------------------
+info "💾 Kiểm tra dung lượng đĩa..."
 if [[ $(df -h / | awk 'NR==2 {print $4}' | grep -o '[0-9]\+') -lt 5 ]]; then
-  err "💾 Không đủ dung lượng đĩa (yêu cầu ít nhất 5GB)."
+  err "❌ Không đủ dung lượng đĩa (yêu cầu ít nhất 5GB)."
   exit 1
 fi
+ok "✅ Dung lượng đĩa đủ."
 
 # ---------- APT helpers ------------------------------------------------------
 apt_update() {
