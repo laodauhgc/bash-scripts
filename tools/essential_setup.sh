@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # 🚀 Ubuntu Core Development Environment Setup Script
-# 📦 Version 3.2.4  –  30‑Jul‑2025
+# 📦 Version 3.2.5  –  30‑Jul‑2025
 # 🌟 Installs core packages, Node.js, Bun.js, PM2, and Docker
 # ==============================================================================
 
@@ -12,7 +12,7 @@ export DEBIAN_FRONTEND=noninteractive
 export LANG=C.UTF-8
 
 # ---------- Metadata ----------------------------------------------------------
-readonly SCRIPT_VERSION="3.2.4"
+readonly SCRIPT_VERSION="3.2.5"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly LOG_FILE="/tmp/${SCRIPT_NAME%.*}.log"
 readonly LOCK_FILE="/tmp/${SCRIPT_NAME%.*}.lock"
@@ -38,16 +38,16 @@ log() {
   local t; t=$(date '+%F %T')
   echo -e "${2}[$t] $1${CN}"
   echo "[$t] $(strip "$1")" >> "$LOG_FILE"
-  # Xoay log nếu quá lớn (>10MB)
+  # Rotate log if too large (>10MB)
   if [[ $(stat -f %z "$LOG_FILE" 2>/dev/null || stat -c %s "$LOG_FILE") -gt 10485760 ]]; then
     mv "$LOG_FILE" "${LOG_FILE}.old"
     touch "$LOG_FILE"
   fi
 }
 info() { log "ℹ️  $1" "$CI"; }
-ok)   { log "✅ $1" "$CB"; }
+ok() { log "✅ $1" "$CB"; }  # Sửa lỗi cú pháp: thay "ok)" bằng "ok()"
 warn() { log "⚠️  $1" "$CY"; }
-err()  { log "❌ $1" "$CR"; }
+err() { log "❌ $1" "$CR"; }
 header() { log "🌟 $1" "$CH"; }
 
 # ---------- Parse args --------------------------------------------------------
@@ -72,9 +72,9 @@ EOF
 done
 
 # ---------- Lock -------------------------------------------------------------
-touch "$LOCK_FILE" || { err "Không thể tạo lock file $LOCK_FILE."; exit 1; }
+touch "$LOCK_FILE" || { err "🔐 Không thể tạo lock file $LOCK_FILE."; exit 1; }
 exec 200>"$LOCK_FILE"
-flock -n 200 || { err "Script đang chạy ở tiến trình khác. Xóa $LOCK_FILE nếu cần."; exit 1; }
+flock -n 200 || { err "🔒 Script đang chạy ở tiến trình khác. Xóa $LOCK_FILE nếu cần."; exit 1; }
 trap 'rm -f "$LOCK_FILE"' EXIT
 
 # ---------- Banner -----------------------------------------------------------
@@ -93,6 +93,12 @@ info "🔍 Phát hiện: $PRETTY_NAME – Kernel $(uname -r)"
 # ---------- Network check ----------------------------------------------------
 if ! ping -c 1 google.com >/dev/null 2>&1; then
   err "🌐 Không có kết nối mạng. Vui lòng kiểm tra kết nối."
+  exit 1
+fi
+
+# ---------- Disk space check -------------------------------------------------
+if [[ $(df -h / | awk 'NR==2 {print $4}' | grep -o '[0-9]\+') -lt 5 ]]; then
+  err "💾 Không đủ dung lượng đĩa (yêu cầu ít nhất 5GB)."
   exit 1
 fi
 
@@ -232,6 +238,11 @@ install_docker() {
           rm -f "$docker_script"
           ok "✅ Docker cài đặt xong."
           docker --version && ok "✅ Docker version: $(docker --version)"
+          # Thêm user vào nhóm docker
+          if [[ -n "$SUDO_USER" ]]; then
+            usermod -aG docker "$SUDO_USER" 2>/dev/null || warn "⚠️ Không thể thêm user vào nhóm docker."
+            ok "✅ Đã thêm $SUDO_USER vào nhóm docker."
+          fi
         else
           rm -f "$docker_script"
           err "❌ Cài đặt Docker thất bại."
