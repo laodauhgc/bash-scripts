@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # 🚀 Ubuntu Core Development Environment Setup Script
-# 📦 Version 3.2.7  –  30‑Jul‑2025
+# 📦 Version 3.2.8  –  30‑Jul‑2025
 # 🌟 Installs core packages, Node.js, Bun.js, PM2, and Docker
 # ==============================================================================
 
@@ -12,7 +12,7 @@ export DEBIAN_FRONTEND=noninteractive
 export LANG=C.UTF-8
 
 # ---------- Metadata ----------------------------------------------------------
-readonly SCRIPT_VERSION="3.2.7"
+readonly SCRIPT_VERSION="3.2.8"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly LOG_FILE="/tmp/${SCRIPT_NAME%.*}.log"
 readonly LOCK_FILE="/tmp/${SCRIPT_NAME%.*}.lock"
@@ -39,7 +39,7 @@ log() {
   echo -e "${2}[$t] $1${CN}"
   echo "[$t] $(strip "$1")" >> "$LOG_FILE"
   # Rotate log if too large (>10MB)
-  if [[ $(stat -f %z "$LOG_FILE" 2>/dev/null || stat -c %s "$LOG_FILE") -gt 10485760 ]];milieu
+  if [[ $(stat -f %z "$LOG_FILE" 2>/dev/null || stat -c %s "$LOG_FILE") -gt 10485760 ]]; then
     mv "$LOG_FILE" "${LOG_FILE}.old"
     touch "$LOG_FILE"
   fi
@@ -54,7 +54,7 @@ header() { log "🌟 $1" "$CH"; }
 DEBUG=0; BACKUP=0; DRY_RUN=0
 while [[ $# -gt 0 ]]; do
   case $1 in
-    -v|--verbose) DEBUG=0; set -x; shift ;;
+    -v|--verbose) DEBUG=1; set -x; shift ;;
     --backup)     BACKUP=1; shift ;;
     --dry-run)    DRY_RUN=1; shift ;;
     -h|--help)    cat <<EOF
