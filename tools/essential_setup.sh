@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # 🚀 Ubuntu Core Development Environment Setup Script
-# 📦 Version 3.2.8  –  30‑Jul‑2025
+# 📦 Version 3.2.10  –  30‑Jul‑2025
 # 🌟 Installs core packages, Node.js, Bun.js, PM2, and Docker
 # ==============================================================================
 
@@ -12,7 +12,7 @@ export DEBIAN_FRONTEND=noninteractive
 export LANG=C.UTF-8
 
 # ---------- Metadata ----------------------------------------------------------
-readonly SCRIPT_VERSION="3.2.8"
+readonly SCRIPT_VERSION="3.2.10"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly LOG_FILE="/tmp/${SCRIPT_NAME%.*}.log"
 readonly LOCK_FILE="/tmp/${SCRIPT_NAME%.*}.lock"
@@ -78,7 +78,7 @@ flock -n 200 || { err "🔒 Script đang chạy ở tiến trình khác. Xóa $L
 trap 'rm -f "$LOCK_FILE"' EXIT
 
 # ---------- Banner -----------------------------------------------------------
-echo -e "${CH}\n╔════════════════════════════════════════════════════════╗\n║ 🚀  Ubuntu Core Setup Script  v$SCRIPT_VERSION  🚀            ║\n╚════════════════════════════════════════════════════════╝${CN}"
+echo -e "${CH}🚀 Ubuntu Core Setup Script v$SCRIPT_VERSION 🚀${CN}"
 
 # ---------- Checks -----------------------------------------------------------
 [[ $EUID -eq 0 ]] || { err "🔐 Hãy chạy bằng sudo/root."; exit 1; }
@@ -91,14 +91,6 @@ info "🔍 Phát hiện: $PRETTY_NAME – Kernel $(uname -r)"
 info "🔧 Kiểm tra công cụ cần thiết..."
 command -v curl >/dev/null 2>&1 || { err "❌ Yêu cầu 'curl' để tải các gói. Cài đặt trước khi tiếp tục."; exit 1; }
 ok "✅ Công cụ cần thiết đã sẵn sàng."
-
-# ---------- Network check ----------------------------------------------------
-info "🌐 Kiểm tra kết nối mạng..."
-if ! timeout 5 curl -Is http://google.com >/dev/null 2>&1; then
-  err "❌ Không có kết nối mạng hoặc DNS không hoạt động. Vui lòng kiểm tra kết nối."
-  exit 1
-fi
-ok "✅ Kết nối mạng ổn định."
 
 # ---------- Disk space check -------------------------------------------------
 info "💾 Kiểm tra dung lượng đĩa..."
@@ -159,7 +151,7 @@ install_js_runtimes() {
   else
     if [[ ! -d "$HOME/.nvm" ]]; then
       info "📦 Cài đặt nvm v$NVM_VERSION..."
-      if timeout 30 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v$NVM_VERSION/install.sh | bash; then
+      if curl --connect-timeout 30 -o- https://raw.githubusercontent.com/nvm-sh/nvm/v$NVM_VERSION/install.sh | bash; then
         ok "✅ nvm cài đặt xong."
       else
         err "❌ Cài đặt nvm thất bại."
@@ -212,7 +204,7 @@ install_js_runtimes() {
   else
     if ! command -v bun >/dev/null 2>&1; then
       info "📦 Cài đặt Bun v$BUN_VERSION..."
-      if timeout 30 curl -fsSL https://bun.sh/install | bash; then
+      if curl --connect-timeout 30 -fsSL https://bun.sh/install | bash; then
         ok "✅ Bun v$BUN_VERSION cài đặt xong."
         bun --version | grep -q "$BUN_VERSION" && ok "✅ Bun version: $(bun --version)"
       else
@@ -238,7 +230,7 @@ install_docker() {
       info "📦 Tải và cài đặt Docker..."
       local docker_script="/root/install_docker.sh"
       touch "$docker_script" || { err "❌ Không thể tạo file $docker_script."; exit 1; }
-      if timeout 30 curl -sSL https://get.docker.com -o "$docker_script"; then
+      if curl --connect-timeout 30 -sSL https://get.docker.com -o "$docker_script"; then
         chmod +x "$docker_script"
         if /bin/bash "$docker_script"; then
           rm -f "$docker_script"
