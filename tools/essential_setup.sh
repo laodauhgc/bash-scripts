@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # 🚀 Ubuntu Core Development Environment Setup Script
-# 📦 Version 3.2.10  –  30‑Jul‑2025
+# 📦 Version 3.2.11  –  30‑Jul‑2025
 # 🌟 Installs core packages, Node.js, Bun.js, PM2, and Docker
 # ==============================================================================
 
@@ -12,7 +12,7 @@ export DEBIAN_FRONTEND=noninteractive
 export LANG=C.UTF-8
 
 # ---------- Metadata ----------------------------------------------------------
-readonly SCRIPT_VERSION="3.2.10"
+readonly SCRIPT_VERSION="3.2.11"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly LOG_FILE="/tmp/${SCRIPT_NAME%.*}.log"
 readonly LOCK_FILE="/tmp/${SCRIPT_NAME%.*}.lock"
@@ -91,14 +91,6 @@ info "🔍 Phát hiện: $PRETTY_NAME – Kernel $(uname -r)"
 info "🔧 Kiểm tra công cụ cần thiết..."
 command -v curl >/dev/null 2>&1 || { err "❌ Yêu cầu 'curl' để tải các gói. Cài đặt trước khi tiếp tục."; exit 1; }
 ok "✅ Công cụ cần thiết đã sẵn sàng."
-
-# ---------- Disk space check -------------------------------------------------
-info "💾 Kiểm tra dung lượng đĩa..."
-if [[ $(df -h / | awk 'NR==2 {print $4}' | grep -o '[0-9]\+') -lt 5 ]]; then
-  err "❌ Không đủ dung lượng đĩa (yêu cầu ít nhất 5GB)."
-  exit 1
-fi
-ok "✅ Dung lượng đĩa đủ."
 
 # ---------- APT helpers ------------------------------------------------------
 apt_update() {
