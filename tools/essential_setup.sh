@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # 🚀 Ubuntu Core Development Environment Setup Script
-# 📦 Version 3.2.6  –  30‑Jul‑2025
+# 📦 Version 3.2.7  –  30‑Jul‑2025
 # 🌟 Installs core packages, Node.js, Bun.js, PM2, and Docker
 # ==============================================================================
 
@@ -12,7 +12,7 @@ export DEBIAN_FRONTEND=noninteractive
 export LANG=C.UTF-8
 
 # ---------- Metadata ----------------------------------------------------------
-readonly SCRIPT_VERSION="3.2.6"
+readonly SCRIPT_VERSION="3.2.7"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly LOG_FILE="/tmp/${SCRIPT_NAME%.*}.log"
 readonly LOCK_FILE="/tmp/${SCRIPT_NAME%.*}.lock"
@@ -39,7 +39,7 @@ log() {
   echo -e "${2}[$t] $1${CN}"
   echo "[$t] $(strip "$1")" >> "$LOG_FILE"
   # Rotate log if too large (>10MB)
-  if [[ $(stat -f %z "$LOG_FILE" 2>/dev/null || stat -c %s "$LOG_FILE") -gt 10485760 ]]; then
+  if [[ $(stat -f %z "$LOG_FILE" 2>/dev/null || stat -c %s "$LOG_FILE") -gt 10485760 ]];milieu
     mv "$LOG_FILE" "${LOG_FILE}.old"
     touch "$LOG_FILE"
   fi
@@ -54,7 +54,7 @@ header() { log "🌟 $1" "$CH"; }
 DEBUG=0; BACKUP=0; DRY_RUN=0
 while [[ $# -gt 0 ]]; do
   case $1 in
-    -v|--verbose) DEBUG=1; set -x; shift ;;
+    -v|--verbose) DEBUG=0; set -x; shift ;;
     --backup)     BACKUP=1; shift ;;
     --dry-run)    DRY_RUN=1; shift ;;
     -h|--help)    cat <<EOF
@@ -78,10 +78,7 @@ flock -n 200 || { err "🔒 Script đang chạy ở tiến trình khác. Xóa $L
 trap 'rm -f "$LOCK_FILE"' EXIT
 
 # ---------- Banner -----------------------------------------------------------
-echo -e "${CH}
-╔════════════════════════════════════════════════════════╗
-║ 🚀  Ubuntu Core Setup Script  v$SCRIPT_VERSION  🚀            ║
-╚════════════════════════════════════════════════════════╝${CN"
+echo -e "${CH}\n╔════════════════════════════════════════════════════════╗\n║ 🚀  Ubuntu Core Setup Script  v$SCRIPT_VERSION  🚀            ║\n╚════════════════════════════════════════════════════════╝${CN}"
 
 # ---------- Checks -----------------------------------------------------------
 [[ $EUID -eq 0 ]] || { err "🔐 Hãy chạy bằng sudo/root."; exit 1; }
@@ -162,7 +159,7 @@ install_js_runtimes() {
   else
     if [[ ! -d "$HOME/.nvm" ]]; then
       info "📦 Cài đặt nvm v$NVM_VERSION..."
-      if curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v$NVM_VERSION/install.sh | bash; then
+      if timeout 30 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v$NVM_VERSION/install.sh | bash; then
         ok "✅ nvm cài đặt xong."
       else
         err "❌ Cài đặt nvm thất bại."
@@ -215,7 +212,7 @@ install_js_runtimes() {
   else
     if ! command -v bun >/dev/null 2>&1; then
       info "📦 Cài đặt Bun v$BUN_VERSION..."
-      if curl -fsSL https://bun.sh/install | bash; then
+      if timeout 30 curl -fsSL https://bun.sh/install | bash; then
         ok "✅ Bun v$BUN_VERSION cài đặt xong."
         bun --version | grep -q "$BUN_VERSION" && ok "✅ Bun version: $(bun --version)"
       else
@@ -241,7 +238,7 @@ install_docker() {
       info "📦 Tải và cài đặt Docker..."
       local docker_script="/root/install_docker.sh"
       touch "$docker_script" || { err "❌ Không thể tạo file $docker_script."; exit 1; }
-      if curl -sSL https://get.docker.com -o "$docker_script"; then
+      if timeout 30 curl -sSL https://get.docker.com -o "$docker_script"; then
         chmod +x "$docker_script"
         if /bin/bash "$docker_script"; then
           rm -f "$docker_script"
