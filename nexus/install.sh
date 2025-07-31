@@ -403,6 +403,7 @@ run_container() {
     docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
     mkdir -p "$(dirname "$LOG_FILE")" "$CREDENTIALS_DIR"
     touch "$LOG_FILE"
+    : > "$LOG_FILE"
     chmod 644 "$LOG_FILE"
 
     NODE_ID=""
