@@ -446,12 +446,16 @@ run_container() {
     fi
 
     docker run -d --name "$CONTAINER_NAME" \
-        --restart unless-stopped \
-        -v "$LOG_FILE":/root/nexus.log \
-        -v "$CREDENTIALS_DIR":/root/.nexus \
-        -e WALLET_ADDRESS="$WALLET_ADDRESS" \
-        -e NODE_ID="$NODE_ID" \
-        "$IMAGE_NAME"
+      --restart unless-stopped \
+      -v "$LOG_FILE":/root/nexus.log:rw \
+      -v "$CREDENTIALS_DIR":/root/.nexus:ro \
+      -e WALLET_ADDRESS="$WALLET_ADDRESS" \
+      -e NODE_ID="$NODE_ID" \
+      --health-cmd='pidof nexus-network || exit 1' \
+      --health-interval=30s \
+      --health-retries=3 \
+      "$IMAGE_NAME"
+
 
     print_node "$(printf "$NODE_STARTED" "$WALLET_ADDRESS")"
     print_log "$(printf "$LOG_FILE_MSG" "$LOG_FILE")"
