@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Version: v1.3.3 
+# Version: v1.4.0 | Update 03/08/2025
 
 # =====================
 # Biến cấu hình
