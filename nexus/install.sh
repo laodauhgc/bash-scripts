@@ -55,7 +55,7 @@ done
 # =====================
 case $LANGUAGE in
     vi)
-        BANNER="===== Cài Đặt Node Nexus v1.3.3 (Hỗ trợ ARM) ====="
+        BANNER="===== Cài Đặt Node Nexus v1.4.0 (Hỗ trợ ARM) ====="
         ERR_NO_WALLET="Lỗi: Vui lòng cung cấp wallet address. Cách dùng: $0 <wallet_address> [--no-swap] [--en|--ru|--cn] [--setup-cron]"
         WARN_INVALID_FLAG="Cảnh báo: Flag không hợp lệ: %s. Bỏ qua."
         SKIP_SWAP_FLAG="Bỏ qua tạo swap theo yêu cầu (--no-swap)."
@@ -95,7 +95,7 @@ case $LANGUAGE in
         CRON_DONE="Cron job đã được thiết lập: %s"
         ;;
     en)
-        BANNER="===== Nexus Node Setup v1.3.3 (ARM Support) ====="
+        BANNER="===== Nexus Node Setup v1.4.0 (ARM Support) ====="
         ERR_NO_WALLET="Error: Please provide wallet address. Usage: $0 <wallet_address> [--no-swap] [--en|--ru|--cn] [--setup-cron]"
         WARN_INVALID_FLAG="Warning: Invalid flag: %s. Skipping."
         SKIP_SWAP_FLAG="Skipping swap creation as per request (--no-swap)."
@@ -135,7 +135,7 @@ case $LANGUAGE in
         CRON_DONE="Cron job has been set: %s"
         ;;
     ru)
-        BANNER="===== Установка Узла Nexus v1.3.3 (Поддержка ARM) ====="
+        BANNER="===== Установка Узла Nexus v1.4.0 (Поддержка ARM) ====="
         ERR_NO_WALLET="Ошибка: Пожалуйста, укажите адрес кошелька. Использование: $0 <wallet_address> [--no-swap] [--en|--ru|--cn] [--setup-cron]"
         WARN_INVALID_FLAG="Предупреждение: Недопустимый флаг: %s. Пропускаю."
         SKIP_SWAP_FLAG="Пропуск создания swap по запросу (--no-swap)."
@@ -175,7 +175,7 @@ case $LANGUAGE in
         CRON_DONE="Cron-задание установлено: %s"
         ;;
     cn)
-        BANNER="===== Nexus 节点设置 v1.3.3 (ARM 支持) ====="
+        BANNER="===== Nexus 节点设置 v1.4.0 (ARM 支持) ====="
         ERR_NO_WALLET="错误：请提供钱包地址。用法：$0 <wallet_address> [--no-swap] [--en|--ru|--cn] [--setup-cron]"
         WARN_INVALID_FLAG="警告：无效标志：%s。跳过。"
         SKIP_SWAP_FLAG="根据请求跳过swap创建 (--no-swap)。"
