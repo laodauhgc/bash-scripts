@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Version: 1.3.3  # Cập nhật: thêm cron idempotent mỗi giờ & sửa thứ tự parse flags/ngôn ngữ
+# Version: v1.3.3 
 
 # =====================
 # Biến cấu hình
