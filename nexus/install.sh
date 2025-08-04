@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Version: v1.4.0 | Update 03/08/2025
+# Version: v1.4.1 | Update 04/08/2025
 
 # =====================
 # Biến cấu hình
@@ -9,7 +9,7 @@ set -e
 CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
 LOG_FILE="/root/nexus_logs/nexus.log"
-CREDENTIALS_DIR="/root/nexus_credentials"  # Thư mục host để mount ~/.nexus
+CREDENTIALS_DIR="/root/nexus_credentials"  # Thư mục host để mount ~/.nexus (RW)
 NODE_ID_FILE="/root/nexus_node_id.txt"     # File lưu node ID
 SWAP_FILE="/swapfile"
 
@@ -55,7 +55,7 @@ done
 # =====================
 case $LANGUAGE in
     vi)
-        BANNER="===== Cài Đặt Node Nexus v1.4.0 (Hỗ trợ ARM) ====="
+        BANNER="===== Cài Đặt Node Nexus v1.4.1 (Hỗ trợ ARM) ====="
         ERR_NO_WALLET="Lỗi: Vui lòng cung cấp wallet address. Cách dùng: $0 <wallet_address> [--no-swap] [--en|--ru|--cn] [--setup-cron]"
         WARN_INVALID_FLAG="Cảnh báo: Flag không hợp lệ: %s. Bỏ qua."
         SKIP_SWAP_FLAG="Bỏ qua tạo swap theo yêu cầu (--no-swap)."
@@ -95,7 +95,7 @@ case $LANGUAGE in
         CRON_DONE="Cron job đã được thiết lập: %s"
         ;;
     en)
-        BANNER="===== Nexus Node Setup v1.4.0 (ARM Support) ====="
+        BANNER="===== Nexus Node Setup v1.4.1 (ARM Support) ====="
         ERR_NO_WALLET="Error: Please provide wallet address. Usage: $0 <wallet_address> [--no-swap] [--en|--ru|--cn] [--setup-cron]"
         WARN_INVALID_FLAG="Warning: Invalid flag: %s. Skipping."
         SKIP_SWAP_FLAG="Skipping swap creation as per request (--no-swap)."
@@ -135,7 +135,7 @@ case $LANGUAGE in
         CRON_DONE="Cron job has been set: %s"
         ;;
     ru)
-        BANNER="===== Установка Узла Nexus v1.4.0 (Поддержка ARM) ====="
+        BANNER="===== Установка Узла Nexus v1.4.1 (Поддержка ARM) ====="
         ERR_NO_WALLET="Ошибка: Пожалуйста, укажите адрес кошелька. Использование: $0 <wallet_address> [--no-swap] [--en|--ru|--cn] [--setup-cron]"
         WARN_INVALID_FLAG="Предупреждение: Недопустимый флаг: %s. Пропускаю."
         SKIP_SWAP_FLAG="Пропуск создания swap по запросу (--no-swap)."
@@ -175,7 +175,7 @@ case $LANGUAGE in
         CRON_DONE="Cron-задание установлено: %s"
         ;;
     cn)
-        BANNER="===== Nexus 节点设置 v1.4.0 (ARM 支持) ====="
+        BANNER="===== Nexus 节点设置 v1.4.1 (ARM 支持) ====="
         ERR_NO_WALLET="错误：请提供钱包地址。用法：$0 <wallet_address> [--no-swap] [--en|--ru|--cn] [--setup-cron]"
         WARN_INVALID_FLAG="警告：无效标志：%s。跳过。"
         SKIP_SWAP_FLAG="根据请求跳过swap创建 (--no-swap)。"
@@ -362,7 +362,7 @@ build_image() {
     cat > Dockerfile <<EOF
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y curl screen bash jq && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y curl screen bash jq procps && rm -rf /var/lib/apt/lists/*
 RUN curl -L $CLI_URL -o /usr/local/bin/nexus-network && chmod +x /usr/local/bin/nexus-network
 RUN mkdir -p /root/.nexus
 COPY entrypoint.sh /entrypoint.sh
@@ -373,6 +373,11 @@ EOF
     cat > entrypoint.sh <<'EOF'
 #!/bin/bash
 set -e
+
+# Ensure dirs exist and are writable
+mkdir -p /root/.nexus
+touch /root/nexus.log || true
+
 if [ -z "$WALLET_ADDRESS" ] && [ -z "$NODE_ID" ]; then
     echo "❌ Missing wallet address or node ID"
     exit 1
@@ -383,30 +388,31 @@ if [ -n "$NODE_ID" ]; then
     screen -dmS nexus bash -c "nexus-network start --node-id $NODE_ID &>> /root/nexus.log"
 else
     echo "⏳ Registering wallet: $WALLET_ADDRESS"
-    nexus-network register-user --wallet-address "$WALLET_ADDRESS" &>> /root/nexus.log
-    if [ $? -ne 0 ]; then
+    if ! nexus-network register-user --wallet-address "$WALLET_ADDRESS" &>> /root/nexus.log; then
         echo "❌ Unable to register wallet"
         cat /root/nexus.log
-        nexus-network --help &>> /root/nexus.log
+        nexus-network --help &>> /root/nexus.log || true
         cat /root/nexus.log
         exit 1
     fi
     echo "⏳ Registering node..."
-    nexus-network register-node &>> /root/nexus.log
-    if [ $? -ne 0 ]; then
+    if ! nexus-network register-node &>> /root/nexus.log; then
         echo "❌ Unable to register node"
         cat /root/nexus.log
-        nexus-network register-node --help &>> /root/nexus.log
+        nexus-network register-node --help &>> /root/nexus.log || true
         cat /root/nexus.log
         exit 1
     fi
     NODE_ID=$(jq -r '.node_id' /root/.nexus/config.json 2>/dev/null)
-    if [ -z "$NODE_ID" ]; then
+    if [ -z "$NODE_ID" ] || [ "$NODE_ID" = "null" ]; then
         echo "❌ Cannot extract node ID from config.json"
+        cat /root/nexus.log
         exit 1
     fi
+    echo "ℹ️ Node ID: $NODE_ID"
     screen -dmS nexus bash -c "nexus-network start --node-id $NODE_ID &>> /root/nexus.log"
 fi
+
 sleep 3
 if screen -list | grep -q "nexus"; then
     echo "🚀 Node started. Log: /root/nexus.log"
@@ -415,6 +421,8 @@ else
     cat /root/nexus.log
     exit 1
 fi
+
+# Keep container running and stream logs
 tail -f /root/nexus.log
 EOF
 
@@ -435,6 +443,9 @@ EOF
 run_container() {
     docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
     mkdir -p "$(dirname "$LOG_FILE")" "$CREDENTIALS_DIR"
+    # Bảo đảm thư mục credentials ghi được
+    chmod 700 "$CREDENTIALS_DIR" 2>/dev/null || true
+
     touch "$LOG_FILE"
     : > "$LOG_FILE"
     chmod 644 "$LOG_FILE"
@@ -448,14 +459,13 @@ run_container() {
     docker run -d --name "$CONTAINER_NAME" \
       --restart unless-stopped \
       -v "$LOG_FILE":/root/nexus.log:rw \
-      -v "$CREDENTIALS_DIR":/root/.nexus:ro \
+      -v "$CREDENTIALS_DIR":/root/.nexus:rw \
       -e WALLET_ADDRESS="$WALLET_ADDRESS" \
       -e NODE_ID="$NODE_ID" \
       --health-cmd='pidof nexus-network || exit 1' \
       --health-interval=30s \
       --health-retries=3 \
       "$IMAGE_NAME"
-
 
     print_node "$(printf "$NODE_STARTED" "$WALLET_ADDRESS")"
     print_log "$(printf "$LOG_FILE_MSG" "$LOG_FILE")"
@@ -497,32 +507,29 @@ setup_hourly_cron() {
     print_info "$CRON_SETUP"
     ensure_cron_installed
 
-    # Lấy đường dẫn tuyệt đối của script hiện tại
+    # Đường dẫn tuyệt đối
     SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
 
-    # Nếu ngôn ngữ khác vi, thêm cờ ngôn ngữ để giữ nguyên trải nghiệm
+    # Giữ ngôn ngữ
     LANG_FLAG=""
     case "$LANGUAGE" in
         en|ru|cn) LANG_FLAG="--$LANGUAGE" ;;
     esac
 
-    # Marker duy nhất theo từng wallet để không ảnh hưởng các wallet khác
+    # Marker duy nhất
     CRON_MARK="# NEXUS_NODE_RECREATE:$WALLET_ADDRESS - managed by $SCRIPT_PATH"
 
-    # Biểu thức chạy đúng phút 0 mỗi giờ
+    # Mỗi giờ, phút 0
     CRON_EXPR="0 * * * *"
 
-    # Cron job: xoá container cũ trước rồi chạy lại script với --no-swap
-    CRON_JOB="$CRON_EXPR docker rm -f $CONTAINER_NAME >/dev/null 2>&1; /bin/bash $SCRIPT_PATH $WALLET_ADDRESS --no-swap $LANG_FLAG"
+    # Ưu tiên restart nhanh; nếu fail thì chạy lại script (không đụng swap)
+    CRON_JOB="$CRON_EXPR (docker restart $CONTAINER_NAME >/dev/null 2>&1 || (docker rm -f $CONTAINER_NAME >/dev/null 2>&1; /bin/bash $SCRIPT_PATH $WALLET_ADDRESS --no-swap $LANG_FLAG))"
 
     TMP="$(mktemp)"
     crontab -l 2>/dev/null > "$TMP" || true
 
-    # Loại bỏ bản cũ: dòng marker & dòng job khớp script + wallet hiện tại
     grep -Fv "$CRON_MARK" "$TMP" | grep -Fv "$SCRIPT_PATH $WALLET_ADDRESS" > "${TMP}.new" || true
-
     { cat "${TMP}.new"; echo "$CRON_MARK"; echo "$CRON_JOB"; } | crontab -
-
     rm -f "$TMP" "${TMP}.new"
 
     print_success "$(printf "$CRON_DONE" "$CRON_JOB")"
