@@ -21,21 +21,31 @@ SETUP_CRON=0
 # =====================
 # Màu sắc & helpers
 # =====================
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
-print_success(){ echo -e "${GREEN}✅ $1${NC}"; }
-print_error(){   echo -e "${RED}❌ $1${NC}"; }
-print_warning(){ echo -e "${YELLOW}⚠️ $1${NC}"; }
-print_info(){    echo -e "${BLUE}ℹ️ $1${NC}"; }
-print_progress(){echo -e "${CYAN}⏳ $1${NC}"; }
-print_node(){    echo -e "${GREEN}🚀 $1${NC}"; }
-print_log(){     echo -e "${CYAN}📜 $1${NC}"; }
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+function print_success() { echo -e "${GREEN}✅ $1${NC}"; }
+function print_error()   { echo -e "${RED}❌ $1${NC}"; }
+function print_warning() { echo -e "${YELLOW}⚠️ $1${NC}"; }
+function print_info()    { echo -e "${BLUE}ℹ️ $1${NC}"; }
+function print_progress(){ echo -e "${CYAN}⏳ $1${NC}"; }
+function print_node()    { echo -e "${GREEN}🚀 $1${NC}"; }
+function print_log()     { echo -e "${CYAN}📜 $1${NC}"; }
 
 # =====================
 # Bắt cờ ngôn ngữ sớm
 # =====================
 shift || true
 for arg in "$@"; do
-  case "$arg" in --en) LANGUAGE="en";; --ru) LANGUAGE="ru";; --cn) LANGUAGE="cn";; esac
+  case "$arg" in
+    --en) LANGUAGE="en" ;;
+    --ru) LANGUAGE="ru" ;;
+    --cn) LANGUAGE="cn" ;;
+  esac
 done
 
 # =====================
@@ -43,7 +53,7 @@ done
 # =====================
 case $LANGUAGE in
   vi)
-    BANNER="===== Cài Đặt Node Nexus v1.4.4 (Hỗ trợ ARM) ====="
+    BANNER="===== Cài Đặt Node Nexus v1.4.5 (Hỗ trợ ARM) ====="
     ERR_NO_WALLET="Lỗi: Vui lòng cung cấp wallet address. Cách dùng: $0 <wallet_address> [--no-swap] [--en|--ru|--cn] [--setup-cron]"
     WARN_INVALID_FLAG="Cảnh báo: Flag không hợp lệ: %s. Bỏ qua."
     SKIP_SWAP_FLAG="Bỏ qua tạo swap theo yêu cầu (--no-swap)."
@@ -79,8 +89,8 @@ case $LANGUAGE in
     CRON_SETUP="Thiết lập cron job để tự khởi tạo lại container mỗi giờ."
     CRON_DONE="Cron job đã thiết lập: %s"
     ;;
-  *) # en
-    BANNER="===== Nexus Node Setup v1.4.4 (ARM Support) ====="
+  *)
+    BANNER="===== Nexus Node Setup v1.4.5 (ARM Support) ====="
     ERR_NO_WALLET="Error: Please provide wallet address. Usage: $0 <wallet_address> [--no-swap] [--en|--ru|--cn] [--setup-cron]"
     WARN_INVALID_FLAG="Warning: Invalid flag: %s. Skipping."
     SKIP_SWAP_FLAG="Skipping swap creation (--no-swap)."
@@ -123,7 +133,10 @@ print_info "$BANNER"
 # =====================
 # Kiểm tra wallet
 # =====================
-if [ -z "$WALLET_ADDRESS" ]; then print_error "$ERR_NO_WALLET"; exit 1; fi
+if [ -z "$WALLET_ADDRESS" ]; then
+  print_error "$ERR_NO_WALLET"
+  exit 1
+fi
 
 # =====================
 # Parse các cờ còn lại
@@ -132,7 +145,7 @@ for arg in "$@"; do
   case "$arg" in
     --no-swap) NO_SWAP=1 ;;
     --setup-cron) SETUP_CRON=1 ;;
-    --en|--ru|--cn) : ;;
+    --en|--ru|--cn) : ;; # đã xử lý ở bước trước
     *) print_warning "$(printf "$WARN_INVALID_FLAG" "$arg")" ;;
   esac
 done
@@ -142,37 +155,48 @@ done
 # =====================
 ARCH=$(uname -m)
 print_info "$(printf "$ARCH_DETECTED" "$ARCH")"
-CLI_SUFFIX="linux-x86_64"; [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ] && CLI_SUFFIX="linux-arm64"
+CLI_SUFFIX="linux-x86_64"
+if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+  CLI_SUFFIX="linux-arm64"
+fi
 
-if ! command -v jq >/dev/null 2>&1; then apt update && apt install -y jq; fi
+if ! command -v jq >/dev/null 2>&1; then
+  apt update && apt install -y jq
+fi
 LATEST_TAG=$(curl -s https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest | jq -r .tag_name)
 CLI_URL="https://github.com/nexus-xyz/nexus-cli/releases/download/${LATEST_TAG}/nexus-network-${CLI_SUFFIX}"
 
 # =====================
 # Swap (tùy chọn)
 # =====================
-create_swap(){
+function create_swap() {
   if [ "$(uname -s)" != "Linux" ]; then print_warning "$NOT_LINUX"; return 0; fi
   total_ram=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null || echo "")
-  [ -z "$total_ram" ] && total_ram=$(free -m | awk '/^Mem:/{print $2}')
-  [ -z "$total_ram" ] && { print_warning "$WARN_NO_RAM"; return 0; }
+  if [ -z "$total_ram" ] || [ "$total_ram" -le 0 ]; then total_ram=$(free -m | awk '/^Mem:/{print $2}'); fi
+  if [ -z "$total_ram" ] || [ "$total_ram" -le 0 ]; then print_warning "$WARN_NO_RAM"; return 0; fi
   print_info "$(printf "$RAM_DETECTED" "$total_ram")"
   if swapon --show | grep -q "$SWAP_FILE"; then
     current_swap=$(free -m | awk '/^Swap:/{print $2}')
-    [ -n "$current_swap" ] && [ "$current_swap" -ge "$total_ram" ] && { print_info "$(printf "$SWAP_EXISTS" "$current_swap")"; return 0; }
+    if [ -n "$current_swap" ] && [ "$current_swap" -ge "$total_ram" ]; then
+      print_info "$(printf "$SWAP_EXISTS" "$current_swap")"
+      return 0
+    fi
     swapoff "$SWAP_FILE" || true
   fi
   min_swap=$total_ram; max_swap=$((total_ram*2))
   available_disk=$(df -BM --output=avail "$(dirname "$SWAP_FILE")" | tail -n1 | grep -o '[0-9]\+')
-  [ -z "$available_disk" ] || [ "$available_disk" -lt "$min_swap" ] && { print_warning "$(printf "$INSUFFICIENT_DISK" "$available_disk" "$min_swap")"; return 0; }
-  swap_size=$([ "$available_disk" -ge "$max_swap" ] && echo "$max_swap" || echo "$min_swap")
+  if [ -z "$available_disk" ] || [ "$available_disk" -lt "$min_swap" ]; then
+    print_warning "$(printf "$INSUFFICIENT_DISK" "$available_disk" "$min_swap")"
+    return 0
+  fi
+  if [ "$available_disk" -ge "$max_swap" ]; then swap_size=$max_swap; else swap_size=$min_swap; fi
   print_progress "$(printf "$CREATING_SWAP" "$swap_size")"
   fallocate -l "${swap_size}M" "$SWAP_FILE" 2>/dev/null || dd if=/dev/zero of="$SWAP_FILE" bs=1M count="$swap_size"
   chmod 600 "$SWAP_FILE"; mkswap "$SWAP_FILE"; swapon "$SWAP_FILE"
   grep -q "$SWAP_FILE" /etc/fstab 2>/dev/null || echo "$SWAP_FILE none swap sw 0 0" >> /etc/fstab
   print_success "$(printf "$SWAP_CREATED" "$swap_size")"
 }
-[ "$NO_SWAP" = 1 ] && print_warning "$SKIP_SWAP_FLAG" || create_swap
+if [ "$NO_SWAP" = 1 ]; then print_warning "$SKIP_SWAP_FLAG"; else create_swap; fi
 
 # =====================
 # Docker
@@ -186,11 +210,12 @@ fi
 docker ps >/dev/null 2>&1 || { print_error "$ERR_DOCKER_PERMISSION"; exit 1; }
 
 # =====================
-# Build image (here-doc TÁCH RIÊNG)
+# Build image (2 here-doc tách riêng)
 # =====================
-build_image(){
+function build_image() {
   print_progress "$(printf "$BUILDING_IMAGE" "$IMAGE_NAME")"
-  workdir=$(mktemp -d); cd "$workdir"
+  workdir=$(mktemp -d)
+  cd "$workdir"
 
   cat > Dockerfile <<EOF
 FROM ubuntu:24.04
@@ -259,15 +284,21 @@ fi
 tail -f /root/nexus.log
 ENTRYPOINT
 
-  docker build -t "$IMAGE_NAME" . || { print_error "$(printf "$ERR_BUILD_IMAGE" "$IMAGE_NAME")"; cd - >/dev/null; rm -rf "$workdir"; exit 1; }
-  cd - >/dev/null; rm -rf "$workdir"
+  if ! docker build -t "$IMAGE_NAME" .; then
+    print_error "$(printf "$ERR_BUILD_IMAGE" "$IMAGE_NAME")"
+    cd - >/dev/null
+    rm -rf "$workdir"
+    exit 1
+  fi
+  cd - >/dev/null
+  rm -rf "$workdir"
   print_success "$(printf "$BUILD_IMAGE_SUCCESS" "$IMAGE_NAME")"
 }
 
 # =====================
 # Run container
 # =====================
-run_container(){
+function run_container() {
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   mkdir -p "$(dirname "$LOG_FILE")" "$CREDENTIALS_DIR"
   chmod 700 "$CREDENTIALS_DIR" || true
@@ -294,7 +325,6 @@ run_container(){
   print_log  "$(printf "$LOG_FILE_MSG" "$LOG_FILE")"
   print_info "$(printf "$VIEW_LOG" "$CONTAINER_NAME")"
 
-  # Nếu NODE_ID trống lúc run -> đợi entrypoint tạo /root/.nexus/node_id
   if [ -z "$NODE_ID" ]; then
     TIMEOUT=120; WAIT_TIME=0
     print_progress "$(printf "$WAIT_NODE_ID" "$TIMEOUT")"
@@ -311,22 +341,30 @@ run_container(){
       fi
       sleep 5; WAIT_TIME=$((WAIT_TIME+5))
     done
-    print_error "$ERR_NO_NODE_ID"; exit 1
+    print_error "$ERR_NO_NODE_ID"
+    exit 1
   fi
 }
 
 # =====================
 # Cron (idempotent)
 # =====================
-ensure_cron_installed(){ command -v crontab >/dev/null 2>&1 || { apt update && apt install -y cron; systemctl enable cron || true; systemctl start cron || true; }; }
-setup_hourly_cron(){
+function ensure_cron_installed() {
+  if ! command -v crontab >/dev/null 2>&1; then
+    apt update && apt install -y cron
+    systemctl enable cron || true
+    systemctl start cron || true
+  fi
+}
+function setup_hourly_cron() {
   print_info "$CRON_SETUP"
   ensure_cron_installed
   SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
   LANG_FLAG=""; case "$LANGUAGE" in en|ru|cn) LANG_FLAG="--$LANGUAGE";; esac
   CRON_MARK="# NEXUS_NODE_RECREATE:$WALLET_ADDRESS - managed by $SCRIPT_PATH"
   CRON_EXPR="0 * * * *"
-  CRON_JOB="$CRON_EXPR (docker restart $CONTAINER_NAME >/dev/null 2>&1 || (docker rm -f $CONTAINER_NAME >/dev/null 2>&1; /bin/bash $SCRIPT_PATH $WALLET_ADDRESS --no-swap $LANG_FLAG))"
+  CRON_JOB="$CRON_EXPR (docker restart $CONTAINER_NAME >/dev/null 2>&1 || (docker rm -f $CONTAINER_NAME >/dev/null 2>&1; /bin/bash $SCRIPT_PATH $WALLET_ADDRESS --no-swap $LANG_FLA
+G))"
   TMP="$(mktemp)"; crontab -l 2>/dev/null > "$TMP" || true
   grep -Fv "$CRON_MARK" "$TMP" | grep -Fv "$SCRIPT_PATH $WALLET_ADDRESS" > "${TMP}.new" || true
   { cat "${TMP}.new"; echo "$CRON_MARK"; echo "$CRON_JOB"; } | crontab -
@@ -339,5 +377,5 @@ setup_hourly_cron(){
 # =====================
 build_image
 run_container
-[ "$SETUP_CRON" = 1 ] && setup_hourly_cron
+if [ "$SETUP_CRON" = 1 ]; then setup_hourly_cron; fi
 print_success "===== Hoàn Tất Cài Đặt ====="
