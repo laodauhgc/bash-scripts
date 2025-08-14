@@ -349,26 +349,50 @@ function run_container() {
 # =====================
 # Cron (idempotent)
 # =====================
-function ensure_cron_installed() {
+ensure_cron_installed() {
   if ! command -v crontab >/dev/null 2>&1; then
     apt update && apt install -y cron
-    systemctl enable cron || true
-    systemctl start cron || true
+    systemctl enable cron 2>/dev/null || true
+    systemctl start  cron 2>/dev/null || true
   fi
 }
-function setup_hourly_cron() {
+
+setup_hourly_cron() {
   print_info "$CRON_SETUP"
   ensure_cron_installed
+
+  # Đường dẫn tuyệt đối
   SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
-  LANG_FLAG=""; case "$LANGUAGE" in en|ru|cn) LANG_FLAG="--$LANGUAGE";; esac
+
+  # Giữ ngôn ngữ nếu có
+  LANG_FLAG=""
+  case "$LANGUAGE" in
+    en|ru|cn) LANG_FLAG="--$LANGUAGE" ;;
+  esac
+
+  DOCKER_BIN="$(command -v docker)"
+  BASH_BIN="$(command -v bash)"
+
+  # Marker để quản lý idempotent
   CRON_MARK="# NEXUS_NODE_RECREATE:$WALLET_ADDRESS - managed by $SCRIPT_PATH"
   CRON_EXPR="0 * * * *"
-  CRON_JOB="$CRON_EXPR (docker restart $CONTAINER_NAME >/dev/null 2>&1 || (docker rm -f $CONTAINER_NAME >/dev/null 2>&1; /bin/bash $SCRIPT_PATH $WALLET_ADDRESS --no-swap $LANG_FLA
-G))"
-  TMP="$(mktemp)"; crontab -l 2>/dev/null > "$TMP" || true
-  grep -Fv "$CRON_MARK" "$TMP" | grep -Fv "$SCRIPT_PATH $WALLET_ADDRESS" > "${TMP}.new" || true
-  { cat "${TMP}.new"; echo "$CRON_MARK"; echo "$CRON_JOB"; } | crontab -
-  rm -f "$TMP" "${TMP}.new"
+
+  # Lệnh cron ở dạng 1 dòng, KHÔNG xuống dòng
+  CRON_CMD="$DOCKER_BIN restart $CONTAINER_NAME >/dev/null 2>&1 || ($DOCKER_BIN rm -f $CONTAINER_NAME >/dev/null 2>&1; $BASH_BIN $SCRIPT_PATH \"$WALLET_ADDRESS\" --no-swap $LANG_FLAG)"
+  CRON_JOB="$CRON_EXPR $CRON_CMD"
+
+  TMP="$(mktemp)"
+  # Lấy crontab hiện tại, loại bỏ mục cũ (nếu có), rồi thêm mới
+  {
+    crontab -l 2>/dev/null | grep -Fv "$CRON_MARK" | grep -Fv "$SCRIPT_PATH $WALLET_ADDRESS" || true
+    echo "$CRON_MARK"
+    echo "$CRON_JOB"
+  } > "$TMP"
+
+  # Cài crontab mới
+  crontab "$TMP"
+  rm -f "$TMP"
+
   print_success "$(printf "$CRON_DONE" "$CRON_JOB")"
 }
 
