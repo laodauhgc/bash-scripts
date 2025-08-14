@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Version: v1.4.3 | Update 13/08/2025
+# Version: v1.4.4 | Update 14/08/2025
 
 # =====================
 # Biến cấu hình
@@ -9,14 +9,14 @@ set -e
 CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
 LOG_FILE="/root/nexus_logs/nexus.log"
-CREDENTIALS_DIR="/root/nexus_credentials"  # Thư mục host mount vào /root/.nexus (RW)
-NODE_ID_FILE="/root/nexus_node_id.txt"     # File node_id ngoài container
+CREDENTIALS_DIR="/root/nexus_credentials"   # host mount -> /root/.nexus
+NODE_ID_FILE="/root/nexus_node_id.txt"      # nguồn 'chân lý' ngoài container
 SWAP_FILE="/swapfile"
 
-WALLET_ADDRESS="$1"
+WALLET_ADDRESS="${1-}"
 NO_SWAP=0
 LANGUAGE="vi"
-SETUP_CRON=0  # Mặc định không tự động thiết lập cron
+SETUP_CRON=0
 
 # =====================
 # Màu sắc & helpers
@@ -39,11 +39,11 @@ for arg in "$@"; do
 done
 
 # =====================
-# Thông điệp theo ngôn ngữ
+# Thông điệp theo ngôn ngữ (rút gọn vi/en)
 # =====================
 case $LANGUAGE in
   vi)
-    BANNER="===== Cài Đặt Node Nexus v1.4.3 (Hỗ trợ ARM) ====="
+    BANNER="===== Cài Đặt Node Nexus v1.4.4 (Hỗ trợ ARM) ====="
     ERR_NO_WALLET="Lỗi: Vui lòng cung cấp wallet address. Cách dùng: $0 <wallet_address> [--no-swap] [--en|--ru|--cn] [--setup-cron]"
     WARN_INVALID_FLAG="Cảnh báo: Flag không hợp lệ: %s. Bỏ qua."
     SKIP_SWAP_FLAG="Bỏ qua tạo swap theo yêu cầu (--no-swap)."
@@ -58,29 +58,29 @@ case $LANGUAGE in
     LOG_FILE_MSG="Log: %s"
     VIEW_LOG="Xem log theo thời gian thực: docker logs -f %s"
     NOT_LINUX="Hệ thống không phải Linux, bỏ qua tạo swap."
-    WARN_NO_RAM="Cảnh báo: Không thể xác định RAM hệ thống. Bỏ qua tạo swap."
-    RAM_DETECTED="Tổng RAM phát hiện: %s MB. Tiếp tục kiểm tra swap..."
-    SWAP_EXISTS="Swap đã tồn tại (%s MB), bỏ qua tạo swap."
-    INSUFFICIENT_DISK="Không đủ dung lượng ổ cứng (%s MB) để tạo tối thiểu (%s MB). Bỏ qua."
+    WARN_NO_RAM="Không thể xác định RAM. Bỏ qua tạo swap."
+    RAM_DETECTED="Tổng RAM phát hiện: %s MB."
+    SWAP_EXISTS="Swap đã tồn tại (%s MB), bỏ qua."
+    INSUFFICIENT_DISK="Không đủ dung lượng ổ cứng (%s MB < %s MB). Bỏ qua."
     WARN_INVALID_SWAP_SIZE="Kích thước swap không hợp lệ (%s MB). Bỏ qua."
     CREATING_SWAP="Tạo swap %s MB..."
     WARN_CREATE_SWAP_FAIL="Không thể tạo file swap. Bỏ qua."
     SWAP_CREATED="Swap đã được tạo và kích hoạt (%s MB)."
-    ERR_MISSING_WALLET="Lỗi: Thiếu wallet address hoặc node ID."
+    ERR_MISSING_WALLET="Thiếu wallet address hoặc node ID."
     REGISTERING_WALLET="Đăng ký ví với: %s"
     ERR_REGISTER_WALLET="Không thể đăng ký ví. Xem log:"
     REGISTERING_NODE="Đăng ký node..."
     ERR_REGISTER_NODE="Không thể đăng ký node. Xem log:"
     NODE_ID_SAVED="Node ID đã được lưu: %s"
     USING_EXISTING_NODE_ID="Sử dụng node ID hiện có: %s"
-    ARCH_DETECTED="Phát hiện kiến trúc: %s. Sử dụng CLI phù hợp."
+    ARCH_DETECTED="Phát hiện kiến trúc: %s."
     WAIT_NODE_ID="Đang chờ node ID... (timeout sau %s giây)"
     ERR_NO_NODE_ID="Không lấy được node ID sau thời gian chờ."
-    CRON_SETUP="Thiết lập cron job khởi tạo lại container mỗi giờ."
+    CRON_SETUP="Thiết lập cron job để tự khởi tạo lại container mỗi giờ."
     CRON_DONE="Cron job đã thiết lập: %s"
     ;;
-  en)
-    BANNER="===== Nexus Node Setup v1.4.3 (ARM Support) ====="
+  *) # en
+    BANNER="===== Nexus Node Setup v1.4.4 (ARM Support) ====="
     ERR_NO_WALLET="Error: Please provide wallet address. Usage: $0 <wallet_address> [--no-swap] [--en|--ru|--cn] [--setup-cron]"
     WARN_INVALID_FLAG="Warning: Invalid flag: %s. Skipping."
     SKIP_SWAP_FLAG="Skipping swap creation (--no-swap)."
@@ -98,38 +98,35 @@ case $LANGUAGE in
     WARN_NO_RAM="Unable to determine RAM. Skipping swap."
     RAM_DETECTED="Detected total RAM: %s MB."
     SWAP_EXISTS="Swap already exists (%s MB), skipping."
-    INSUFFICIENT_DISK="Insufficient disk (%s MB < %s MB). Skipping."
+    INSUFFICIENT_DISK="Insufficient disk space (%s MB < %s MB). Skipping."
     WARN_INVALID_SWAP_SIZE="Invalid swap size (%s MB). Skipping."
     CREATING_SWAP="Creating swap %s MB..."
-    WARN_CREATE_SWAP_FAIL="Unable to create swap. Skipping."
+    WARN_CREATE_SWAP_FAIL="Unable to create swap file. Skipping."
     SWAP_CREATED="Swap created and activated (%s MB)."
     ERR_MISSING_WALLET="Missing wallet address or node ID."
     REGISTERING_WALLET="Registering wallet: %s"
-    ERR_REGISTER_WALLET="Unable to register wallet. Log:"
+    ERR_REGISTER_WALLET="Unable to register wallet. Check log:"
     REGISTERING_NODE="Registering node..."
-    ERR_REGISTER_NODE="Unable to register node. Log:"
+    ERR_REGISTER_NODE="Unable to register node. Check log:"
     NODE_ID_SAVED="Node ID saved: %s"
     USING_EXISTING_NODE_ID="Using existing node ID: %s"
     ARCH_DETECTED="Detected architecture: %s."
     WAIT_NODE_ID="Waiting for node ID... (timeout after %s seconds)"
     ERR_NO_NODE_ID="Unable to get node ID after waiting."
-    CRON_SETUP="Setting up cron job to recreate container hourly."
+    CRON_SETUP="Setting up hourly container recreation."
     CRON_DONE="Cron job set: %s"
     ;;
-  ru|cn) ;; # (rút gọn để ngắn)
 esac
 
 print_info "$BANNER"
 
 # =====================
-# Kiểm tra WALLET
+# Kiểm tra wallet
 # =====================
-if [ -z "$WALLET_ADDRESS" ]; then
-  print_error "$ERR_NO_WALLET"; exit 1
-fi
+if [ -z "$WALLET_ADDRESS" ]; then print_error "$ERR_NO_WALLET"; exit 1; fi
 
 # =====================
-# Parse cờ còn lại
+# Parse các cờ còn lại
 # =====================
 for arg in "$@"; do
   case "$arg" in
@@ -141,15 +138,12 @@ for arg in "$@"; do
 done
 
 # =====================
-# Kiến trúc để chọn CLI
+# Kiến trúc & CLI URL
 # =====================
 ARCH=$(uname -m)
 print_info "$(printf "$ARCH_DETECTED" "$ARCH")"
 CLI_SUFFIX="linux-x86_64"; [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ] && CLI_SUFFIX="linux-arm64"
 
-# =====================
-# Lấy release mới nhất của nexus-cli
-# =====================
 if ! command -v jq >/dev/null 2>&1; then apt update && apt install -y jq; fi
 LATEST_TAG=$(curl -s https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest | jq -r .tag_name)
 CLI_URL="https://github.com/nexus-xyz/nexus-cli/releases/download/${LATEST_TAG}/nexus-network-${CLI_SUFFIX}"
@@ -157,7 +151,7 @@ CLI_URL="https://github.com/nexus-xyz/nexus-cli/releases/download/${LATEST_TAG}/
 # =====================
 # Swap (tùy chọn)
 # =====================
-create_swap(){ # (giữ nguyên như trước, rút gọn cho ngắn)
+create_swap(){
   if [ "$(uname -s)" != "Linux" ]; then print_warning "$NOT_LINUX"; return 0; fi
   total_ram=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null || echo "")
   [ -z "$total_ram" ] && total_ram=$(free -m | awk '/^Mem:/{print $2}')
@@ -178,11 +172,10 @@ create_swap(){ # (giữ nguyên như trước, rút gọn cho ngắn)
   grep -q "$SWAP_FILE" /etc/fstab 2>/dev/null || echo "$SWAP_FILE none swap sw 0 0" >> /etc/fstab
   print_success "$(printf "$SWAP_CREATED" "$swap_size")"
 }
-
-if [ "$NO_SWAP" = 1 ]; then print_warning "$SKIP_SWAP_FLAG"; else create_swap; fi
+[ "$NO_SWAP" = 1 ] && print_warning "$SKIP_SWAP_FLAG" || create_swap
 
 # =====================
-# Cài Docker nếu thiếu
+# Docker
 # =====================
 if ! command -v docker >/dev/null 2>&1; then
   print_progress "$INSTALLING_DOCKER"
@@ -193,68 +186,68 @@ fi
 docker ps >/dev/null 2>&1 || { print_error "$ERR_DOCKER_PERMISSION"; exit 1; }
 
 # =====================
-# Build image
+# Build image (here-doc TÁCH RIÊNG)
 # =====================
 build_image(){
   print_progress "$(printf "$BUILDING_IMAGE" "$IMAGE_NAME")"
   workdir=$(mktemp -d); cd "$workdir"
+
   cat > Dockerfile <<EOF
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y curl screen bash jq procps && rm -rf /var/lib/apt/lists/*
-RUN curl -L $CLI_URL -o /usr/local/bin/nexus-network && chmod +x /usr/local/bin/nexus-network
+RUN apt-get update && apt-get install -y curl screen bash jq procps ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN curl -L "$CLI_URL" -o /usr/local/bin/nexus-network && chmod +x /usr/local/bin/nexus-network
 RUN mkdir -p /root/.nexus
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
 EOF
 
-  cat > entrypoint.sh <<'EOF'
+  cat > entrypoint.sh <<'ENTRYPOINT'
 #!/bin/bash
 set -e
 
 mkdir -p /root/.nexus
 touch /root/nexus.log || true
 
-# Ưu tiên NODE_ID từ env, sau đó file, sau đó config.json (nếu có)
-if [ -z "$NODE_ID" ] && [ -f /root/.nexus/node_id ]; then
-  NODE_ID="$(tr -d ' \t\r\n' < /root/.nexus/node_id 2>/dev/null || true)"
+# Ưu tiên NODE_ID: env -> file -> config.json
+NODE_ID_VAL="${NODE_ID:-}"
+if [ -z "$NODE_ID_VAL" ] && [ -f /root/.nexus/node_id ]; then
+  NODE_ID_VAL="$(tr -d ' \t\r\n' < /root/.nexus/node_id 2>/dev/null || true)"
 fi
-if [ -z "$NODE_ID" ] && [ -f /root/.nexus/config.json ]; then
-  NODE_ID="$(jq -r '.node_id // empty' /root/.nexus/config.json 2>/dev/null || true)"
+if [ -z "$NODE_ID_VAL" ] && [ -f /root/.nexus/config.json ]; then
+  NODE_ID_VAL="$(jq -r '.node_id // empty' /root/.nexus/config.json 2>/dev/null || true)"
 fi
 
-if [ -z "$WALLET_ADDRESS" ] && [ -z "$NODE_ID" ]; then
+# Cần ít nhất WALLET hoặc NODE_ID
+if [ -z "$WALLET_ADDRESS" ] && [ -z "$NODE_ID_VAL" ]; then
   echo "❌ Missing wallet address or node ID"
   exit 1
 fi
 
-if [ -n "$NODE_ID" ]; then
-  echo "ℹ️ Using node ID: $NODE_ID"
+if [ -n "$NODE_ID_VAL" ]; then
+  echo "ℹ️ Using node ID: $NODE_ID_VAL"
 else
   echo "⏳ Registering wallet: $WALLET_ADDRESS"
   if ! nexus-network register-user --wallet-address "$WALLET_ADDRESS" &>> /root/nexus.log; then
-    echo "❌ Unable to register wallet"
-    cat /root/nexus.log; exit 1
+    echo "❌ Unable to register wallet"; cat /root/nexus.log; exit 1
   fi
   echo "⏳ Registering node..."
   if ! nexus-network register-node &>> /root/nexus.log; then
-    echo "❌ Unable to register node"
-    cat /root/nexus.log; exit 1
+    echo "❌ Unable to register node"; cat /root/nexus.log; exit 1
   fi
-  NODE_ID="$(jq -r '.node_id // empty' /root/.nexus/config.json 2>/dev/null || true)"
-  if [ -z "$NODE_ID" ]; then
-    echo "❌ Cannot extract node ID"
-    cat /root/nexus.log; exit 1
+  NODE_ID_VAL="$(jq -r '.node_id // empty' /root/.nexus/config.json 2>/dev/null || true)"
+  if [ -z "$NODE_ID_VAL" ]; then
+    echo "❌ Cannot extract node ID"; cat /root/nexus.log; exit 1
   fi
-  echo "ℹ️ Node ID created: $NODE_ID"
+  echo "ℹ️ Node ID created: $NODE_ID_VAL"
 fi
 
-# Luôn lưu node_id vào file để lần sau không cần config.json
-echo -n "$NODE_ID" > /root/.nexus/node_id
+# Persist node_id để lần sau luôn có
+echo -n "$NODE_ID_VAL" > /root/.nexus/node_id
 
-# Khởi động
-screen -dmS nexus bash -c "nexus-network start --node-id $NODE_ID &>> /root/nexus.log"
+# Start prover
+screen -dmS nexus bash -lc "nexus-network start --node-id $NODE_ID_VAL &>> /root/nexus.log"
 
 sleep 3
 if screen -list | grep -q "nexus"; then
@@ -264,7 +257,7 @@ else
 fi
 
 tail -f /root/nexus.log
-EOF
+ENTRYPOINT
 
   docker build -t "$IMAGE_NAME" . || { print_error "$(printf "$ERR_BUILD_IMAGE" "$IMAGE_NAME")"; cd - >/dev/null; rm -rf "$workdir"; exit 1; }
   cd - >/dev/null; rm -rf "$workdir"
@@ -280,21 +273,11 @@ run_container(){
   chmod 700 "$CREDENTIALS_DIR" || true
   : > "$LOG_FILE"; chmod 644 "$LOG_FILE"
 
-  # Lấy NODE_ID theo ưu tiên: NODE_ID_FILE -> node_id (trong volume) -> config.json
   NODE_ID=""
-  if [ -f "$NODE_ID_FILE" ]; then
-    NODE_ID="$(tr -d ' \t\r\n' < "$NODE_ID_FILE" 2>/dev/null || true)"
-  fi
-  if [ -z "$NODE_ID" ] && [ -f "$CREDENTIALS_DIR/node_id" ]; then
-    NODE_ID="$(tr -d ' \t\r\n' < "$CREDENTIALS_DIR/node_id" 2>/dev/null || true)"
-  fi
-  if [ -z "$NODE_ID" ] && [ -f "$CREDENTIALS_DIR/config.json" ]; then
-    NODE_ID="$(jq -r '.node_id // empty' "$CREDENTIALS_DIR/config.json" 2>/dev/null || true)"
-  fi
-  if [ -n "$NODE_ID" ]; then
-    echo -n "$NODE_ID" > "$NODE_ID_FILE"
-    print_info "$(printf "$USING_EXISTING_NODE_ID" "$NODE_ID")"
-  fi
+  if [ -f "$NODE_ID_FILE" ]; then NODE_ID="$(tr -d ' \t\r\n' < "$NODE_ID_FILE" 2>/dev/null || true)"; fi
+  if [ -z "$NODE_ID" ] && [ -f "$CREDENTIALS_DIR/node_id" ]; then NODE_ID="$(tr -d ' \t\r\n' < "$CREDENTIALS_DIR/node_id" 2>/dev/null || true)"; fi
+  if [ -z "$NODE_ID" ] && [ -f "$CREDENTIALS_DIR/config.json" ]; then NODE_ID="$(jq -r '.node_id // empty' "$CREDENTIALS_DIR/config.json" 2>/dev/null || true)"; fi
+  if [ -n "$NODE_ID" ]; then echo -n "$NODE_ID" > "$NODE_ID_FILE"; print_info "$(printf "$USING_EXISTING_NODE_ID" "$NODE_ID")"; fi
 
   docker run -d --name "$CONTAINER_NAME" \
     --restart unless-stopped \
@@ -311,7 +294,7 @@ run_container(){
   print_log  "$(printf "$LOG_FILE_MSG" "$LOG_FILE")"
   print_info "$(printf "$VIEW_LOG" "$CONTAINER_NAME")"
 
-  # Nếu chưa có NODE_ID lúc run, chờ entrypoint tạo file node_id trong volume
+  # Nếu NODE_ID trống lúc run -> đợi entrypoint tạo /root/.nexus/node_id
   if [ -z "$NODE_ID" ]; then
     TIMEOUT=120; WAIT_TIME=0
     print_progress "$(printf "$WAIT_NODE_ID" "$TIMEOUT")"
@@ -333,11 +316,12 @@ run_container(){
 }
 
 # =====================
-# Cron (idempotent, giữ nguyên logic)
+# Cron (idempotent)
 # =====================
 ensure_cron_installed(){ command -v crontab >/dev/null 2>&1 || { apt update && apt install -y cron; systemctl enable cron || true; systemctl start cron || true; }; }
 setup_hourly_cron(){
-  print_info "$CRON_SETUP"; ensure_cron_installed
+  print_info "$CRON_SETUP"
+  ensure_cron_installed
   SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
   LANG_FLAG=""; case "$LANGUAGE" in en|ru|cn) LANG_FLAG="--$LANGUAGE";; esac
   CRON_MARK="# NEXUS_NODE_RECREATE:$WALLET_ADDRESS - managed by $SCRIPT_PATH"
