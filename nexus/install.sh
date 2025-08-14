@@ -9,8 +9,8 @@ set -e
 CONTAINER_NAME="nexus-node"
 IMAGE_NAME="nexus-node:latest"
 LOG_FILE="/root/nexus_logs/nexus.log"
-CREDENTIALS_DIR="/root/nexus_credentials"   # host mount -> /root/.nexus
-NODE_ID_FILE="/root/nexus_node_id.txt"      # nguồn 'chân lý' ngoài container
+CREDENTIALS_DIR="/root/nexus_credentials"   
+NODE_ID_FILE="/root/nexus_node_id.txt"      
 SWAP_FILE="/swapfile"
 
 WALLET_ADDRESS="${1-}"
