@@ -26,13 +26,11 @@
      ```bash
      docker logs -f nexus-node
      ```
-   - Kiểm tra container:
+   - Kiểm tra tiến trình:
      ```bash
-     docker ps
+     docker exec nexus-node pgrep -a nexus-network
      ```
-   - Log lưu tại `/root/nexus_logs/nexus.log`.
-
-4. **Dừng node** (nếu cần):
-   ```bash
-   docker stop nexus-node && docker rm nexus-node
-   ```
+   - Kiểm tra phiên bản:
+      ```bash
+      docker exec nexus-node nexus-network --version
+      ```
