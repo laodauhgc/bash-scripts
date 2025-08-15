@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Version: v1.4.5 | Update 14/08/2025
+# Version: v1.4.6 | Update 15/08/2025
 
 # =====================
 # Biến cấu hình
@@ -53,7 +53,7 @@ done
 # =====================
 case $LANGUAGE in
   vi)
-    BANNER="===== Cài Đặt Node Nexus v1.4.5 (Hỗ trợ ARM) ====="
+    BANNER="===== Cài Đặt Node Nexus v1.4.6 (Hỗ trợ ARM) ====="
     ERR_NO_WALLET="Lỗi: Vui lòng cung cấp wallet address. Cách dùng: $0 <wallet_address> [--no-swap] [--en|--ru|--cn] [--setup-cron]"
     WARN_INVALID_FLAG="Cảnh báo: Flag không hợp lệ: %s. Bỏ qua."
     SKIP_SWAP_FLAG="Bỏ qua tạo swap theo yêu cầu (--no-swap)."
@@ -90,7 +90,7 @@ case $LANGUAGE in
     CRON_DONE="Cron job đã thiết lập: %s"
     ;;
   *)
-    BANNER="===== Nexus Node Setup v1.4.5 (ARM Support) ====="
+    BANNER="===== Nexus Node Setup v1.4.6 (ARM Support) ====="
     ERR_NO_WALLET="Error: Please provide wallet address. Usage: $0 <wallet_address> [--no-swap] [--en|--ru|--cn] [--setup-cron]"
     WARN_INVALID_FLAG="Warning: Invalid flag: %s. Skipping."
     SKIP_SWAP_FLAG="Skipping swap creation (--no-swap)."
@@ -145,7 +145,7 @@ for arg in "$@"; do
   case "$arg" in
     --no-swap) NO_SWAP=1 ;;
     --setup-cron) SETUP_CRON=1 ;;
-    --en|--ru|--cn) : ;; # đã xử lý ở bước trước
+    --en|--ru|--cn) : ;;
     *) print_warning "$(printf "$WARN_INVALID_FLAG" "$arg")" ;;
   esac
 done
@@ -271,8 +271,56 @@ fi
 # Persist node_id để lần sau luôn có
 echo -n "$NODE_ID_VAL" > /root/.nexus/node_id
 
-# Start prover
-screen -dmS nexus bash -lc "nexus-network start --node-id $NODE_ID_VAL &>> /root/nexus.log"
+# ===== Tính số threads: min(số CPU khả dụng, 8) =====
+detect_cpus() {
+  # Mặc định: số CPU khả dụng cho tiến trình (tôn trọng cpuset)
+  local cpus
+  if command -v nproc >/dev/null 2>&1; then
+    cpus="$(nproc 2>/dev/null || echo 1)"
+  else
+    cpus=1
+  fi
+
+  # Điều chỉnh theo CPU quota (nếu container bị giới hạn)
+  # cgroup v2: /sys/fs/cgroup/cpu.max -> "<quota> <period>" hoặc "max <period>"
+  if [ -r /sys/fs/cgroup/cpu.max ]; then
+    read -r quota period < /sys/fs/cgroup/cpu.max || true
+    if [ "${quota:-max}" != "max" ] && [ -n "$quota" ] && [ -n "$period" ] && [ "$period" -gt 0 ] 2>/dev/null; then
+      local q=$quota p=$period
+      local ceil=$(( (q + p - 1) / p ))
+      if [ "$ceil" -gt 0 ] && [ "$ceil" -lt "$cpus" ] 2>/dev/null; then
+        cpus=$ceil
+      fi
+    fi
+  # cgroup v1: cpu.cfs_quota_us / cpu.cfs_period_us
+  elif [ -r /sys/fs/cgroup/cpu/cpu.cfs_quota_us ] && [ -r /sys/fs/cgroup/cpu/cpu.cfs_period_us ]; then
+    local q p
+    q="$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us 2>/dev/null || echo -1)"
+    p="$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us 2>/dev/null || echo -1)"
+    if [ "$q" -gt 0 ] && [ "$p" -gt 0 ] 2>/dev/null; then
+      local ceil=$(( (q + p - 1) / p ))
+      if [ "$ceil" -gt 0 ] && [ "$ceil" -lt "$cpus" ] 2>/dev/null; then
+        cpus=$ceil
+      fi
+    fi
+  fi
+
+  # Ràng buộc tối thiểu
+  case "$cpus" in
+    ''|*[!0-9]*) cpus=1 ;;
+  esac
+  if [ "$cpus" -le 0 ] 2>/dev/null; then cpus=1; fi
+  echo "$cpus"
+}
+
+CPU_COUNT="$(detect_cpus)"
+MAX_THREADS="$CPU_COUNT"
+if [ "$MAX_THREADS" -gt 8 ] 2>/dev/null; then MAX_THREADS=8; fi
+
+echo "ℹ️ CPU available: $CPU_COUNT -> using --max-threads $MAX_THREADS"
+
+# Start prover với --max-threads
+screen -dmS nexus bash -lc "nexus-network start --node-id $NODE_ID_VAL --max-threads $MAX_THREADS &>> /root/nexus.log"
 
 sleep 3
 if screen -list | grep -q "nexus"; then
@@ -382,14 +430,12 @@ setup_hourly_cron() {
   CRON_JOB="$CRON_EXPR $CRON_CMD"
 
   TMP="$(mktemp)"
-  # Lấy crontab hiện tại, loại bỏ mục cũ (nếu có), rồi thêm mới
   {
     crontab -l 2>/dev/null | grep -Fv "$CRON_MARK" | grep -Fv "$SCRIPT_PATH $WALLET_ADDRESS" || true
     echo "$CRON_MARK"
     echo "$CRON_JOB"
   } > "$TMP"
 
-  # Cài crontab mới
   crontab "$TMP"
   rm -f "$TMP"
 
