@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Version: v1.5.1 | Update 16/08/2025
+# Version: v1.5.2 | Update 16/08/2025
 
 # =====================
 # Biến cấu hình
@@ -15,7 +15,7 @@ CRON_LOG="$LOG_DIR/cronjob.log"
 WATCHDOG_LOG="$LOG_DIR/watchdog.log"
 
 CREDENTIALS_DIR="/root/nexus_credentials"
-NODE_ID_FILE="/root/nexus_node_id.txt"   # GIỮ NGUYÊN - KHÔNG XÓA
+NODE_ID_FILE="/root/nexus_node_id.txt"   # KHÔNG XÓA
 SWAP_FILE="/swapfile"
 
 STATE_DIR="/root/nexus_state"
@@ -25,25 +25,16 @@ WALLET_ADDRESS="${1-}"
 NO_SWAP=0
 LANGUAGE="vi"
 SETUP_CRON=0
-MODE="normal"     # normal | watchdog | smart-update
+MODE="normal"     # normal | watchdog | update
 
 # =====================
 # Màu sắc & helpers
 # =====================
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
-
-print_success() { echo -e "${GREEN}✅ $1${NC}"; }
-print_error()   { echo -e "${RED}❌ $1${NC}"; }
-print_warning() { echo -e "${YELLOW}⚠️ $1${NC}"; }
-print_info()    { echo -e "${BLUE}ℹ️ $1${NC}"; }
-print_progress(){ echo -e "${CYAN}⏳ $1${NC}"; }
-print_node()    { echo -e "${GREEN}🚀 $1${NC}"; }
-print_log()     { echo -e "${CYAN}📜 $1${NC}"; }
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
+ok(){ echo -e "${GREEN}✅ $1${NC}"; }
+err(){ echo -e "${RED}❌ $1${NC}"; }
+warn(){ echo -e "${YELLOW}⚠️ $1${NC}"; }
+inf(){ echo -e "${BLUE}ℹ️ $1${NC}"; }
 
 # =====================
 # Bắt cờ ngôn ngữ sớm
@@ -58,106 +49,43 @@ for arg in "$@"; do
 done
 
 # =====================
-# Thông điệp theo ngôn ngữ (rút gọn vi/en)
+# Thông điệp (ngắn gọn)
 # =====================
 case $LANGUAGE in
   vi)
-    BANNER="===== Cài Đặt Node Nexus v1.5.1 (Smart Cron) ====="
-    ERR_NO_WALLET="Lỗi: Vui lòng cung cấp wallet address. Cách dùng: $0 <wallet> [--no-swap] [--en|--ru|--cn] [--setup-cron] [--watchdog|--smart-update]"
-    WARN_INVALID_FLAG="Cảnh báo: Flag không hợp lệ: %s. Bỏ qua."
-    SKIP_SWAP_FLAG="Bỏ qua tạo swap theo yêu cầu (--no-swap)."
-    INSTALLING_DOCKER="Cài đặt Docker..."
-    ERR_INSTALL_DOCKER="Lỗi: Không thể cài đặt Docker."
-    ERR_DOCKER_NOT_RUNNING="Lỗi: Docker daemon không chạy."
-    ERR_DOCKER_PERMISSION="Lỗi: Không có quyền chạy Docker."
-    BUILDING_IMAGE="Bắt đầu xây dựng image %s…"
-    ERR_BUILD_IMAGE="Lỗi: Không thể xây dựng image %s."
-    BUILD_IMAGE_SUCCESS="Xây dựng image %s thành công."
-    NODE_STARTED="Đã chạy node với wallet_address=%s."
-    LOG_FILE_MSG="Log: %s"
-    VIEW_LOG="Xem log: docker logs -f %s"
-    NOT_LINUX="Hệ thống không phải Linux, bỏ qua tạo swap."
-    WARN_NO_RAM="Không thể xác định RAM. Bỏ qua swap."
-    RAM_DETECTED="Tổng RAM phát hiện: %s MB."
-    SWAP_EXISTS="Swap đã tồn tại (%s MB), bỏ qua."
-    INSUFFICIENT_DISK="Không đủ dung lượng (%s MB < %s MB). Bỏ qua swap."
-    WARN_INVALID_SWAP_SIZE="Kích thước swap không hợp lệ (%s MB)."
-    CREATING_SWAP="Tạo swap %s MB..."
-    WARN_CREATE_SWAP_FAIL="Không thể tạo swap file. Bỏ qua."
-    SWAP_CREATED="Swap đã được tạo và kích hoạt (%s MB)."
-    ERR_MISSING_WALLET="Thiếu wallet address hoặc node ID."
-    REGISTERING_WALLET="Đăng ký ví: %s"
-    ERR_REGISTER_WALLET="Không thể đăng ký ví. Log:"
-    REGISTERING_NODE="Đăng ký node..."
-    ERR_REGISTER_NODE="Không thể đăng ký node. Log:"
-    NODE_ID_SAVED="Đã lưu Node ID: %s"
-    USING_EXISTING_NODE_ID="Dùng Node ID hiện có: %s"
-    ARCH_DETECTED="Phát hiện kiến trúc: %s."
-    WAIT_NODE_ID="Chờ node ID... (timeout %s giây)"
-    ERR_NO_NODE_ID="Không lấy được node ID sau khi chờ."
-    CRON_SETUP="Thiết lập cron: watchdog (5') + updater (12h). Dọn cron cũ."
-    CRON_DONE="Đã thiết lập cron thông minh."
+    BANNER="===== Cài Đặt Node Nexus v1.5.2 ====="
+    USE_INFO_CRON="Thiết lập cron định kỳ: kiểm tra container (5') và cập nhật nếu có phiên bản mới (12h)."
+    CRON_DONE="Đã thiết lập cron."
+    ERR_NO_WALLET="Lỗi: Vui lòng cung cấp wallet address. Dùng: $0 <wallet> [--no-swap] [--setup-cron]"
     ;;
   *)
-    BANNER="===== Nexus Node Setup v1.5.1 (Smart Cron) ====="
-    ERR_NO_WALLET="Error: Please provide wallet address. Usage: $0 <wallet> [--no-swap] [--en|--ru|--cn] [--setup-cron] [--watchdog|--smart-update]"
-    WARN_INVALID_FLAG="Warning: Invalid flag: %s. Skipping."
-    SKIP_SWAP_FLAG="Skipping swap creation (--no-swap)."
-    INSTALLING_DOCKER="Installing Docker..."
-    ERR_INSTALL_DOCKER="Error: Unable to install Docker."
-    ERR_DOCKER_NOT_RUNNING="Error: Docker daemon is not running."
-    ERR_DOCKER_PERMISSION="Error: No permission to run Docker."
-    BUILDING_IMAGE="Starting to build image %s..."
-    ERR_BUILD_IMAGE="Error: Unable to build image %s."
-    BUILD_IMAGE_SUCCESS="Built image %s successfully."
-    NODE_STARTED="Node started with wallet_address=%s."
-    LOG_FILE_MSG="Log: %s"
-    VIEW_LOG="View log: docker logs -f %s"
-    NOT_LINUX="System is not Linux, skipping swap."
-    WARN_NO_RAM="Unable to determine RAM. Skipping swap."
-    RAM_DETECTED="Detected total RAM: %s MB."
-    SWAP_EXISTS="Swap already exists (%s MB), skipping."
-    INSUFFICIENT_DISK="Insufficient disk space (%s MB < %s MB). Skipping swap."
-    WARN_INVALID_SWAP_SIZE="Invalid swap size (%s MB)."
-    CREATING_SWAP="Creating swap %s MB..."
-    WARN_CREATE_SWAP_FAIL="Unable to create swap file. Skipping."
-    SWAP_CREATED="Swap created and activated (%s MB)."
-    ERR_MISSING_WALLET="Missing wallet address or node ID."
-    REGISTERING_WALLET="Registering wallet: %s"
-    ERR_REGISTER_WALLET="Unable to register wallet. Log:"
-    REGISTERING_NODE="Registering node..."
-    ERR_REGISTER_NODE="Unable to register node. Log:"
-    NODE_ID_SAVED="Node ID saved: %s"
-    USING_EXISTING_NODE_ID="Using existing node ID: %s"
-    ARCH_DETECTED="Detected architecture: %s."
-    WAIT_NODE_ID="Waiting for node ID... (timeout %s seconds)"
-    ERR_NO_NODE_ID="Unable to get node ID after waiting."
-    CRON_SETUP="Setting smart cron: watchdog (5') + updater (12h). Cleaning old cron."
-    CRON_DONE="Smart cron configured."
+    BANNER="===== Nexus Node Setup v1.5.2 ====="
+    USE_INFO_CRON="Set up periodic cron: watchdog (5') and updater if new version (12h)."
+    CRON_DONE="Cron configured."
+    ERR_NO_WALLET="Error: Please provide wallet address. Usage: $0 <wallet> [--no-swap] [--setup-cron]"
     ;;
 esac
 
-print_info "$BANNER"
+inf "$BANNER"
 
 # =====================
 # Kiểm tra wallet
 # =====================
 if [ -z "$WALLET_ADDRESS" ]; then
-  print_error "$ERR_NO_WALLET"
-  exit 1
+  err "$ERR_NO_WALLET"; exit 1
 fi
 
 # =====================
-# Parse các cờ còn lại
+# Parse cờ còn lại
 # =====================
 for arg in "$@"; do
   case "$arg" in
     --no-swap) NO_SWAP=1 ;;
     --setup-cron) SETUP_CRON=1 ;;
-    --watchdog) MODE="watchdog" ;;
-    --smart-update) MODE="smart-update" ;;
-    --en|--ru|--cn) : ;; # đã xử lý
-    *) print_warning "$(printf "$WARN_INVALID_FLAG" "$arg")" ;;
+    --watchdog) MODE="watchdog" ;;   # nội bộ cho cron
+    --smart-update|--update) MODE="update" ;;  # tên cũ vẫn hỗ trợ
+    --en|--ru|--cn) : ;;
+    *) warn "Bỏ qua flag không hợp lệ: $arg" ;;
   esac
 done
 
@@ -167,14 +95,11 @@ done
 mkdir -p "$LOG_DIR" "$CREDENTIALS_DIR" "$STATE_DIR"
 
 # =====================
-# Kiến trúc & công cụ
+# Kiến trúc & tool
 # =====================
 ARCH=$(uname -m)
-print_info "$(printf "$ARCH_DETECTED" "$ARCH")"
-CLI_SUFFIX="linux-x86_64"
-if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-  CLI_SUFFIX="linux-arm64"
-fi
+inf "Phát hiện kiến trúc: $ARCH."
+CLI_SUFFIX="linux-x86_64"; [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ] && CLI_SUFFIX="linux-arm64"
 
 ensure_pkgs() {
   apt update
@@ -187,74 +112,64 @@ ensure_pkgs() {
 # Swap (tùy chọn)
 # =====================
 create_swap() {
-  if [ "$(uname -s)" != "Linux" ]; then print_warning "$NOT_LINUX"; return 0; fi
-  total_ram=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null || echo "")
-  if [ -z "$total_ram" ] || [ "$total_ram" -le 0 ]; then total_ram=$(free -m | awk '/^Mem:/{print $2}'); fi
-  if [ -z "$total_ram" ] || [ "$total_ram" -le 0 ]; then print_warning "$WARN_NO_RAM"; return 0; fi
-  print_info "$(printf "$RAM_DETECTED" "$total_ram")"
+  if [ "$(uname -s)" != "Linux" ]; then warn "Hệ thống không phải Linux, bỏ qua swap."; return 0; fi
+  total_ram=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null || true)
+  [ -z "$total_ram" ] && total_ram=$(free -m | awk '/^Mem:/{print $2}')
+  if [ -z "$total_ram" ] || [ "$total_ram" -le 0 ]; then warn "Không xác định được RAM, bỏ qua swap."; return 0; fi
+  inf "Tổng RAM phát hiện: ${total_ram} MB."
   if swapon --show | grep -q "$SWAP_FILE"; then
     current_swap=$(free -m | awk '/^Swap:/{print $2}')
-    if [ -n "$current_swap" ] && [ "$current_swap" -ge "$total_ram" ]; then
-      print_info "$(printf "$SWAP_EXISTS" "$current_swap")"
-      return 0
-    fi
+    [ -n "$current_swap" ] && [ "$current_swap" -ge "$total_ram" ] && { inf "Swap đã tồn tại (${current_swap} MB), bỏ qua."; return 0; }
     swapoff "$SWAP_FILE" || true
   fi
   min_swap=$total_ram; max_swap=$((total_ram*2))
   available_disk=$(df -BM --output=avail "$(dirname "$SWAP_FILE")" | tail -n1 | grep -o '[0-9]\+')
-  if [ -z "$available_disk" ] || [ "$available_disk" -lt "$min_swap" ]; then
-    print_warning "$(printf "$INSUFFICIENT_DISK" "$available_disk" "$min_swap")"
-    return 0
-  fi
-  if [ "$available_disk" -ge "$max_swap" ]; then swap_size=$max_swap; else swap_size=$min_swap; fi
-  print_progress "$(printf "$CREATING_SWAP" "$swap_size")"
+  [ -z "$available_disk" ] && available_disk=0
+  if [ "$available_disk" -lt "$min_swap" ]; then warn "Không đủ dung lượng (${available_disk} MB < ${min_swap} MB), bỏ qua swap."; return 0; fi
+  swap_size=$min_swap; [ "$available_disk" -ge "$max_swap" ] && swap_size=$max_swap
+  inf "Tạo swap ${swap_size} MB..."
   fallocate -l "${swap_size}M" "$SWAP_FILE" 2>/dev/null || dd if=/dev/zero of="$SWAP_FILE" bs=1M count="$swap_size"
-  chmod 600 "$SWAP_FILE"; mkswap "$SWAP_FILE"; swapon "$SWAP_FILE"
+  chmod 600 "$SWAP_FILE"; mkswap "$SWAP_FILE" >/dev/null; swapon "$SWAP_FILE"
   grep -q "$SWAP_FILE" /etc/fstab 2>/dev/null || echo "$SWAP_FILE none swap sw 0 0" >> /etc/fstab
-  print_success "$(printf "$SWAP_CREATED" "$swap_size")"
+  ok "Swap đã được tạo và kích hoạt (${swap_size} MB)."
 }
-if [ "$NO_SWAP" = 1 ]; then print_warning "$SKIP_SWAP_FLAG"; else create_swap; fi
+[ "$NO_SWAP" = 1 ] && warn "Bỏ qua tạo swap theo yêu cầu (--no-swap)." || create_swap
 
 # =====================
 # Docker
 # =====================
 if ! command -v docker >/dev/null 2>&1; then
-  print_progress "$INSTALLING_DOCKER"
-  apt update && apt install -y docker.io || { print_error "$ERR_INSTALL_DOCKER"; exit 1; }
+  inf "Cài đặt Docker..."
+  apt update && apt install -y docker.io || { err "Không thể cài đặt Docker."; exit 1; }
   systemctl enable docker || true; systemctl start docker || true
-  systemctl is-active --quiet docker || { print_error "$ERR_DOCKER_NOT_RUNNING"; exit 1; }
+  systemctl is-active --quiet docker || { err "Docker daemon không chạy."; exit 1; }
 fi
-docker ps >/dev/null 2>&1 || { print_error "$ERR_DOCKER_PERMISSION"; exit 1; }
+docker ps >/dev/null 2>&1 || { err "Không có quyền chạy Docker."; exit 1; }
 
 # =====================
-# Helpers: lấy tag mới nhất & URL
+# Helper tag & URL
 # =====================
 fetch_latest_tag() {
-  local tag
-  tag="$(curl -fsSL https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest | jq -r '.tag_name // empty' 2>/dev/null || true)"
-  echo -n "$tag"
+  curl -fsSL https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest \
+    | jq -r '.tag_name // empty' 2>/dev/null || true
 }
-cli_url_for_tag() {
-  local tag="$1"
-  echo -n "https://github.com/nexus-xyz/nexus-cli/releases/download/${tag}/nexus-network-${CLI_SUFFIX}"
-}
+cli_url_for_tag() { echo -n "https://github.com/nexus-xyz/nexus-cli/releases/download/$1/nexus-network-${CLI_SUFFIX}"; }
 
 # =====================
-# Build image (có --pull + CACHE_BUST) — cho 1 tag chỉ định
+# Build image (theo tag)
 # =====================
 build_image_for_tag() {
   local build_tag="$1"
   local target_cli_url; target_cli_url="$(cli_url_for_tag "$build_tag")"
+  inf "Bắt đầu xây dựng image $IMAGE_NAME…"
 
-  print_progress "$(printf "$BUILDING_IMAGE" "$IMAGE_NAME")"
-  local workdir; workdir="$(mktemp -d)"; cd "$workdir"
-
+  local wd; wd="$(mktemp -d)"; cd "$wd"
   cat > Dockerfile <<EOF
 FROM ubuntu:24.04
 ARG CACHE_BUST=1
 ENV DEBIAN_FRONTEND=noninteractive
 RUN echo "\$CACHE_BUST" >/dev/null
-RUN apt-get update && apt-get install -y curl screen bash jq procps ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y curl bash jq procps ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN curl -L "$target_cli_url" -o /usr/local/bin/nexus-network && chmod +x /usr/local/bin/nexus-network
 RUN mkdir -p /root/.nexus
 COPY entrypoint.sh /entrypoint.sh
@@ -262,6 +177,7 @@ RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
 EOF
 
+  # ENTRYPOINT: KHÔNG dùng screen; chạy trực tiếp, log vào file, healthcheck dùng pidof.
   cat > entrypoint.sh <<'ENTRYPOINT'
 #!/bin/bash
 set -e
@@ -269,6 +185,7 @@ set -e
 mkdir -p /root/.nexus
 touch /root/nexus.log || true
 
+# Lấy NODE_ID theo ưu tiên: env -> file -> config.json
 NODE_ID_VAL="${NODE_ID:-}"
 if [ -z "$NODE_ID_VAL" ] && [ -f /root/.nexus/node_id ]; then
   NODE_ID_VAL="$(tr -d ' \t\r\n' < /root/.nexus/node_id 2>/dev/null || true)"
@@ -277,84 +194,80 @@ if [ -z "$NODE_ID_VAL" ] && [ -f /root/.nexus/config.json ]; then
   NODE_ID_VAL="$(jq -r '.node_id // empty' /root/.nexus/config.json 2>/dev/null || true)"
 fi
 
-# Cần ít nhất WALLET hoặc NODE_ID
 if [ -z "$WALLET_ADDRESS" ] && [ -z "$NODE_ID_VAL" ]; then
-  echo "❌ Missing wallet address or node ID"
+  echo "❌ Missing wallet address or node ID" | tee -a /root/nexus.log
   exit 1
 fi
 
 if [ -n "$NODE_ID_VAL" ]; then
-  echo "ℹ️ Using node ID: $NODE_ID_VAL"
+  echo "ℹ️ Using node ID: $NODE_ID_VAL" | tee -a /root/nexus.log
 else
-  echo "⏳ Registering wallet: $WALLET_ADDRESS"
-  if ! nexus-network register-user --wallet-address "$WALLET_ADDRESS" &>> /root/nexus.log; then
-    echo "❌ Unable to register wallet"; cat /root/nexus.log; exit 1
+  echo "⏳ Registering wallet: $WALLET_ADDRESS" | tee -a /root/nexus.log
+  if ! nexus-network register-user --wallet-address "$WALLET_ADDRESS" >>/root/nexus.log 2>&1; then
+    echo "❌ Unable to register wallet" | tee -a /root/nexus.log; exit 1
   fi
-  echo "⏳ Registering node..."
-  if ! nexus-network register-node &>> /root/nexus.log; then
-    echo "❌ Unable to register node"; cat /root/nexus.log; exit 1
+  echo "⏳ Registering node..." | tee -a /root/nexus.log
+  if ! nexus-network register-node >>/root/nexus.log 2>&1; then
+    echo "❌ Unable to register node" | tee -a /root/nexus.log; exit 1
   fi
   NODE_ID_VAL="$(jq -r '.node_id // empty' /root/.nexus/config.json 2>/dev/null || true)"
   if [ -z "$NODE_ID_VAL" ]; then
-    echo "❌ Cannot extract node ID"; cat /root/nexus.log; exit 1
+    echo "❌ Cannot extract node ID" | tee -a /root/nexus.log; exit 1
   fi
-  echo "ℹ️ Node ID created: $NODE_ID_VAL"
+  echo -n "$NODE_ID_VAL" > /root/.nexus/node_id
+  echo "ℹ️ Node ID created: $NODE_ID_VAL" | tee -a /root/nexus.log
 fi
 
-# Persist node_id để lần sau luôn có
-echo -n "$NODE_ID_VAL" > /root/.nexus/node_id
-
-# ===== Tính số threads: min(số CPU khả dụng, 8) =====
+# Tính threads: min(CPU khả dụng, 8)
 detect_cpus() {
-  local cpus
-  if command -v nproc >/dev/null 2>&1; then cpus="$(nproc 2>/dev/null || echo 1)"; else cpus=1; fi
+  local cpus=1
+  if command -v nproc >/dev/null 2>&1; then cpus="$(nproc 2>/dev/null || echo 1)"; fi
   if [ -r /sys/fs/cgroup/cpu.max ]; then
     read -r quota period < /sys/fs/cgroup/cpu.max || true
     if [ "${quota:-max}" != "max" ] && [ -n "$quota" ] && [ -n "$period" ] && [ "$period" -gt 0 ] 2>/dev/null; then
       local ceil=$(( (quota + period - 1) / period ))
-      if [ "$ceil" -gt 0 ] && [ "$ceil" -lt "$cpus" ] 2>/dev/null; then cpus=$ceil; fi
+      [ "$ceil" -gt 0 ] && [ "$ceil" -lt "$cpus" ] 2>/dev/null && cpus=$ceil
     fi
   elif [ -r /sys/fs/cgroup/cpu/cpu.cfs_quota_us ] && [ -r /sys/fs/cgroup/cpu/cpu.cfs_period_us ]; then
     local q p; q="$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us 2>/dev/null || echo -1)"
     p="$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us 2>/dev/null || echo -1)"
     if [ "$q" -gt 0 ] && [ "$p" -gt 0 ] 2>/dev/null; then
       local ceil=$(( (q + p - 1) / p ))
-      if [ "$ceil" -gt 0 ] && [ "$ceil" -lt "$cpus" ] 2>/dev/null; then cpus=$ceil; fi
+      [ "$ceil" -gt 0 ] && [ "$ceil" -lt "$cpus" ] 2>/dev/null && cpus=$ceil
     fi
   fi
   case "$cpus" in ''|*[!0-9]*) cpus=1 ;; esac
-  if [ "$cpus" -le 0 ] 2>/dev/null; then cpus=1; fi
+  [ "$cpus" -le 0 ] && cpus=1
   echo "$cpus"
 }
-
 CPU_COUNT="$(detect_cpus)"
-MAX_THREADS="$CPU_COUNT"; if [ "$MAX_THREADS" -gt 8 ] 2>/dev/null; then MAX_THREADS=8; fi
-echo "ℹ️ CPU available: $CPU_COUNT -> using --max-threads $MAX_THREADS"
+MAX_THREADS="$CPU_COUNT"; [ "$MAX_THREADS" -gt 8 ] && MAX_THREADS=8
+echo "ℹ️ CPU available: $CPU_COUNT -> using --max-threads $MAX_THREADS" | tee -a /root/nexus.log
 
-# Start prover với --max-threads
-screen -dmS nexus bash -lc "nexus-network start --node-id \$NODE_ID_VAL --max-threads \$MAX_THREADS &>> /root/nexus.log"
+# Chạy tiến trình chính (nền), log vào file
+nexus-network start --node-id "$NODE_ID_VAL" --max-threads "$MAX_THREADS" >> /root/nexus.log 2>&1 &
+sleep 2
 
-sleep 3
-if screen -list | grep -q "nexus"; then
-  echo "🚀 Node started. Log: /root/nexus.log"
+# Kiểm tra đã lên PID chưa
+if pidof nexus-network >/dev/null 2>&1; then
+  echo "🚀 Node started. Log: /root/nexus.log" | tee -a /root/nexus.log
 else
-  echo "❌ Startup failed"; cat /root/nexus.log; exit 1
+  echo "❌ Startup failed" | tee -a /root/nexus.log
+  exit 1
 fi
 
-tail -f /root/nexus.log
+# Xuất log ra stdout để docker logs theo dõi
+exec tail -f /root/nexus.log
 ENTRYPOINT
 
   local BUILD_TS; BUILD_TS="$(date +%s)"
-  if ! docker build --pull -t "$IMAGE_NAME" --build-arg CACHE_BUST="$BUILD_TS" .; then
-    print_error "$(printf "$ERR_BUILD_IMAGE" "$IMAGE_NAME")"
-    cd - >/dev/null; rm -rf "$workdir"; exit 1
-  fi
-  cd - >/dev/null; rm -rf "$workdir"
-  print_success "$(printf "$BUILD_IMAGE_SUCCESS" "$IMAGE_NAME")"
+  docker build --pull -t "$IMAGE_NAME" --build-arg CACHE_BUST="$BUILD_TS" . >/dev/null
+  cd - >/dev/null; rm -rf "$wd"
+  ok "Xây dựng image $IMAGE_NAME thành công."
 }
 
 # =====================
-# Run container (idempotent)
+# Run container
 # =====================
 run_container() {
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
@@ -363,10 +276,10 @@ run_container() {
   : > "$LOG_FILE"; chmod 644 "$LOG_FILE"
 
   local NODE_ID=""
-  if [ -f "$NODE_ID_FILE" ]; then NODE_ID="$(tr -d ' \t\r\n' < "$NODE_ID_FILE" 2>/dev/null || true)"; fi
-  if [ -z "$NODE_ID" ] && [ -f "$CREDENTIALS_DIR/node_id" ]; then NODE_ID="$(tr -d ' \t\r\n' < "$CREDENTIALS_DIR/node_id" 2>/dev/null || true)"; fi
-  if [ -z "$NODE_ID" ] && [ -f "$CREDENTIALS_DIR/config.json" ]; then NODE_ID="$(jq -r '.node_id // empty' "$CREDENTIALS_DIR/config.json" 2>/dev/null || true)"; fi
-  if [ -n "$NODE_ID" ]; then echo -n "$NODE_ID" > "$NODE_ID_FILE"; print_info "$(printf "$USING_EXISTING_NODE_ID" "$NODE_ID")"; fi
+  [ -f "$NODE_ID_FILE" ] && NODE_ID="$(tr -d ' \t\r\n' < "$NODE_ID_FILE" 2>/dev/null || true)"
+  [ -z "$NODE_ID" ] && [ -f "$CREDENTIALS_DIR/node_id" ] && NODE_ID="$(tr -d ' \t\r\n' < "$CREDENTIALS_DIR/node_id" 2>/dev/null || true)"
+  [ -z "$NODE_ID" ] && [ -f "$CREDENTIALS_DIR/config.json" ] && NODE_ID="$(jq -r '.node_id // empty' "$CREDENTIALS_DIR/config.json" 2>/dev/null || true)"
+  [ -n "$NODE_ID" ] && echo -n "$NODE_ID" > "$NODE_ID_FILE" && inf "Dùng Node ID hiện có: $NODE_ID"
 
   docker run -d --name "$CONTAINER_NAME" \
     --restart unless-stopped \
@@ -377,16 +290,16 @@ run_container() {
     --health-cmd='pidof nexus-network || exit 1' \
     --health-interval=30s \
     --health-retries=3 \
-    "$IMAGE_NAME"
+    "$IMAGE_NAME" >/dev/null
 
-  print_node "$(printf "$NODE_STARTED" "$WALLET_ADDRESS")"
-  print_log  "$(printf "$LOG_FILE_MSG" "$LOG_FILE")"
-  print_info "$(printf "$VIEW_LOG" "$CONTAINER_NAME")"
+  ok "Đã chạy node với wallet_address=$WALLET_ADDRESS."
+  inf "Xem log: docker logs -f $CONTAINER_NAME"
 
   if [ -z "$NODE_ID" ]; then
-    local TIMEOUT=120; local WAIT_TIME=0
-    print_progress "$(printf "$WAIT_NODE_ID" "$TIMEOUT")"
-    while [ $WAIT_TIME -lt $TIMEOUT ]; do
+    # Lần đầu cần chờ node_id sinh ra
+    local TIMEOUT=120; local t=0
+    inf "Đang chờ node ID... (timeout ${TIMEOUT}s)"
+    while [ $t -lt $TIMEOUT ]; do
       if [ -f "$CREDENTIALS_DIR/node_id" ]; then
         NODE_ID="$(tr -d ' \t\r\n' < "$CREDENTIALS_DIR/node_id" 2>/dev/null || true)"
       elif [ -f "$CREDENTIALS_DIR/config.json" ]; then
@@ -394,17 +307,17 @@ run_container() {
       fi
       if [ -n "$NODE_ID" ]; then
         echo -n "$NODE_ID" > "$NODE_ID_FILE"
-        print_success "$(printf "$NODE_ID_SAVED" "$NODE_ID")"
-        return
+        ok "Đã lưu Node ID: $NODE_ID"
+        break
       fi
-      sleep 5; WAIT_TIME=$((WAIT_TIME+5))
+      sleep 5; t=$((t+5))
     done
-    print_error "$ERR_NO_NODE_ID"; exit 1
+    [ -z "$NODE_ID" ] && { err "Không lấy được node ID sau khi chờ."; exit 1; }
   fi
 }
 
 # =====================
-# Watchdog: chỉ restart khi unhealthy hoặc không chạy
+# Watchdog: restart khi unhealthy/không chạy
 # =====================
 watchdog() {
   ensure_pkgs
@@ -419,27 +332,27 @@ watchdog() {
   {
     echo "[$(date -Is)] status=$status health=$health"
     if [ "$status" = "running" ] && [ "$health" = "healthy" ]; then
-      echo "OK: container healthy."
+      echo "OK"
       exit 0
     fi
     if [ "$status" = "running" ] && [ "$health" = "starting" ]; then
-      echo "OK: container starting."
+      echo "starting"
       exit 0
     fi
     if [ "$status" = "running" ] && [ "$health" = "unhealthy" ]; then
-      echo "Action: docker restart $CONTAINER_NAME"
+      echo "restart"
       docker restart "$CONTAINER_NAME" >/dev/null 2>&1 || true
       exit 0
     fi
-    echo "Action: (re)create container"
+    echo "(re)create"
     run_container
   } >> "$WATCHDOG_LOG" 2>&1
 }
 
 # =====================
-# Smart update: chỉ rebuild khi có tag mới
+# Cập nhật theo tag mới (12h/lần)
 # =====================
-smart_update() {
+update_if_new() {
   ensure_pkgs
   local latest; latest="$(fetch_latest_tag)"
   if [ -z "$latest" ]; then
@@ -451,39 +364,31 @@ smart_update() {
     echo "[$(date -Is)] No update (latest=$latest)." >> "$CRON_LOG"
     return 0
   fi
-
   {
     echo "[$(date -Is)] Update: $current -> $latest"
     build_image_for_tag "$latest"
     run_container
     echo -n "$latest" > "$CLI_TAG_FILE"
-    echo "[$(date -Is)] Update done."
+    echo "[$(date -Is)] Done."
   } >> "$CRON_LOG" 2>&1
 }
 
 # =====================
-# Cron: dọn cron cũ + tạo watchdog/updater (idempotent)
+# Cron: gọn gàng, dọn cái cũ
 # =====================
-ensure_cron_installed() { ensure_pkgs; }
-
-setup_smart_cron() {
-  print_info "$CRON_SETUP"
-  ensure_cron_installed
-
+setup_cron() {
+  inf "$USE_INFO_CRON"
+  ensure_pkgs
   local SCRIPT_PATH; SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
   local LANG_FLAG=""
   case "$LANGUAGE" in en|ru|cn) LANG_FLAG="--$LANGUAGE" ;; esac
+  local BASH_BIN; BASH_BIN="$(command -v bash)"
+  local FLOCK_BIN; FLOCK_BIN="$(command -v flock || true)"
 
-  local BASH_BIN;   BASH_BIN="$(command -v bash)"
-  local FLOCK_BIN;  FLOCK_BIN="$(command -v flock || true)"
   mkdir -p "$LOG_DIR"
-
-  # Markers
-  local OLD_MARK="# NEXUS_NODE_RECREATE:$WALLET_ADDRESS"        # bản cũ
+  local OLD_MARK="# NEXUS_NODE_RECREATE:$WALLET_ADDRESS"
   local WD_MARK="# NEXUS_NODE_WATCHDOG:$WALLET_ADDRESS"
   local UP_MARK="# NEXUS_NODE_UPDATER:$WALLET_ADDRESS"
-
-  # PATH cho môi trường cron
   local PATHS="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   local LOCK_WD="/var/lock/nexus-watchdog.lock"
   local LOCK_UP="/var/lock/nexus-update.lock"
@@ -499,14 +404,13 @@ setup_smart_cron() {
 
   local UP_CMD="$PATHS; "
   if [ -n "$FLOCK_BIN" ]; then
-    UP_CMD+="$FLOCK_BIN -n $LOCK_UP $BASH_BIN $SCRIPT_PATH \"$WALLET_ADDRESS\" --no-swap $LANG_FLAG --smart-update >> $CRON_LOG 2>&1"
+    UP_CMD+="$FLOCK_BIN -n $LOCK_UP $BASH_BIN $SCRIPT_PATH \"$WALLET_ADDRESS\" --no-swap $LANG_FLAG --update >> $CRON_LOG 2>&1"
   else
-    UP_CMD+="$BASH_BIN $SCRIPT_PATH \"$WALLET_ADDRESS\" --no-swap $LANG_FLAG --smart-update >> $CRON_LOG 2>&1"
+    UP_CMD+="$BASH_BIN $SCRIPT_PATH \"$WALLET_ADDRESS\" --no-swap $LANG_FLAG --update >> $CRON_LOG 2>&1"
   fi
   local UP_EXPR="0 */12 * * *"
   local UP_JOB="$UP_EXPR $UP_CMD"
 
-  # Dọn cron cũ (restart mỗi giờ) & các bản cũ liên quan
   local TMP; TMP="$(mktemp)"
   {
     crontab -l 2>/dev/null \
@@ -515,43 +419,33 @@ setup_smart_cron() {
       | grep -Fv "NEXUS_NODE_WATCHDOG:" \
       | grep -Fv "NEXUS_NODE_UPDATER:" \
       || true
-    echo "$WD_MARK"
-    echo "$WD_JOB"
-    echo "$UP_MARK"
-    echo "$UP_JOB"
+    echo "$WD_MARK"; echo "$WD_JOB"
+    echo "$UP_MARK"; echo "$UP_JOB"
   } > "$TMP"
+  crontab "$TMP"; rm -f "$TMP"
 
-  crontab "$TMP"
-  rm -f "$TMP"
-
-  print_success "$CRON_DONE"
-  print_log "Watchdog log: $WATCHDOG_LOG"
-  print_log "Updater  log: $CRON_LOG"
+  ok "$CRON_DONE"
+  inf "Watchdog log: $WATCHDOG_LOG"
+  inf "Update  log: $CRON_LOG"
 }
 
 # =====================
 # Luồng chính theo MODE
 # =====================
 case "$MODE" in
-  watchdog)
-    watchdog
-    exit 0
-    ;;
-  smart-update)
-    smart_update
-    exit 0
-    ;;
+  watchdog)      watchdog; exit 0 ;;
+  update|smart-update) update_if_new; exit 0 ;;
   *)
     ensure_pkgs
     latest_now="$(fetch_latest_tag)"
     if [ -z "$latest_now" ]; then
-      print_warning "Không lấy được latest tag từ GitHub, vẫn build theo thời điểm hiện tại."
+      warn "Không lấy được tag mới nhất, vẫn build theo thời điểm hiện tại."
       latest_now="manual-$(date +%s)"
     fi
     build_image_for_tag "$latest_now"
     echo -n "$latest_now" > "$CLI_TAG_FILE"
     run_container
-    if [ "$SETUP_CRON" = 1 ]; then setup_smart_cron; fi
-    print_success "===== Hoàn Tất Cài Đặt (Smart) ====="
+    [ "$SETUP_CRON" = 1 ] && setup_cron
+    ok "===== Hoàn tất cài đặt ====="
     ;;
 esac
