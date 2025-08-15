@@ -11,13 +11,14 @@
 
 ## Cách sử dụng
 1. **Chuẩn bị ví Nexus**:
-   - Đăng nhập [app.nexus.xyz/nodes](https://app.nexus.xyz/nodes), lấy địa chỉ ví (ví dụ: `0x238a3a4ff431De579885D4xxx`).
+   - Đăng nhập [app.nexus.xyz/nodes](https://app.nexus.xyz/nodes), lấy địa chỉ ví (ví dụ: `0x238a3a4ff431De5xxxx`).
 
 2. **Chạy lệnh cài đặt**:
    ```bash
-   wget -O install.sh https://raw.githubusercontent.com/laodauhgc/bash-scripts/refs/heads/main/nexus/install.sh && chmod +x install.sh && ./install.sh 0x238a3a4ff431De579885D4xxx
+   curl -sSL https://raw.githubusercontent.com/laodauhgc/bash-scripts/refs/heads/main/nexus/install.sh -o /root/nexus_setup.sh && chmod +x /root/nexus_setup.sh && /bin/bash /root/nexus_setup.sh 0x238a3a4ff431De5xxxx --setup-cron
    ```
-   - Thay `0x238a3a4ff431De579885D4xxx` bằng ví của bạn.
+   - Thay `0x238a3a4ff431De5xxxx` bằng địa chỉ ví của bạn.
+   - Nếu gặp lỗi không thể lấy được NODE ID thì hãy ghi NODE ID vào file: `/root/nexus_node_id.txt` sau đó chạy lại lệnh trên.
    - Lệnh tải script, cấp quyền thực thi, cài Docker, tạo swap (1x-2x RAM), đăng ký node với ví, và chạy node.
 
 3. **Kiểm tra**:
