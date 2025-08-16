@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Version: v1.7.4 | Update 16/08/2025
+# Version: v1.7.5 | Update 16/08/2025
 
 # ===================== Cấu hình =====================
 CONTAINER_NAME="nexus-node"             # basename
@@ -26,7 +26,8 @@ SETUP_CRON=1
 
 LANGUAGE="vi"
 MODE="normal"      # normal | watchdog | update
-REPLICAS=1
+REPLICAS=1         # mặc định
+REPLICAS_SET=0     # chỉ ghi REPLICA_FILE khi user truyền -n
 DO_CLEAN=0         # --rm
 
 # ===================== Màu sắc & helpers =====================
@@ -42,13 +43,13 @@ for arg in "$@"; do
 done
 
 case $LANGUAGE in
-  vi) BANNER="===== Cài Đặt Node Nexus v1.7.4 ====="
+  vi) BANNER="===== Cài Đặt Node Nexus v1.7.5 ====="
       USE_INFO_CRON="Cron: watchdog 5' và kiểm tra phiên bản mỗi 1h (chỉ update khi có tag mới)."
       CRON_DONE="Đã thiết lập cron."
       ERR_NO_INPUT="Lỗi: Cần cung cấp wallet hoặc node id. Dùng: $0 [<wallet|node-id>] [-n <số>] [--wallet <addr>] [--node-id <id>] [--rm]"
       PROMPT_NODE_ID="API Nexus có thể lỗi khi đăng ký. Nhập NODE_ID của bạn (Enter để bỏ qua): "
       ;;
-  *)  BANNER="===== Nexus Node Setup v1.7.4 ====="
+  *)  BANNER="===== Nexus Node Setup v1.7.5 ====="
       USE_INFO_CRON="Cron: watchdog every 5m & hourly release check (update only on new tag)."
       CRON_DONE="Cron configured."
       ERR_NO_INPUT="Error: Provide a wallet or node id. Usage: $0 [<wallet|node-id>] [-n <num>] [--wallet <addr>] [--node-id <id>] [--rm]"
@@ -85,10 +86,10 @@ while [[ $# -gt 0 ]]; do
     -n|--nodes)
       [[ -z "${2-}" ]] && { err "Thiếu giá trị cho $1"; exit 1; }
       is_number "$2" && [[ "$2" -gt 1 ]] || { err "$1 phải là số > 1"; exit 1; }
-      REPLICAS="$2"; shift 2 ;;
+      REPLICAS="$2"; REPLICAS_SET=1; shift 2 ;;
     -n=*|--nodes=*)
       val="${1#*=}"; is_number "$val" && [[ "$val" -gt 1 ]] || { err "$1 phải là số > 1"; exit 1; }
-      REPLICAS="$val"; shift ;;
+      REPLICAS="$val"; REPLICAS_SET=1; shift ;;
     --no-swap) NO_SWAP=1; shift ;;
     --watchdog) MODE="watchdog"; shift ;;
     --smart-update|--update) MODE="update"; shift ;;
@@ -111,7 +112,8 @@ fi
 # ===================== Thư mục/log =====================
 mkdir -p "$LOG_DIR" "$CREDENTIALS_DIR" "$STATE_DIR"
 [ -n "$WALLET_ADDRESS" ] && echo -n "$WALLET_ADDRESS" > "$WALLET_FILE"
-echo -n "$REPLICAS" > "$REPLICA_FILE"
+# CHỈ lưu replicas khi user có truyền -n
+if [ "$REPLICAS_SET" -eq 1 ]; then echo -n "$REPLICAS" > "$REPLICA_FILE"; fi
 
 # ===================== Arch & tools =====================
 ARCH=$(uname -m); inf "Phát hiện kiến trúc: $ARCH."
@@ -308,8 +310,16 @@ log_file_for_index(){
   local w; w="$(pad_width "$total")"; printf "%s/%s-%0${w}d.log" "$LOG_DIR" "$CONTAINER_NAME" "$idx"
 }
 get_replicas(){
-  local n=""; [ -f "$REPLICA_FILE" ] && n="$(tr -d ' \t\r\n' < "$REPLICA_FILE" 2>/dev/null || true)"
-  case "$n" in ''|*[!0-9]*) n="$REPLICAS" ;; esac; [ -z "$n" ] && n=1; echo "$n"
+  # Ưu tiên file cấu hình
+  if [ -f "$REPLICA_FILE" ]; then
+    local n; n="$(tr -d ' \t\r\n' < "$REPLICA_FILE" 2>/dev/null || true)"
+    case "$n" in ''|*[!0-9]*) : ;; *) [ "$n" -ge 1 ] && echo "$n" && return ;; esac
+  fi
+  # Suy luận từ container đang có
+  local cnt; cnt=$(docker ps -a --format '{{.Names}}' | grep -E "^${CONTAINER_NAME}-[0-9]+$" | wc -l || echo 0)
+  if [ "$cnt" -gt 0 ]; then echo "$cnt"; return; fi
+  # Mặc định
+  echo 1
 }
 
 # ===================== Run 1 instance =====================
@@ -384,19 +394,28 @@ run_container_instance(){
 # ===================== Run N instances =====================
 run_containers(){
   local N="$1"; [ "$N" -le 0 ] && N=1
+  # Nếu scale >1, đảm bảo không còn container base
+  if [ "$N" -gt 1 ]; then docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true; fi
+
   if [ "$N" -eq 1 ]; then
     run_container_instance "$(container_name_for_index 1 1)" "$(log_file_for_index 1 1)"; return
   fi
+
   # Nếu chưa có node id => chạy instance đầu tiên lấy id
   local HAVE_ID=0
   if [ -s "$NODE_ID_FILE" ] || [ -n "$NODE_ID_CLI" ] || [ -s "$CREDENTIALS_DIR/node_id" ] || [ -s "$CREDENTIALS_DIR/config.json" ]; then
     HAVE_ID=1
   fi
+
+  local start=1
   if [ "$HAVE_ID" -eq 0 ]; then
     local n1; n1="$(container_name_for_index 1 "$N")"; local l1; l1="$(log_file_for_index 1 "$N")"
     inf "Chưa có node ID — khởi chạy $n1 trước để tạo ID..."; run_container_instance "$n1" "$l1"
+    start=2
   fi
-  local i; for i in $(seq 1 "$N"); do
+
+  local i
+  for i in $(seq "$start" "$N"); do
     run_container_instance "$(container_name_for_index "$i" "$N")" "$(log_file_for_index "$i" "$N")"
   done
 }
@@ -405,6 +424,7 @@ run_containers(){
 watchdog(){
   ensure_pkgs
   local N; N="$(get_replicas)"
+
   local i; for i in $(seq 1 "$N"); do
     local NAME; NAME="$(container_name_for_index "$i" "$N")"
     local status health
@@ -421,7 +441,7 @@ watchdog(){
     } >> "$WATCHDOG_LOG" 2>&1
   done
 
-  # Dọn container thừa > N
+  # Dọn container thừa > N (sai index)
   local extras; extras="$(docker ps -a --format '{{.Names}}' | grep -E "^${CONTAINER_NAME}-[0-9]+$" | sort || true)"
   if [ -n "$extras" ]; then
     local w; w="$(pad_width "$N")"
@@ -429,6 +449,12 @@ watchdog(){
     while read -r nm; do echo "$nm" | grep -Eq "^${CONTAINER_NAME}-(${keep})$" && continue
       { echo "[$(date -Is)] remove extra $nm"; docker rm -f "$nm" >/dev/null 2>&1 || true; } >> "$WATCHDOG_LOG" 2>&1
     done <<< "$extras"
+  fi
+
+  # Nếu scale >1 mà còn container base "nexus-node" thì xoá
+  if [ "$N" -gt 1 ] && docker ps -a --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
+    { echo "[$(date -Is)] remove base $CONTAINER_NAME (replicas=$N)";
+      docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true; } >> "$WATCHDOG_LOG" 2>&1
   fi
 }
 
