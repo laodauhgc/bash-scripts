@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Version: v1.7.3 | Update 16/08/2025
+# Version: v1.7.4 | Update 16/08/2025
 
 # ===================== Cấu hình =====================
 CONTAINER_NAME="nexus-node"             # basename
@@ -42,13 +42,13 @@ for arg in "$@"; do
 done
 
 case $LANGUAGE in
-  vi) BANNER="===== Cài Đặt Node Nexus v1.7.3 ====="
+  vi) BANNER="===== Cài Đặt Node Nexus v1.7.4 ====="
       USE_INFO_CRON="Cron: watchdog 5' và kiểm tra phiên bản mỗi 1h (chỉ update khi có tag mới)."
       CRON_DONE="Đã thiết lập cron."
       ERR_NO_INPUT="Lỗi: Cần cung cấp wallet hoặc node id. Dùng: $0 [<wallet|node-id>] [-n <số>] [--wallet <addr>] [--node-id <id>] [--rm]"
       PROMPT_NODE_ID="API Nexus có thể lỗi khi đăng ký. Nhập NODE_ID của bạn (Enter để bỏ qua): "
       ;;
-  *)  BANNER="===== Nexus Node Setup v1.7.3 ====="
+  *)  BANNER="===== Nexus Node Setup v1.7.4 ====="
       USE_INFO_CRON="Cron: watchdog every 5m & hourly release check (update only on new tag)."
       CRON_DONE="Cron configured."
       ERR_NO_INPUT="Error: Provide a wallet or node id. Usage: $0 [<wallet|node-id>] [-n <num>] [--wallet <addr>] [--node-id <id>] [--rm]"
@@ -64,7 +64,7 @@ NO_SWAP=0
 POSITIONAL=()
 
 is_number(){ [[ "$1" =~ ^[0-9]+$ ]]; }
-is_wallet_like(){ [[ "$1" =~ ^0x[0-9a-fA-F]{40}$ ]] ; } # 0x + 40 hex
+is_wallet_like(){ [[ "$1" =~ ^0x[0-9a-fA-F]{40}$ ]]; } # 0x + 40 hex
 deduce_primary(){
   local s="$1"; [ -z "$s" ] && return 0
   if is_wallet_like "$s"; then WALLET_ADDRESS="$s"; else NODE_ID_CLI="$s"; fi
@@ -162,14 +162,15 @@ docker ps >/dev/null 2>&1 || { err "Không có quyền chạy Docker."; exit 1; 
 fetch_latest_tag(){ curl -fsSL https://api.github.com/repos/nexus-xyz/nexus-cli/releases/latest | jq -r '.tag_name // empty' 2>/dev/null || true; }
 cli_url_for_tag(){ echo -n "https://github.com/nexus-xyz/nexus-cli/releases/download/$1/nexus-network-${CLI_SUFFIX}"; }
 
-# ===================== Clean ( --rm ) =====================
+# ===================== Clean & gỡ cron ( --rm ) =====================
 purge_cron(){
   if command -v crontab >/dev/null 2>&1; then
     local TMP; TMP="$(mktemp)"
-    crontab -l 2>/dev/null | grep -Fv "NEXUS_NODE_WATCHDOG" | grep -Fv "NEXUS_NODE_UPDATER" > "$TMP" || true
+    # Loại bỏ mọi dòng có nexus_setup.sh hoặc marker NEXUS_NODE_*
+    crontab -l 2>/dev/null | grep -Ev 'nexus_setup\.sh|NEXUS_NODE_(WATCHDOG|UPDATER)' > "$TMP" || true
     crontab "$TMP" 2>/dev/null || true
     rm -f "$TMP"
-    ok "Đã gỡ cron."
+    ok "Đã gỡ toàn bộ cron Nexus."
   else
     inf "Không tìm thấy 'crontab', bỏ qua gỡ cron."
   fi
@@ -465,6 +466,12 @@ setup_cron(){
   [ -s "$NODE_ID_FILE" ] && ARG_ID="--node-id $(tr -d ' \t\r\n' < "$NODE_ID_FILE")"
   [ -s "$WALLET_FILE"  ] && ARG_WALLET="--wallet $(tr -d ' \t\r\n' < "$WALLET_FILE")"
 
+  # Trước tiên: dọn sạch mọi dòng có nexus_setup.sh hoặc marker
+  local TMP; TMP="$(mktemp)"
+  crontab -l 2>/dev/null | grep -Ev 'nexus_setup\.sh|NEXUS_NODE_(WATCHDOG|UPDATER)' > "$TMP" || true
+  crontab "$TMP" 2>/dev/null || true
+  rm -f "$TMP"
+
   local WD_MARK="# NEXUS_NODE_WATCHDOG"
   local UP_MARK="# NEXUS_NODE_UPDATER"
   local PATHS="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -487,13 +494,15 @@ setup_cron(){
   fi
   local UP_EXPR="0 * * * *"; local UP_JOB="$UP_EXPR $UP_CMD"
 
-  local TMP; TMP="$(mktemp)"
+  # Ghi cron mới
+  local TMP2; TMP2="$(mktemp)"
   {
-    crontab -l 2>/dev/null | grep -Fv "NEXUS_NODE_WATCHDOG" | grep -Fv "NEXUS_NODE_UPDATER" || true
+    crontab -l 2>/dev/null || true
     echo "$WD_MARK"; echo "$WD_JOB"
     echo "$UP_MARK"; echo "$UP_JOB"
-  } > "$TMP"
-  crontab "$TMP"; rm -f "$TMP"
+  } > "$TMP2"
+  crontab "$TMP2"
+  rm -f "$TMP2"
 
   ok "$CRON_DONE"
   inf "Watchdog log: $WATCHDOG_LOG"
@@ -513,7 +522,7 @@ case "$MODE" in
   watchdog) ensure_pkgs; watchdog; exit 0 ;;
   update|smart-update) ensure_pkgs; update_if_new; exit 0 ;;
   *)
-    # --rm: delete-only rồi thoát (không apt, không build/run, không setup_cron)
+    # --rm: delete-only rồi thoát (KHÔNG apt build/run/cron)
     if [ "$DO_CLEAN" = "1" ]; then
       purge_cron
       clean_all
