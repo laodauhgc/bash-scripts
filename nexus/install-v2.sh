@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Version: v1.7.2 | Update 16/08/2025
+# Version: v1.7.3 | Update 16/08/2025
 
 # ===================== Cấu hình =====================
 CONTAINER_NAME="nexus-node"             # basename
@@ -42,13 +42,13 @@ for arg in "$@"; do
 done
 
 case $LANGUAGE in
-  vi) BANNER="===== Cài Đặt Node Nexus v1.7.2 ====="
+  vi) BANNER="===== Cài Đặt Node Nexus v1.7.3 ====="
       USE_INFO_CRON="Cron: watchdog 5' và kiểm tra phiên bản mỗi 1h (chỉ update khi có tag mới)."
       CRON_DONE="Đã thiết lập cron."
       ERR_NO_INPUT="Lỗi: Cần cung cấp wallet hoặc node id. Dùng: $0 [<wallet|node-id>] [-n <số>] [--wallet <addr>] [--node-id <id>] [--rm]"
       PROMPT_NODE_ID="API Nexus có thể lỗi khi đăng ký. Nhập NODE_ID của bạn (Enter để bỏ qua): "
       ;;
-  *)  BANNER="===== Nexus Node Setup v1.7.2 ====="
+  *)  BANNER="===== Nexus Node Setup v1.7.3 ====="
       USE_INFO_CRON="Cron: watchdog every 5m & hourly release check (update only on new tag)."
       CRON_DONE="Cron configured."
       ERR_NO_INPUT="Error: Provide a wallet or node id. Usage: $0 [<wallet|node-id>] [-n <num>] [--wallet <addr>] [--node-id <id>] [--rm]"
@@ -64,7 +64,7 @@ NO_SWAP=0
 POSITIONAL=()
 
 is_number(){ [[ "$1" =~ ^[0-9]+$ ]]; }
-is_wallet_like(){ [[ "$1" =~ ^0x[0-9a-fA-F]{40}$ ]]; } # 0x + 40 hex
+is_wallet_like(){ [[ "$1" =~ ^0x[0-9a-fA-F]{40}$ ]] ; } # 0x + 40 hex
 deduce_primary(){
   local s="$1"; [ -z "$s" ] && return 0
   if is_wallet_like "$s"; then WALLET_ADDRESS="$s"; else NODE_ID_CLI="$s"; fi
@@ -163,6 +163,18 @@ fetch_latest_tag(){ curl -fsSL https://api.github.com/repos/nexus-xyz/nexus-cli/
 cli_url_for_tag(){ echo -n "https://github.com/nexus-xyz/nexus-cli/releases/download/$1/nexus-network-${CLI_SUFFIX}"; }
 
 # ===================== Clean ( --rm ) =====================
+purge_cron(){
+  if command -v crontab >/dev/null 2>&1; then
+    local TMP; TMP="$(mktemp)"
+    crontab -l 2>/dev/null | grep -Fv "NEXUS_NODE_WATCHDOG" | grep -Fv "NEXUS_NODE_UPDATER" > "$TMP" || true
+    crontab "$TMP" 2>/dev/null || true
+    rm -f "$TMP"
+    ok "Đã gỡ cron."
+  else
+    inf "Không tìm thấy 'crontab', bỏ qua gỡ cron."
+  fi
+}
+
 clean_all(){
   warn "Đang dọn sạch containers & image (giữ $NODE_ID_FILE)..."
   # Xóa containers nexus-node & nexus-node-XX
@@ -497,15 +509,21 @@ has_any_input(){
   return 1
 }
 
-ensure_pkgs
-
 case "$MODE" in
-  watchdog) watchdog; exit 0 ;;
-  update|smart-update) update_if_new; exit 0 ;;
+  watchdog) ensure_pkgs; watchdog; exit 0 ;;
+  update|smart-update) ensure_pkgs; update_if_new; exit 0 ;;
   *)
+    # --rm: delete-only rồi thoát (không apt, không build/run, không setup_cron)
+    if [ "$DO_CLEAN" = "1" ]; then
+      purge_cron
+      clean_all
+      ok "Đã xóa xong theo --rm. Không cài lại."
+      exit 0
+    fi
+
+    ensure_pkgs
     has_any_input || { err "$ERR_NO_INPUT"; exit 1; }
-    [[ "$DO_CLEAN" == "1" ]] && clean_all
-    latest_now="$(fetch_latest_tag)"; [[ -z "$latest_now" ]] && { warn "Không lấy được tag mới nhất, build theo thời điểm hiện tại."; latest_now="manual-$(date +%s)"; }
+    latest_now="$(fetch_latest_tag)"; [ -z "$latest_now" ] && { warn "Không lấy được tag mới nhất, build theo thời điểm hiện tại."; latest_now="manual-$(date +%s)"; }
     build_image_for_tag "$latest_now"
     echo -n "$latest_now" > "$CLI_TAG_FILE"
     run_containers "$REPLICAS"
