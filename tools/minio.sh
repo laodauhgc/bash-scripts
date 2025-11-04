@@ -1,6 +1,7 @@
 #!/bin/bash
-# MinIO Installer & Manager - Fixed Full Version (2025-11)
-# Includes auto DNS check, dual-domain SSL, and webroot verification
+# MinIO S3 Installer & Manager - Full Production Edition
+# Ubuntu 22.04+ | Docker + Nginx + Let's Encrypt
+# Last update: 2025-11
 
 MINIO_DIR="/opt/minio"
 COMPOSE_FILE="$MINIO_DIR/docker-compose.yml"
@@ -14,7 +15,7 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 if [ "$EUID" -ne 0 ]; then
-  echo -e "${RED}❌ Vui lòng chạy script với quyền sudo.${NC}"
+  echo -e "${RED}❌ Script cần chạy với quyền sudo.${NC}"
   exit 1
 fi
 
@@ -38,8 +39,8 @@ check_docker() {
       | tee /etc/apt/sources.list.d/docker.list > /dev/null
     apt update -y
     apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-    echo -e "${GREEN}✅ Docker đã được cài đặt.${NC}"
   fi
+  echo -e "${GREEN}✅ Docker sẵn sàng.${NC}"
 }
 
 install_minio() {
@@ -77,47 +78,66 @@ EOF
   USER=$(grep MINIO_ROOT_USER $ENV_FILE | cut -d= -f2)
   PASS=$(grep MINIO_ROOT_PASSWORD $ENV_FILE | cut -d= -f2)
 
-  echo -e "${GREEN}✅ MinIO đã được khởi động.${NC}"
-  echo -e "👉 Truy cập web: ${CYAN}http://$IP:9091${NC}"
-  echo -e "Đăng nhập: ${YELLOW}$USER${NC} / ${YELLOW}$PASS${NC}"
+  echo -e "${GREEN}✅ MinIO đã chạy.${NC}"
+  echo -e "👉 Truy cập: ${CYAN}http://$IP:9091${NC}"
+  echo -e "Tài khoản: ${YELLOW}$USER${NC}"
+  echo -e "Mật khẩu: ${YELLOW}$PASS${NC}"
 }
 
 mc_connect() {
   ADMIN_USER=$(grep MINIO_ROOT_USER $ENV_FILE | cut -d= -f2)
   ADMIN_PASS=$(grep MINIO_ROOT_PASSWORD $ENV_FILE | cut -d= -f2)
-  if [ -f "$CERT_DIR/public.crt" ]; then
-    docker exec minio mc alias set local https://localhost:9000 $ADMIN_USER $ADMIN_PASS --insecure >/dev/null 2>&1
-  else
-    docker exec minio mc alias set local http://localhost:9000 $ADMIN_USER $ADMIN_PASS >/dev/null 2>&1
-  fi
+  docker exec minio mc alias set local http://localhost:9000 $ADMIN_USER $ADMIN_PASS >/dev/null 2>&1
 }
 
+# --- USER ---
+list_users() { mc_connect; docker exec minio mc admin user list local; }
+add_user() {
+  mc_connect; read -p "Tên user: " U; read -sp "Mật khẩu: " P; echo
+  docker exec minio mc admin user add local $U $P
+  docker exec minio mc admin policy attach local readwrite --user $U
+}
+delete_user() {
+  mc_connect; read -p "User cần xóa: " U
+  docker exec minio mc admin user remove local $U
+}
+
+# --- BUCKET ---
+list_buckets() { mc_connect; docker exec minio mc ls local; }
+create_bucket() { mc_connect; read -p "Tên bucket: " B; docker exec minio mc mb local/$B; }
+delete_bucket() { mc_connect; read -p "Bucket cần xóa: " B; docker exec minio mc rb --force local/$B; }
+set_bucket_quota() {
+  mc_connect
+  read -p "Bucket: " B; read -p "Giới hạn (VD: 50GB): " S; read -p "Cảnh báo (%): " W
+  docker exec minio mc admin bucket quota set local/$B --size $S --warn $W
+}
+show_bucket_quota() { mc_connect; read -p "Bucket: " B; docker exec minio mc admin bucket quota info local/$B; }
+
+# --- SSL / NGINX ---
 enable_ssl_nginx() {
   show_header
-  echo -e "${CYAN}[SSL] Reverse Proxy qua Nginx + Let’s Encrypt${NC}"
+  echo -e "${CYAN}[SSL] Reverse Proxy + Let's Encrypt${NC}"
   read -p "Nhập domain (VD: s3.example.com): " DOMAIN
 
-  echo -e "${YELLOW}→ Kiểm tra DNS cho $DOMAIN và api.$DOMAIN...${NC}"
   DOMAIN_IP=$(dig +short "$DOMAIN" A | tail -n1)
   API_IP=$(dig +short "api.$DOMAIN" A | tail -n1)
   SERVER_IP=$(curl -s4 ifconfig.me)
   echo -e "Server IP: ${CYAN}$SERVER_IP${NC}"
 
   if [ "$DOMAIN_IP" != "$SERVER_IP" ]; then
-    echo -e "${RED}❌ Domain $DOMAIN chưa trỏ về IP server.${NC}"
+    echo -e "${RED}❌ Domain $DOMAIN chưa trỏ đúng IP.${NC}"
     return
   fi
   if [ "$API_IP" != "$SERVER_IP" ]; then
-    echo -e "${RED}❌ Subdomain api.$DOMAIN chưa trỏ về IP server.${NC}"
+    echo -e "${RED}❌ Subdomain api.$DOMAIN chưa trỏ đúng IP.${NC}"
     return
   fi
 
   ufw allow 80,443/tcp >/dev/null 2>&1
   apt install -y nginx certbot python3-certbot-nginx
-
   mkdir -p /var/www/certbot
 
-  # --- HTTP block cho s3 và api ---
+  # Ghi cấu hình Nginx
   cat >/etc/nginx/sites-available/minio.conf <<NGX
 server {
   listen 80;
@@ -132,7 +152,7 @@ server {
   location / { return 301 https://\$host\$request_uri; }
 }
 
-# --- HTTPS Console ---
+# HTTPS Console
 server {
   listen 443 ssl http2;
   server_name $DOMAIN;
@@ -147,7 +167,7 @@ server {
   }
 }
 
-# --- HTTPS API ---
+# HTTPS API
 server {
   listen 443 ssl http2;
   server_name api.$DOMAIN;
@@ -156,7 +176,7 @@ server {
 
   location / {
     proxy_pass http://127.0.0.1:9090;
-    proxy_set_header Host \$host;
+    proxy_set_header Host $DOMAIN;
     proxy_set_header X-Forwarded-Proto \$scheme;
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
   }
@@ -166,40 +186,89 @@ NGX
   ln -sf /etc/nginx/sites-available/minio.conf /etc/nginx/sites-enabled/minio.conf
   nginx -t && systemctl reload nginx
 
-  echo -e "${YELLOW}→ Đang cấp chứng chỉ Let’s Encrypt...${NC}"
+  echo -e "${YELLOW}→ Cấp chứng chỉ Let's Encrypt...${NC}"
   certbot certonly --webroot -w /var/www/certbot -d "$DOMAIN" -d "api.$DOMAIN" --expand --agree-tos -m admin@"$DOMAIN" --non-interactive
   nginx -t && systemctl reload nginx
 
-  echo -e "${GREEN}✅ SSL đã cấu hình hoàn chỉnh.${NC}"
+  echo -e "${GREEN}✅ SSL hoàn tất.${NC}"
   echo -e "🔹 Web Console: ${CYAN}https://$DOMAIN${NC}"
-  echo -e "🔹 API cho Cyberduck: ${CYAN}https://api.$DOMAIN${NC}"
+  echo -e "🔹 API / Cyberduck: ${CYAN}https://api.$DOMAIN${NC}"
+
+  # Cập nhật ENV để fix redirect
+  echo "MINIO_SERVER_URL=https://api.$DOMAIN" >> $ENV_FILE
+  echo "MINIO_BROWSER_REDIRECT_URL=https://$DOMAIN" >> $ENV_FILE
+  docker compose -f $COMPOSE_FILE restart
 }
 
 uninstall_minio() {
-  read -p "Bạn có chắc muốn gỡ MinIO (y/n)? " c
-  if [[ "$c" == "y" ]]; then
-    docker compose -f $COMPOSE_FILE down
-    rm -rf $MINIO_DIR
-    rm -f /etc/nginx/sites-enabled/minio.conf /etc/nginx/sites-available/minio.conf
-    echo -e "${GREEN}✅ MinIO và cấu hình Nginx đã được gỡ bỏ.${NC}"
-  fi
+  read -p "Xác nhận gỡ MinIO (y/n)? " c
+  [[ "$c" != "y" ]] && return
+  docker compose -f $COMPOSE_FILE down
+  rm -rf $MINIO_DIR
+  rm -f /etc/nginx/sites-available/minio.conf /etc/nginx/sites-enabled/minio.conf
+  echo -e "${GREEN}✅ Đã gỡ bỏ MinIO & cấu hình Nginx.${NC}"
 }
 
-# === MENU CHÍNH ===
+user_menu() {
+  while true; do
+    clear
+    echo -e "${CYAN}--- QUẢN LÝ USER ---${NC}"
+    echo "1. Liệt kê user"
+    echo "2. Thêm user"
+    echo "3. Xóa user"
+    echo "0. Quay lại"
+    read -p "Chọn: " x
+    case $x in
+      1) list_users ;;
+      2) add_user ;;
+      3) delete_user ;;
+      0) break ;;
+      *) echo "Sai lựa chọn!" ;;
+    esac
+    read -p "Nhấn Enter..."
+  done
+}
+
+bucket_menu() {
+  while true; do
+    clear
+    echo -e "${CYAN}--- QUẢN LÝ BUCKET & QUOTA ---${NC}"
+    echo "1. Liệt kê bucket"
+    echo "2. Tạo bucket"
+    echo "3. Xóa bucket"
+    echo "4. Đặt quota"
+    echo "5. Xem quota"
+    echo "0. Quay lại"
+    read -p "Chọn: " b
+    case $b in
+      1) list_buckets ;;
+      2) create_bucket ;;
+      3) delete_bucket ;;
+      4) set_bucket_quota ;;
+      5) show_bucket_quota ;;
+      0) break ;;
+    esac
+    read -p "Nhấn Enter..."
+  done
+}
+
 while true; do
   show_header
   echo "1. Cài đặt MinIO (port 9090/9091)"
-  echo "2. Cấu hình SSL (Reverse Proxy qua Nginx)"
-  echo "3. Gỡ cài đặt MinIO"
+  echo "2. Cấu hình SSL (Nginx + domain)"
+  echo "3. Quản lý User"
+  echo "4. Quản lý Bucket & Quota"
+  echo "5. Gỡ cài đặt"
   echo "0. Thoát"
-  echo
-  read -p "Chọn [0-3]: " c
+  read -p "Chọn [0-5]: " c
   case "$c" in
     1) check_docker; install_minio ;;
     2) enable_ssl_nginx ;;
-    3) uninstall_minio ;;
-    0) echo "Thoát."; exit 0 ;;
-    *) echo "Tùy chọn không hợp lệ!";;
+    3) user_menu ;;
+    4) bucket_menu ;;
+    5) uninstall_minio ;;
+    0) exit 0 ;;
+    *) echo "Tùy chọn không hợp lệ!" ;;
   esac
   read -p "Nhấn Enter để quay lại menu..."
 done
