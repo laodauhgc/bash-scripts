@@ -62,7 +62,7 @@ EOF
 
   docker compose -f $COMPOSE_FILE up -d
   echo -e "${GREEN}MinIO đã được cài đặt và khởi động.${NC}"
-  echo -e "Truy cập giao diện: ${YELLOW}http://$(hostname -I | awk '{print $1}'):9091${NC}"
+  echo -e "Truy cập: ${YELLOW}http://$(hostname -I | awk '{print $1}'):9091${NC}"
   echo -e "Đăng nhập: $(grep MINIO_ROOT_USER $ENV_FILE | cut -d= -f2) / $(grep MINIO_ROOT_PASSWORD $ENV_FILE | cut -d= -f2)"
 }
 
@@ -84,7 +84,7 @@ add_user() {
   echo
   docker exec minio mc admin user add local $USERNAME $PASSWORD
   docker exec minio mc admin policy attach local readwrite --user $USERNAME
-  echo -e "${GREEN}Đã thêm user $USERNAME với quyền readwrite.${NC}"
+  echo -e "${GREEN}Đã thêm user $USERNAME.${NC}"
 }
 
 delete_user() {
@@ -140,23 +140,95 @@ set_global_quota() {
 }
 
 enable_ssl() {
-  echo -e "${GREEN}=== CẤU HÌNH SSL ===${NC}"
-  read -p "Nhập tên miền (VD: s3.example.com): " DOMAIN
-  apt install -y certbot
-  certbot certonly --standalone -d $DOMAIN --agree-tos -m admin@$DOMAIN --non-interactive
-  if [ $? -eq 0 ]; then
-    mkdir -p $CERT_DIR
-    cp /etc/letsencrypt/live/$DOMAIN/fullchain.pem $CERT_DIR/public.crt
-    cp /etc/letsencrypt/live/$DOMAIN/privkey.pem $CERT_DIR/private.key
-    docker compose -f $COMPOSE_FILE restart
-    CRON_FILE="/etc/cron.d/minio_ssl_renew"
-    echo "0 0,12 * * * root certbot renew --quiet && cp /etc/letsencrypt/live/$DOMAIN/fullchain.pem $CERT_DIR/public.crt && cp /etc/letsencrypt/live/$DOMAIN/privkey.pem $CERT_DIR/private.key && docker compose -f $COMPOSE_FILE restart > /dev/null 2>&1" > $CRON_FILE
-    chmod 644 $CRON_FILE
-    systemctl restart cron
-    echo -e "${GREEN}SSL đã được cấu hình và tự động gia hạn.${NC}"
-  else
-    echo -e "${YELLOW}Không thể lấy chứng chỉ SSL.${NC}"
+  echo -e "${GREEN}=== CẤU HÌNH SSL (MINIO SERVE TLS) ===${NC}"
+  read -p "Nhập domain (VD: s3.example.com): " DOMAIN
+
+  DOMAIN_IP=$(dig +short "$DOMAIN" A | tail -n1)
+  PUBLIC_IP=$(curl -4 -s ifconfig.me)
+  if [ -z "$DOMAIN_IP" ] || [ "$DOMAIN_IP" != "$PUBLIC_IP" ]; then
+    echo -e "${YELLOW}DNS chưa trỏ đúng. Domain IP: $DOMAIN_IP, Server IP: $PUBLIC_IP${NC}"
+    return
   fi
+
+  ufw allow 80,9090,9091/tcp >/dev/null 2>&1 || true
+  ufw reload >/dev/null 2>&1 || true
+  systemctl stop nginx 2>/dev/null || true
+  systemctl stop apache2 2>/dev/null || true
+
+  apt install -y certbot
+  certbot certonly --standalone -d "$DOMAIN" --agree-tos -m admin@"$DOMAIN" --non-interactive
+  if [ $? -ne 0 ]; then
+    echo -e "${YELLOW}Không thể cấp chứng chỉ. Kiểm tra DNS hoặc port 80.${NC}"
+    return
+  fi
+
+  mkdir -p "$CERT_DIR"
+  cp "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" "$CERT_DIR/public.crt"
+  cp "/etc/letsencrypt/live/$DOMAIN/privkey.pem"   "$CERT_DIR/private.key"
+  docker compose -f "$COMPOSE_FILE" restart
+
+  CRON_FILE="/etc/cron.d/minio_ssl_renew"
+  echo "0 0,12 * * * root certbot renew --quiet && cp /etc/letsencrypt/live/$DOMAIN/fullchain.pem $CERT_DIR/public.crt && cp /etc/letsencrypt/live/$DOMAIN/privkey.pem $CERT_DIR/private.key && docker compose -f $COMPOSE_FILE restart > /dev/null 2>&1" > "$CRON_FILE"
+  chmod 644 "$CRON_FILE"
+  systemctl restart cron
+
+  echo -e "${GREEN}Hoàn tất. Truy cập: https://$DOMAIN:9091${NC}"
+}
+
+enable_ssl_with_nginx() {
+  echo -e "${GREEN}=== CẤU HÌNH SSL VỚI NGINX (REVERSE PROXY) ===${NC}"
+  read -p "Nhập domain (VD: s3.example.com): " DOMAIN
+
+  DOMAIN_IP=$(dig +short "$DOMAIN" A | tail -n1)
+  PUBLIC_IP=$(curl -4 -s ifconfig.me)
+  if [ -z "$DOMAIN_IP" ] || [ "$DOMAIN_IP" != "$PUBLIC_IP" ]; then
+    echo -e "${YELLOW}DNS chưa trỏ đúng. Domain IP: $DOMAIN_IP, Server IP: $PUBLIC_IP${NC}"
+    return
+  fi
+
+  ufw allow 80,443/tcp >/dev/null 2>&1 || true
+  ufw reload >/dev/null 2>&1 || true
+  apt update
+  apt install -y nginx certbot python3-certbot-nginx
+
+  cat >/etc/nginx/sites-available/minio.conf <<NGX
+server {
+  listen 80;
+  server_name $DOMAIN;
+  location /.well-known/acme-challenge/ { root /var/www/certbot; }
+  location / { return 301 https://\$host\$request_uri; }
+}
+server {
+  listen 443 ssl http2;
+  server_name $DOMAIN;
+
+  ssl_certificate     /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
+
+  location / {
+    proxy_set_header Host \$host;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_pass http://127.0.0.1:9091;
+  }
+  location /s3/ {
+    rewrite ^/s3/(.*)$ /$1 break;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_pass http://127.0.0.1:9090;
+  }
+}
+NGX
+
+  mkdir -p /var/www/certbot
+  ln -sf /etc/nginx/sites-available/minio.conf /etc/nginx/sites-enabled/minio.conf
+  nginx -t && systemctl reload nginx
+
+  certbot certonly --webroot -w /var/www/certbot -d "$DOMAIN" --agree-tos -m admin@"$DOMAIN" --non-interactive
+  nginx -t && systemctl reload nginx
+
+  echo -e "${GREEN}Hoàn tất. Truy cập: https://$DOMAIN (console) hoặc https://$DOMAIN/s3/ (API).${NC}"
 }
 
 uninstall_minio() {
@@ -166,7 +238,7 @@ uninstall_minio() {
     docker compose -f $COMPOSE_FILE down
     rm -rf $MINIO_DIR
     rm -f /etc/cron.d/minio_ssl_renew
-    echo -e "${GREEN}Đã gỡ cài đặt MinIO và dọn cấu hình.${NC}"
+    echo -e "${GREEN}Đã gỡ MinIO và cấu hình liên quan.${NC}"
   fi
 }
 
@@ -225,13 +297,14 @@ while true; do
   echo "2. Khởi động MinIO"
   echo "3. Dừng MinIO"
   echo "4. Xem trạng thái MinIO"
-  echo "5. Cấu hình SSL (Let's Encrypt)"
+  echo "5. Cấu hình SSL (MinIO tự phục vụ)"
+  echo "9. Cấu hình SSL (Nginx reverse proxy 443)"
   echo "6. Quản lý User"
   echo "7. Quản lý Bucket & Quota"
   echo "8. Gỡ cài đặt MinIO"
   echo "0. Thoát"
   echo
-  read -rp "Chọn [0-8]: " c
+  read -rp "Chọn [0-9]: " c
 
   case "$c" in
     1) check_docker; install_minio ;;
@@ -239,6 +312,7 @@ while true; do
     3) docker compose -f "$COMPOSE_FILE" down ;;
     4) docker ps | grep minio || echo "MinIO chưa chạy." ;;
     5) enable_ssl ;;
+    9) enable_ssl_with_nginx ;;
     6) user_menu ;;
     7) bucket_menu ;;
     8) uninstall_minio ;;
