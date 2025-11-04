@@ -1,7 +1,7 @@
 #!/bin/bash
-# MinIO S3 Installer & Manager - Full Production Edition
+# MinIO S3 Installer & Manager - Final Production Version
 # Ubuntu 22.04+ | Docker + Nginx + Let's Encrypt
-# Last update: 2025-11
+# Fully fixed signature, redirect, and DNS issues
 
 MINIO_DIR="/opt/minio"
 COMPOSE_FILE="$MINIO_DIR/docker-compose.yml"
@@ -80,8 +80,7 @@ EOF
 
   echo -e "${GREEN}✅ MinIO đã chạy.${NC}"
   echo -e "👉 Truy cập: ${CYAN}http://$IP:9091${NC}"
-  echo -e "Tài khoản: ${YELLOW}$USER${NC}"
-  echo -e "Mật khẩu: ${YELLOW}$PASS${NC}"
+  echo -e "Đăng nhập: ${YELLOW}$USER${NC} / ${YELLOW}$PASS${NC}"
 }
 
 mc_connect() {
@@ -90,7 +89,7 @@ mc_connect() {
   docker exec minio mc alias set local http://localhost:9000 $ADMIN_USER $ADMIN_PASS >/dev/null 2>&1
 }
 
-# --- USER ---
+# === USER ===
 list_users() { mc_connect; docker exec minio mc admin user list local; }
 add_user() {
   mc_connect; read -p "Tên user: " U; read -sp "Mật khẩu: " P; echo
@@ -102,7 +101,7 @@ delete_user() {
   docker exec minio mc admin user remove local $U
 }
 
-# --- BUCKET ---
+# === BUCKET ===
 list_buckets() { mc_connect; docker exec minio mc ls local; }
 create_bucket() { mc_connect; read -p "Tên bucket: " B; docker exec minio mc mb local/$B; }
 delete_bucket() { mc_connect; read -p "Bucket cần xóa: " B; docker exec minio mc rb --force local/$B; }
@@ -113,7 +112,7 @@ set_bucket_quota() {
 }
 show_bucket_quota() { mc_connect; read -p "Bucket: " B; docker exec minio mc admin bucket quota info local/$B; }
 
-# --- SSL / NGINX ---
+# === SSL + NGINX ===
 enable_ssl_nginx() {
   show_header
   echo -e "${CYAN}[SSL] Reverse Proxy + Let's Encrypt${NC}"
@@ -137,7 +136,7 @@ enable_ssl_nginx() {
   apt install -y nginx certbot python3-certbot-nginx
   mkdir -p /var/www/certbot
 
-  # Ghi cấu hình Nginx
+  # --- NGINX CONFIG FIXED ---
   cat >/etc/nginx/sites-available/minio.conf <<NGX
 server {
   listen 80;
@@ -152,7 +151,7 @@ server {
   location / { return 301 https://\$host\$request_uri; }
 }
 
-# HTTPS Console
+# === HTTPS CONSOLE ===
 server {
   listen 443 ssl http2;
   server_name $DOMAIN;
@@ -167,7 +166,7 @@ server {
   }
 }
 
-# HTTPS API
+# === HTTPS API (FIXED HOST HEADER) ===
 server {
   listen 443 ssl http2;
   server_name api.$DOMAIN;
@@ -176,7 +175,7 @@ server {
 
   location / {
     proxy_pass http://127.0.0.1:9090;
-    proxy_set_header Host $DOMAIN;
+    proxy_set_header Host api.$DOMAIN;
     proxy_set_header X-Forwarded-Proto \$scheme;
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
   }
@@ -190,14 +189,17 @@ NGX
   certbot certonly --webroot -w /var/www/certbot -d "$DOMAIN" -d "api.$DOMAIN" --expand --agree-tos -m admin@"$DOMAIN" --non-interactive
   nginx -t && systemctl reload nginx
 
-  echo -e "${GREEN}✅ SSL hoàn tất.${NC}"
-  echo -e "🔹 Web Console: ${CYAN}https://$DOMAIN${NC}"
-  echo -e "🔹 API / Cyberduck: ${CYAN}https://api.$DOMAIN${NC}"
-
-  # Cập nhật ENV để fix redirect
+  # --- FIX ENV FOR REDIRECT & SIGNATURE ---
+  sed -i '/MINIO_SERVER_URL/d' $ENV_FILE
+  sed -i '/MINIO_BROWSER_REDIRECT_URL/d' $ENV_FILE
   echo "MINIO_SERVER_URL=https://api.$DOMAIN" >> $ENV_FILE
   echo "MINIO_BROWSER_REDIRECT_URL=https://$DOMAIN" >> $ENV_FILE
+
   docker compose -f $COMPOSE_FILE restart
+
+  echo -e "${GREEN}✅ SSL cấu hình hoàn tất.${NC}"
+  echo -e "🔹 Web Console: ${CYAN}https://$DOMAIN${NC}"
+  echo -e "🔹 API / Cyberduck: ${CYAN}https://api.$DOMAIN${NC}"
 }
 
 uninstall_minio() {
