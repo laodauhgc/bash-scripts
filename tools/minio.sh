@@ -66,10 +66,16 @@ EOF
   echo -e "Đăng nhập: $(grep MINIO_ROOT_USER $ENV_FILE | cut -d= -f2) / $(grep MINIO_ROOT_PASSWORD $ENV_FILE | cut -d= -f2)"
 }
 
+# --- Cấu hình alias mc thông minh (HTTPS hoặc HTTP) ---
 mc_connect() {
   ADMIN_USER=$(grep MINIO_ROOT_USER $ENV_FILE | cut -d= -f2)
   ADMIN_PASS=$(grep MINIO_ROOT_PASSWORD $ENV_FILE | cut -d= -f2)
-  docker exec minio mc alias set local http://localhost:9000 $ADMIN_USER $ADMIN_PASS > /dev/null 2>&1
+
+  if [ -f "$CERT_DIR/public.crt" ] && [ -f "$CERT_DIR/private.key" ]; then
+    docker exec minio mc alias set local https://localhost:9000 $ADMIN_USER $ADMIN_PASS --insecure > /dev/null 2>&1
+  else
+    docker exec minio mc alias set local http://localhost:9000 $ADMIN_USER $ADMIN_PASS > /dev/null 2>&1
+  fi
 }
 
 list_users() {
