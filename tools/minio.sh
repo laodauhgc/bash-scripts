@@ -214,7 +214,7 @@ NGX
   mkdir -p /var/www/certbot
   ln -sf /etc/nginx/sites-available/minio.conf /etc/nginx/sites-enabled/
   nginx -t && systemctl reload nginx
-  certbot certonly --webroot -w /var/www/certbot -d "$DOMAIN" -d "api.$DOMAIN" --agree-tos -m admin@"$DOMAIN" --non-interactive
+  certbot certonly --webroot -w /var/www/certbot -d "$DOMAIN" -d "api.$DOMAIN" --expand --agree-tos -m admin@"$DOMAIN" --non-interactive
   nginx -t && systemctl reload nginx
   echo -e "${GREEN}✅ SSL đã cấu hình. Truy cập:${NC}"
   echo -e "  - Web Console: ${CYAN}https://$DOMAIN${NC}"
