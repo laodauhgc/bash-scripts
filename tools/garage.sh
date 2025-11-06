@@ -2,7 +2,7 @@
 # Force UTF-8 để tránh lỗi hiển thị ký tự trên một số VPS
 export LC_ALL=C.UTF-8 LANG=C.UTF-8
 # Garage Menu Installer for Ubuntu 22.04 — dùng menu tương tác
-SCRIPT_VERSION="v1.2.3-2025-11-06"
+SCRIPT_VERSION="v1.3.0-2025-11-06"
 # Cách chạy: sudo bash garage_menu.sh
 
 set -euo pipefail
@@ -16,8 +16,8 @@ COMPOSE_FILE="$BASE_DIR/docker-compose.yml"
 NGINX_SITE="/etc/nginx/sites-available/garage_s3"
 GARAGE_IMAGE_TAG_DEFAULT="dxflrs/garage:v2.1.0"
 REGION_DEFAULT="garage"
-BUCKET_DEFAULT="demo"
-KEY_NAME_DEFAULT="demo-key"
+BUCKET_DEFAULT="f"
+KEY_NAME_DEFAULT="f-key"
 
 # ====== HÀM TIỆN ÍCH ======
 color() { echo -e "[1;${2}m$1[0m"; }
@@ -80,7 +80,7 @@ apt_install() {
   apt-get update -y
 
   # Gói chung
-  apt-get install -y ca-certificates curl gnupg lsb-release nginx certbot python3-certbot-nginx jq zip unzip
+  apt-get install -y ca-certificates curl gnupg lsb-release nginx certbot python3-certbot-nginx jq zip unzip awscli
 
   if command -v docker >/dev/null 2>&1; then
     info "Docker đã sẵn có → bỏ qua bước cài Docker."
@@ -239,8 +239,12 @@ init_cluster_single() {
 
 create_bucket() {
   wait_ready
+  if GCLI bucket info "$BUCKET_NAME" >/dev/null 2>&1; then
+    warn "Bucket '$BUCKET_NAME' đã tồn tại — bỏ qua."
+    return 0
+  fi
   info "Tạo bucket: $BUCKET_NAME"
-  GCLI bucket create "$BUCKET_NAME" || true
+  GCLI bucket create "$BUCKET_NAME"
 }
 
 create_key() {
@@ -373,18 +377,235 @@ configure_params() {
 }
 
 # ====== MENU CON ======
+# Helpers cho menu bucket/key
+bucket_exists() {
+  GCLI bucket info "$1" >/dev/null 2>&1
+}
+
+create_bucket_interactive() {
+  load_state; wait_ready
+  read -rp "Tên bucket mới [$BUCKET_NAME]: " b; b=${b:-$BUCKET_NAME}
+  if bucket_exists "$b"; then
+    warn "Bucket '$b' đã tồn tại."
+  else
+    info "Tạo bucket: $b"; GCLI bucket create "$b" || true
+  fi
+}
+
+create_key_interactive() {
+  load_state; wait_ready
+  read -rp "Tên key mới [$KEY_NAME]: " k; k=${k:-$KEY_NAME}
+  info "Tạo key: $k"
+  local OUT KEY_ID SECRET_KEY CREDS
+  OUT=$(GCLI key create "$k" || true)
+  echo "$OUT" | sed 's/^/  /'
+  KEY_ID=$(echo "$OUT" | awk -F': ' '/Key ID:/ {print $2; exit}')
+  SECRET_KEY=$(echo "$OUT" | awk -F': ' '/Secret key:/ {print $2; exit}')
+  if [[ -n "${KEY_ID:-}" && -n "${SECRET_KEY:-}" ]]; then
+    CREDS="/root/garage-credentials.txt"
+    cat > "$CREDS" <<CREDS
+S3_ENDPOINT=https://$S3_DOMAIN
+S3_REGION=$REGION
+AWS_ACCESS_KEY_ID=$KEY_ID
+AWS_SECRET_ACCESS_KEY=$SECRET_KEY
+BUCKET=$BUCKET_NAME
+CREDS
+    chmod 600 "$CREDS"
+    info "Đã lưu thông tin truy cập: $CREDS"
+  else
+    warn "Không parse được Key ID/Secret; có thể key đã tồn tại. Hãy dùng tên khác."
+  fi
+}
+
+allow_key_bucket_interactive() {
+  load_state; wait_ready
+  read -rp "Bucket cần cấp quyền [$BUCKET_NAME]: " b; b=${b:-$BUCKET_NAME}
+  read -rp "Key cần cấp quyền   [$KEY_NAME]: " k; k=${k:-$KEY_NAME}
+  info "Cấp quyền key '$k' ↔ bucket '$b'"
+  GCLI bucket allow --read --write --owner "$b" --key "$k"
+}
+
+list_buckets() {
+  load_state; wait_ready
+  info "Danh sách bucket:"
+  GCLI bucket list || true
+}
+
 menu_bucket_key() {
   PS3=$'Chọn tác vụ: '
   select opt in \
-    "Tạo bucket" \
-    "Tạo key" \
-    "Cấp quyền key ↔ bucket" \
+    "Tạo bucket (nhập tên)" \
+    "Tạo key (nhập tên)" \
+    "Cấp quyền (nhập bucket & key)" \
+    "Liệt kê bucket" \
     "Quay lại"; do
     case $REPLY in
-      1) load_state; create_bucket; pause ;;
-      2) load_state; create_key; pause ;;
-      3) load_state; allow_key_bucket; pause ;;
-      4) break ;;
+      1) create_bucket_interactive; pause ;;
+      2) create_key_interactive; pause ;;
+      3) allow_key_bucket_interactive; pause ;;
+      4) list_buckets; pause ;;
+      5) break ;;
+      *) echo "Chọn không hợp lệ" ;;
+    esac
+  done
+}
+
+# ====== WEBSITE (S3 Web) ======
+enable_website_stack() {
+  load_state
+  local BASE=${S3_DOMAIN#*.}
+  local WEB_DOMAIN="web.$BASE"
+  info "Bật website endpoint: root_domain=.$WEB_DOMAIN"
+  if ! grep -q "^\[s3_web\]" "$CFG_FILE"; then
+    cat >> "$CFG_FILE" <<EOF
+[s3_web]
+bind_addr = "0.0.0.0:3902"
+root_domain = ".${WEB_DOMAIN}"
+index = "index.html"
+EOF
+  fi
+  docker compose -f "$COMPOSE_FILE" restart || start_stack
+  local SITE="/etc/nginx/sites-available/garage_web"
+  cat > "$SITE" <<NGINX
+server { listen 80; listen [::]:80; server_name *.${WEB_DOMAIN} ${WEB_DOMAIN};
+  location / { proxy_pass http://127.0.0.1:3902; proxy_set_header Host $host; }
+}
+NGINX
+  ln -sf "$SITE" /etc/nginx/sites-enabled/garage_web
+  nginx -t && systemctl reload nginx
+  info "Đã bật website stack cho: ${WEB_DOMAIN} (HTTP). Dùng mục 'Cấp chứng thư website' để bật HTTPS."
+}
+
+website_allow_bucket_interactive() {
+  load_state; wait_ready
+  read -rp "Bucket cần public website [$BUCKET_NAME]: " b; b=${b:-$BUCKET_NAME}
+  info "Cho phép website cho bucket: $b"
+  GCLI bucket website --allow "$b" || true
+}
+
+website_disallow_bucket_interactive() {
+  load_state; wait_ready
+  read -rp "Bucket cần tắt website [$BUCKET_NAME]: " b; b=${b:-$BUCKET_NAME}
+  info "Tắt website cho bucket: $b"
+  GCLI bucket website --disallow "$b" || true
+}
+
+issue_web_cert_interactive() {
+  load_state
+  local BASE=${S3_DOMAIN#*.}
+  local WEB_DOMAIN="web.$BASE"
+  read -rp "Cấp HTTPS cho bucket nào [$BUCKET_NAME]: " b; b=${b:-$BUCKET_NAME}
+  info "Cấp cert cho: ${WEB_DOMAIN} và ${b}.${WEB_DOMAIN}"
+  certbot --nginx -d "$WEB_DOMAIN" -d "${b}.${WEB_DOMAIN}" -m "$EMAIL" --agree-tos --non-interactive || true
+}
+
+menu_website() {
+  PS3=$'Chọn tác vụ: '
+  select opt in \
+    "Bật website endpoint (s3_web + nginx)" \
+    "Cho phép website cho bucket" \
+    "Tắt website cho bucket" \
+    "Cấp chứng thư website (bucket + web.<domain>)" \
+    "Quay lại"; do
+    case $REPLY in
+      1) enable_website_stack; pause ;;
+      2) website_allow_bucket_interactive; pause ;;
+      3) website_disallow_bucket_interactive; pause ;;
+      4) issue_web_cert_interactive; pause ;;
+      5) break ;;
+      *) echo "Chọn không hợp lệ" ;;
+    esac
+  done
+}
+
+# ====== CÔNG CỤ S3 ======
+ensure_aws_env() {
+  if [[ -f /root/garage-credentials.txt ]]; then
+    # shellcheck disable=SC2046
+    export $(grep -E '^(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|S3_REGION|S3_ENDPOINT)=' /root/garage-credentials.txt | xargs)
+  fi
+  : "${AWS_ACCESS_KEY_ID:=}"
+  : "${AWS_SECRET_ACCESS_KEY:=}"
+  : "${S3_REGION:=$REGION}"
+  : "${S3_ENDPOINT:=https://$S3_DOMAIN}"
+  if [[ -z "$AWS_ACCESS_KEY_ID" || -z "$AWS_SECRET_ACCESS_KEY" ]]; then
+    read -rp "AWS_ACCESS_KEY_ID: " AWS_ACCESS_KEY_ID
+    read -rp "AWS_SECRET_ACCESS_KEY: " AWS_SECRET_ACCESS_KEY
+    export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+  fi
+  export AWS_DEFAULT_REGION="$S3_REGION"
+}
+
+s3_presign_interactive() {
+  load_state; ensure_aws_env
+  read -rp "Bucket [$BUCKET_NAME]: " b; b=${b:-$BUCKET_NAME}
+  read -rp "Đường dẫn object (vd path/file.txt): " o
+  read -rp "Hết hạn (phút) [60]: " m; m=${m:-60}
+  local secs=$((m*60))
+  aws --endpoint-url "$S3_ENDPOINT" s3 presign "s3://$b/$o" --expires-in "$secs" | sed 's/^/URL: /'
+}
+
+s3_upload_interactive() {
+  load_state; ensure_aws_env
+  read -rp "File local cần upload: " p
+  read -rp "Bucket [$BUCKET_NAME]: " b; b=${b:-$BUCKET_NAME}
+  read -rp "Object key (tên đích): " o
+  aws --endpoint-url "$S3_ENDPOINT" s3 cp "$p" "s3://$b/$o"
+}
+
+s3_download_interactive() {
+  load_state; ensure_aws_env
+  read -rp "Bucket [$BUCKET_NAME]: " b; b=${b:-$BUCKET_NAME}
+  read -rp "Object key (tên nguồn): " o
+  read -rp "Đích lưu local [./]: " d; d=${d:-./}
+  aws --endpoint-url "$S3_ENDPOINT" s3 cp "s3://$b/$o" "$d"
+}
+
+s3_list_bucket_interactive() {
+  load_state; ensure_aws_env
+  read -rp "Bucket cần liệt kê [$BUCKET_NAME]: " b; b=${b:-$BUCKET_NAME}
+  aws --endpoint-url "$S3_ENDPOINT" s3 ls "s3://$b/" --human-readable --summarize
+}
+
+menu_s3_tools() {
+  PS3=$'Chọn tác vụ: '
+  select opt in \
+    "Tạo pre-signed URL (download)" \
+    "Upload file lên S3" \
+    "Tải file từ S3" \
+    "Liệt kê nội dung bucket" \
+    "Quay lại"; do
+    case $REPLY in
+      1) s3_presign_interactive; pause ;;
+      2) s3_upload_interactive; pause ;;
+      3) s3_download_interactive; pause ;;
+      4) s3_list_bucket_interactive; pause ;;
+      5) break ;;
+      *) echo "Chọn không hợp lệ" ;;
+    esac
+  done
+}
+
+# ====== CHẨN ĐOÁN ======
+diag_status() { GCLI status || true; echo; GCLI layout show || true; }
+ndiag_logs() { docker logs --tail 200 "$SERVICE_NAME" 2>/dev/null || true; }
+diag_ports() { ss -ltnp | egrep ':(3900|3901|3902|80|443)\b' || true; }
+ndiag_nginx_test() { nginx -t || true; }
+
+menu_diag() {
+  PS3=$'Chọn tác vụ: '
+  select opt in \
+    "Garage status + layout show" \
+    "Xem 200 dòng log gần nhất" \
+    "Kiểm tra cổng lắng nghe" \
+    "Kiểm tra cấu hình Nginx" \
+    "Quay lại"; do
+    case $REPLY in
+      1) diag_status; pause ;;
+      2) diag_logs; pause ;;
+      3) diag_ports; pause ;;
+      4) diag_nginx_test; pause ;;
+      5) break ;;
       *) echo "Chọn không hợp lệ" ;;
     esac
   done
@@ -511,10 +732,13 @@ main_menu() {
     echo "6) Xem trạng thái"
     echo "7) Backup hệ thống → .tar.zst/.zip"
     echo "8) Khôi phục từ file backup .tar.zst/.zip"
-    echo "9) Gỡ cài đặt"
-    echo "10) Thoát"
+    echo "9) Website tĩnh (bật s3_web, allow, cert)"
+    echo "10) Công cụ S3 (presign, upload/download, ls)"
+    echo "11) Chẩn đoán (status/layout/logs/ports/nginx)"
+    echo "12) Gỡ cài đặt"
+    echo "13) Thoát"
     echo
-    read -rp "Chọn [1-10]: " choice
+    read -rp "Chọn [1-13]: " choice
     case "$choice" in
       1) full_install; pause ;;
       2) configure_params; pause ;;
@@ -524,8 +748,11 @@ main_menu() {
       6) show_status; pause ;;
       7) backup_all; pause ;;
       8) restore_all; pause ;;
-      9) uninstall_all; pause ;;
-      10) exit 0 ;;
+      9) menu_website ;;
+      10) menu_s3_tools ;;
+      11) menu_diag ;;
+      12) uninstall_all; pause ;;
+      13) exit 0 ;;
       *) echo "Chọn không hợp lệ"; sleep 1 ;;
     esac
   done
