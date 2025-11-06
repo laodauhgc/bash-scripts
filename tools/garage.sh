@@ -1,19 +1,9 @@
 #!/usr/bin/env bash
-# Force UTF-8 để tránh lỗi hiển thị ký tự trên một số VM
+# Force UTF-8 để tránh lỗi hiển thị ký tự trên một số VPS
 export LC_ALL=C.UTF-8 LANG=C.UTF-8
-# Garage Menu Installer for Ubuntu 22.04 
-# -------------------------------------------------------------
-# Chức năng:
-#   1) Cài đặt & triển khai (Docker, NGINX, Certbot, Garage, TLS)
-#   2) Thiết lập tham số (domain/email/bucket/key/region)
-#   3) Chỉnh sửa cấu hình Garage (/etc/garage.toml)
-#   4) Áp dụng cấu hình & khởi động lại Garage
-#   5) Tạo bucket / tạo key / cấp quyền
-#   6) Xem trạng thái hệ thống
-#   7) Gỡ cài đặt (tuỳ chọn xoá dữ liệu & chứng thư)
-# -------------------------------------------------------------
+# Garage Menu Installer for Ubuntu 22.04 — dùng menu tương tác
+SCRIPT_VERSION="v1.2.0-2025-11-06"
 # Cách chạy: sudo bash garage_menu.sh
-# Sau đó chọn mục trong menu.
 
 set -euo pipefail
 
@@ -225,11 +215,13 @@ wait_ready() {
 init_cluster_single() {
   wait_ready
   info "Thiết lập layout 1 node..."
-  local NODE_ID
-  NODE_ID=$(GCLI status | awk '/HEALTHY NODES/{flag=1; next} flag && NF {print $1; exit}')
+  local NODE_ID CUR NEW
+  NODE_ID=$(GCLI status | awk '/HEALTHY NODES/{flag=1; next} flag && NF && $1!="ID"{print $1; exit}')
   if [[ -z "${NODE_ID:-}" ]]; then err "Không đọc được NODE_ID"; exit 1; fi
   GCLI layout assign -z dc1 -c 1T "$NODE_ID" || true
-  GCLI layout apply --version 1 || true
+  CUR=$(GCLI layout show | awk -F': ' '/Current layout version/{print $2; exit}')
+  NEW=$(( ${CUR:-0} + 1 ))
+  GCLI layout apply --version "$NEW" || true
 }
 
 create_bucket() {
@@ -361,8 +353,10 @@ configure_params() {
   read -rp "Bucket mặc định    [$BUCKET_NAME]: " x; BUCKET_NAME=${x:-$BUCKET_NAME}
   read -rp "Key name mặc định  [$KEY_NAME]: " x; KEY_NAME=${x:-$KEY_NAME}
   read -rp "Region             [$REGION]: " x; REGION=${x:-$REGION}
-  read -rp "Garage image tag   [$GARAGE_IMAGE_TAG]: " x; GARAGE_IMAGE_TAG=${x:-$GARAGE_IMAGE_TAG}
+  read -rp "Thư mục lưu trữ BASE_DIR [$BASE_DIR]: " x; BASE_DIR=${x:-$BASE_DIR}
+  COMPOSE_FILE="$BASE_DIR/docker-compose.yml"
   save_state
+  setup_dirs
 }
 
 # ====== MENU CON ======
@@ -485,7 +479,7 @@ main_menu() {
   need_root; load_state
   while true; do
     clear
-    echo "Garage Menu Installer — Ubuntu 22.04 (có Backup/Restore)"
+    echo "Garage Menu Installer — Ubuntu 22.04 — $SCRIPT_VERSION"
     echo "========================================================="
     echo "S3 domain : $S3_DOMAIN"
     echo "Email     : $EMAIL"
@@ -494,15 +488,16 @@ main_menu() {
     echo "Region    : $REGION"
     echo "Image     : $GARAGE_IMAGE_TAG"
     echo "CFG file  : $CFG_FILE"
+    echo "Storage   : $BASE_DIR"
     echo
     echo "1) Cài đặt & triển khai đầy đủ"
-    echo "2) Thiết lập tham số (domain/email/bucket/key/region)"
+    echo "2) Thiết lập tham số (domain/email/bucket/key/region/BASE_DIR)"
     echo "3) Chỉnh sửa cấu hình Garage (mở $CFG_FILE)"
     echo "4) Áp dụng cấu hình & khởi động lại Garage"
     echo "5) Bucket / Key / Quyền (tiện ích)"
     echo "6) Xem trạng thái"
-    echo "7) Backup hệ thống → .tar.zst"
-    echo "8) Khôi phục từ file backup .tar.zst"
+    echo "7) Backup hệ thống → .tar.zst/.zip"
+    echo "8) Khôi phục từ file backup .tar.zst/.zip"
     echo "9) Gỡ cài đặt"
     echo "10) Thoát"
     echo
