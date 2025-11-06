@@ -2,7 +2,7 @@
 # Force UTF-8 để tránh lỗi hiển thị ký tự trên một số VPS
 export LC_ALL=C.UTF-8 LANG=C.UTF-8
 # Garage Menu Installer for Ubuntu 22.04 — dùng menu tương tác
-SCRIPT_VERSION="v1.3.4-2025-11-06"
+SCRIPT_VERSION="v1.3.6-2025-11-06"
 # Cách chạy: sudo bash garage_menu.sh
 
 set -euo pipefail
@@ -16,8 +16,8 @@ COMPOSE_FILE="$BASE_DIR/docker-compose.yml"
 NGINX_SITE="/etc/nginx/sites-available/garage_s3"
 GARAGE_IMAGE_TAG_DEFAULT="dxflrs/garage:v2.1.0"
 REGION_DEFAULT="garage"
-BUCKET_DEFAULT="f"
-KEY_NAME_DEFAULT="f-key"
+BUCKET_DEFAULT="default"
+KEY_NAME_DEFAULT="df-key"
 
 # ====== HÀM TIỆN ÍCH ======
 color() { echo -e "[1;${2}m$1[0m"; }
@@ -454,9 +454,14 @@ menu_bucket_key() {
 
 # ====== CÔNG CỤ S3 ======
 ensure_aws_env() {
+  load_state
+  # Nạp từ file cred nếu có (an toàn, không dùng xargs/export kiểu dễ vỡ)
   if [[ -f /root/garage-credentials.txt ]]; then
-    # shellcheck disable=SC2046
-    export $(grep -E '^(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|S3_REGION|S3_ENDPOINT)=' /root/garage-credentials.txt | xargs)
+    sed -i 's/
+$//' /root/garage-credentials.txt 2>/dev/null || true
+    set -a
+    . /root/garage-credentials.txt
+    set +a
   fi
   : "${AWS_ACCESS_KEY_ID:=}"
   : "${AWS_SECRET_ACCESS_KEY:=}"
@@ -465,9 +470,8 @@ ensure_aws_env() {
   if [[ -z "$AWS_ACCESS_KEY_ID" || -z "$AWS_SECRET_ACCESS_KEY" ]]; then
     read -rp "AWS_ACCESS_KEY_ID: " AWS_ACCESS_KEY_ID
     read -rp "AWS_SECRET_ACCESS_KEY: " AWS_SECRET_ACCESS_KEY
-    export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
   fi
-  export AWS_DEFAULT_REGION="$S3_REGION"
+  export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_DEFAULT_REGION="$S3_REGION"
 }
 
 s3_presign_interactive() {
