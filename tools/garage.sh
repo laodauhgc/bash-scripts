@@ -2,7 +2,7 @@
 # Force UTF-8 để tránh lỗi hiển thị ký tự trên một số VPS
 export LC_ALL=C.UTF-8 LANG=C.UTF-8
 # Garage Menu Installer for Ubuntu 22.04 — dùng menu tương tác
-SCRIPT_VERSION="v1.3.0-2025-11-06"
+SCRIPT_VERSION="v1.3.1-2025-11-06"
 # Cách chạy: sudo bash garage_menu.sh
 
 set -euo pipefail
@@ -589,8 +589,14 @@ menu_s3_tools() {
 # ====== CHẨN ĐOÁN ======
 diag_status() { GCLI status || true; echo; GCLI layout show || true; }
 ndiag_logs() { docker logs --tail 200 "$SERVICE_NAME" 2>/dev/null || true; }
-diag_ports() { ss -ltnp | egrep ':(3900|3901|3902|80|443)\b' || true; }
+diag_ports() { ss -ltnp | egrep ':(3900|3901|3902|80|443)' || true; }
 ndiag_nginx_test() { nginx -t || true; }
+
+# (Re)define diagnostic helpers to ensure availability
+diag_status() { GCLI status || true; echo; GCLI layout show || true; }
+diag_logs() { docker logs --tail 200 "$SERVICE_NAME" 2>/dev/null || true; }
+diag_ports() { command -v ss >/dev/null 2>&1 && ss -ltnp | egrep ':(3900|3901|3902|80|443)' || netstat -ltnp 2>/dev/null | egrep ':(3900|3901|3902|80|443)' || true; }
+diag_nginx_test() { nginx -t || true; }
 
 menu_diag() {
   PS3=$'Chọn tác vụ: '
