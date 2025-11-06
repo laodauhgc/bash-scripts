@@ -2,7 +2,7 @@
 # Force UTF-8 để tránh lỗi hiển thị ký tự trên một số VPS
 export LC_ALL=C.UTF-8 LANG=C.UTF-8
 # Garage Menu Installer for Ubuntu 22.04 — dùng menu tương tác
-SCRIPT_VERSION="v1.2.1-2025-11-06"
+SCRIPT_VERSION="v1.2.2-2025-11-06"
 # Cách chạy: sudo bash garage_menu.sh
 
 set -euo pipefail
@@ -214,7 +214,6 @@ GCLI() { docker compose -f "$COMPOSE_FILE" exec -T $SERVICE_NAME /garage -c /etc
 
 wait_ready() {
   info "Chờ Garage sẵn sàng..."
-  # thử lâu hơn và khoan báo lỗi sớm
   for i in {1..60}; do
     if GCLI status >/dev/null 2>&1; then return 0; fi
     sleep 1
@@ -232,7 +231,7 @@ init_cluster_single() {
   wait_ready
   info "Thiết lập layout 1 node..."
   local NODE_ID CUR NEW
-  NODE_ID=$(GCLI status 2>/dev/null | awk '/^[0-9a-f]{16}/{print $1; exit}')
+  NODE_ID=$(GCLI status 2>/dev/null | awk '/^[0-9a-f]{16}/ {print $1; exit}')
   if [[ -z "${NODE_ID:-}" ]]; then
     NODE_ID=$(docker logs --since 15m "$SERVICE_NAME" 2>/dev/null | awk 'match($0,/Node ID of this node: ([0-9a-f]+)/,m){print m[1]; exit}')
   fi
