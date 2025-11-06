@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Garage Menu Installer for Ubuntu 22.04
+# Force UTF-8 để tránh lỗi hiển thị ký tự trên một số VM
+export LC_ALL=C.UTF-8 LANG=C.UTF-8
+# Garage Menu Installer for Ubuntu 22.04 
 # -------------------------------------------------------------
 # Chức năng:
 #   1) Cài đặt & triển khai (Docker, NGINX, Certbot, Garage, TLS)
@@ -78,10 +80,33 @@ Nhấn Enter để tiếp tục... '; }
 apt_install() {
   info "Cài đặt gói cần thiết (Docker, Compose plugin, NGINX, Certbot, jq)..."
   export DEBIAN_FRONTEND=noninteractive
+
+  # Phát hiện repo Docker chính thức → dùng bộ docker-ce; nếu không → dùng gói Ubuntu (docker.io)
+  local has_docker_repo=0
+  if grep -Rqs "download.docker.com" /etc/apt/sources.list* 2>/dev/null; then
+    has_docker_repo=1
+  fi
+
   apt-get update -y
-  apt-get install -y ca-certificates curl gnupg lsb-release \
-    docker.io docker-compose-plugin nginx certbot python3-certbot-nginx jq
-  systemctl enable --now docker
+
+  # Gói chung
+  apt-get install -y ca-certificates curl gnupg lsb-release nginx certbot python3-certbot-nginx jq zip unzip
+
+  if command -v docker >/dev/null 2>&1; then
+    info "Docker đã sẵn có → bỏ qua bước cài Docker."
+  else
+    if [[ $has_docker_repo -eq 1 ]]; then
+      # Chuyển sang bộ Docker CE (tránh xung đột: gỡ containerd của Ubuntu nếu có)
+      apt-get remove -y containerd || true
+      apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    else
+      # Dùng gói Ubuntu (docker.io) và đảm bảo không còn containerd.io
+      apt-get remove -y containerd.io || true
+      apt-get install -y docker.io docker-compose-plugin
+    fi
+  fi
+
+  systemctl enable --now docker || true
 }
 
 setup_dirs() {
@@ -97,8 +122,8 @@ write_config() {
   ADMIN_TOKEN=$(openssl rand -base64 32)
   METRICS_TOKEN=$(openssl rand -base64 32)
   cat >"$CFG_FILE" <<TOML
-metadata_dir = "$BASE_DIR/meta"
-data_dir     = "$BASE_DIR/data"
+metadata_dir = "/var/lib/garage/meta"
+data_dir     = "/var/lib/garage/data"
 
 replication_factor = 1
 
@@ -386,8 +411,14 @@ backup_all() {
     [[ -e "$p" ]] && paths+=("$p")
   done
 
-  info "Đang nén backup → $BACKUP_FILE ..."
-  tar --zstd -cf "$BACKUP_FILE" "${paths[@]}"
+  if [[ "$BACKUP_FILE" == *.zip ]]; then
+    command -v zip >/dev/null 2>&1 || apt-get install -y zip
+    info "Đang nén backup (ZIP) → $BACKUP_FILE ..."
+    zip -r "$BACKUP_FILE" "${paths[@]}"
+  else
+    info "Đang nén backup (tar.zst) → $BACKUP_FILE ..."
+    tar --zstd -cf "$BACKUP_FILE" "${paths[@]}"
+  fi
   info "Hoàn tất backup (${#paths[@]} mục)."
 
   if [[ $was_up -eq 1 ]]; then
@@ -424,7 +455,12 @@ restore_all() {
 
   info "Giải nén backup vào / ..."
   mkdir -p "$BASE_DIR"
-  tar --zstd -xf "$BACKUP_FILE" -C /
+  if [[ "$BACKUP_FILE" == *.zip ]]; then
+    command -v unzip >/dev/null 2>&1 || apt-get install -y unzip
+    unzip -o "$BACKUP_FILE" -d /
+  else
+    tar --zstd -xf "$BACKUP_FILE" -C /
+  fi
 
   # Đảm bảo site NGINX được bật
   if [[ -f "$NGINX_SITE" ]]; then
