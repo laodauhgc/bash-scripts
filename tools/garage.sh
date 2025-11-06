@@ -2,7 +2,7 @@
 # Force UTF-8 để tránh lỗi hiển thị ký tự trên một số VPS
 export LC_ALL=C.UTF-8 LANG=C.UTF-8
 # Garage Menu Installer for Ubuntu 22.04 — dùng menu tương tác
-SCRIPT_VERSION="v1.2.0-2025-11-06"
+SCRIPT_VERSION="v1.2.1-2025-11-06"
 # Cách chạy: sudo bash garage_menu.sh
 
 set -euo pipefail
@@ -106,11 +106,19 @@ setup_dirs() {
 
 write_config() {
   info "Ghi cấu hình Garage: $CFG_FILE"
-  [[ -f "$CFG_FILE" ]] && cp -a "$CFG_FILE" "${CFG_FILE}.bak.$(date +%s)" || true
   local RPC_SECRET ADMIN_TOKEN METRICS_TOKEN
-  RPC_SECRET=$(openssl rand -hex 32)
-  ADMIN_TOKEN=$(openssl rand -base64 32)
-  METRICS_TOKEN=$(openssl rand -base64 32)
+
+  if [[ -f "$CFG_FILE" ]]; then
+    cp -a "$CFG_FILE" "${CFG_FILE}.bak.$(date +%s)" || true
+    # Giữ nguyên token/secret cũ để tránh lỗi handshake khi container đang chạy
+    RPC_SECRET=$(awk -F'"' '/^rpc_secret/{print $2}' "$CFG_FILE" 2>/dev/null || true)
+    ADMIN_TOKEN=$(awk -F'"' '/^admin_token/{print $2}' "$CFG_FILE" 2>/dev/null || true)
+    METRICS_TOKEN=$(awk -F'"' '/^metrics_token/{print $2}' "$CFG_FILE" 2>/dev/null || true)
+  fi
+  [[ -n "${RPC_SECRET:-}" ]] || RPC_SECRET=$(openssl rand -hex 32)
+  [[ -n "${ADMIN_TOKEN:-}" ]] || ADMIN_TOKEN=$(openssl rand -base64 32)
+  [[ -n "${METRICS_TOKEN:-}" ]] || METRICS_TOKEN=$(openssl rand -base64 32)
+
   cat >"$CFG_FILE" <<TOML
 metadata_dir = "/var/lib/garage/meta"
 data_dir     = "/var/lib/garage/data"
@@ -154,7 +162,8 @@ YML
 
 start_stack() {
   info "Khởi động Garage qua Docker Compose..."
-  docker compose -f "$COMPOSE_FILE" up -d
+  # Luôn tái tạo để nạp cấu hình mới (tránh lệch rpc_secret)
+  docker compose -f "$COMPOSE_FILE" up -d --force-recreate
   sleep 3
 }
 
@@ -205,7 +214,14 @@ GCLI() { docker compose -f "$COMPOSE_FILE" exec -T $SERVICE_NAME /garage -c /etc
 
 wait_ready() {
   info "Chờ Garage sẵn sàng..."
-  for i in {1..30}; do
+  # thử lâu hơn và khoan báo lỗi sớm
+  for i in {1..60}; do
+    if GCLI status >/dev/null 2>&1; then return 0; fi
+    sleep 1
+  done
+  warn "Garage có thể chưa sẵn sàng nhưng sẽ tiếp tục bước kế (assign layout)."
+  return 0
+}; do
     if GCLI status >/dev/null 2>&1; then return 0; fi
     sleep 1
   done
@@ -216,7 +232,10 @@ init_cluster_single() {
   wait_ready
   info "Thiết lập layout 1 node..."
   local NODE_ID CUR NEW
-  NODE_ID=$(GCLI status | awk '/HEALTHY NODES/{flag=1; next} flag && NF && $1!="ID"{print $1; exit}')
+  NODE_ID=$(GCLI status 2>/dev/null | awk '/^[0-9a-f]{16}/{print $1; exit}')
+  if [[ -z "${NODE_ID:-}" ]]; then
+    NODE_ID=$(docker logs --since 15m "$SERVICE_NAME" 2>/dev/null | awk 'match($0,/Node ID of this node: ([0-9a-f]+)/,m){print m[1]; exit}')
+  fi
   if [[ -z "${NODE_ID:-}" ]]; then err "Không đọc được NODE_ID"; exit 1; fi
   GCLI layout assign -z dc1 -c 1T "$NODE_ID" || true
   CUR=$(GCLI layout show | awk -F': ' '/Current layout version/{print $2; exit}')
