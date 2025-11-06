@@ -2,7 +2,7 @@
 # Force UTF-8 để tránh lỗi hiển thị ký tự trên một số VPS
 export LC_ALL=C.UTF-8 LANG=C.UTF-8
 # Garage Menu Installer for Ubuntu 22.04 — dùng menu tương tác
-SCRIPT_VERSION="v1.3.1-2025-11-06"
+SCRIPT_VERSION="v1.3.4-2025-11-06"
 # Cách chạy: sudo bash garage_menu.sh
 
 set -euo pipefail
@@ -450,73 +450,7 @@ menu_bucket_key() {
   done
 }
 
-# ====== WEBSITE (S3 Web) ======
-enable_website_stack() {
-  load_state
-  local BASE=${S3_DOMAIN#*.}
-  local WEB_DOMAIN="web.$BASE"
-  info "Bật website endpoint: root_domain=.$WEB_DOMAIN"
-  if ! grep -q "^\[s3_web\]" "$CFG_FILE"; then
-    cat >> "$CFG_FILE" <<EOF
-[s3_web]
-bind_addr = "0.0.0.0:3902"
-root_domain = ".${WEB_DOMAIN}"
-index = "index.html"
-EOF
-  fi
-  docker compose -f "$COMPOSE_FILE" restart || start_stack
-  local SITE="/etc/nginx/sites-available/garage_web"
-  cat > "$SITE" <<NGINX
-server { listen 80; listen [::]:80; server_name *.${WEB_DOMAIN} ${WEB_DOMAIN};
-  location / { proxy_pass http://127.0.0.1:3902; proxy_set_header Host $host; }
-}
-NGINX
-  ln -sf "$SITE" /etc/nginx/sites-enabled/garage_web
-  nginx -t && systemctl reload nginx
-  info "Đã bật website stack cho: ${WEB_DOMAIN} (HTTP). Dùng mục 'Cấp chứng thư website' để bật HTTPS."
-}
-
-website_allow_bucket_interactive() {
-  load_state; wait_ready
-  read -rp "Bucket cần public website [$BUCKET_NAME]: " b; b=${b:-$BUCKET_NAME}
-  info "Cho phép website cho bucket: $b"
-  GCLI bucket website --allow "$b" || true
-}
-
-website_disallow_bucket_interactive() {
-  load_state; wait_ready
-  read -rp "Bucket cần tắt website [$BUCKET_NAME]: " b; b=${b:-$BUCKET_NAME}
-  info "Tắt website cho bucket: $b"
-  GCLI bucket website --disallow "$b" || true
-}
-
-issue_web_cert_interactive() {
-  load_state
-  local BASE=${S3_DOMAIN#*.}
-  local WEB_DOMAIN="web.$BASE"
-  read -rp "Cấp HTTPS cho bucket nào [$BUCKET_NAME]: " b; b=${b:-$BUCKET_NAME}
-  info "Cấp cert cho: ${WEB_DOMAIN} và ${b}.${WEB_DOMAIN}"
-  certbot --nginx -d "$WEB_DOMAIN" -d "${b}.${WEB_DOMAIN}" -m "$EMAIL" --agree-tos --non-interactive || true
-}
-
-menu_website() {
-  PS3=$'Chọn tác vụ: '
-  select opt in \
-    "Bật website endpoint (s3_web + nginx)" \
-    "Cho phép website cho bucket" \
-    "Tắt website cho bucket" \
-    "Cấp chứng thư website (bucket + web.<domain>)" \
-    "Quay lại"; do
-    case $REPLY in
-      1) enable_website_stack; pause ;;
-      2) website_allow_bucket_interactive; pause ;;
-      3) website_disallow_bucket_interactive; pause ;;
-      4) issue_web_cert_interactive; pause ;;
-      5) break ;;
-      *) echo "Chọn không hợp lệ" ;;
-    esac
-  done
-}
+# (ĐÃ LOẠI BỎ WEBSITE FEATURE THEO YÊU CẦU)
 
 # ====== CÔNG CỤ S3 ======
 ensure_aws_env() {
@@ -738,13 +672,12 @@ main_menu() {
     echo "6) Xem trạng thái"
     echo "7) Backup hệ thống → .tar.zst/.zip"
     echo "8) Khôi phục từ file backup .tar.zst/.zip"
-    echo "9) Website tĩnh (bật s3_web, allow, cert)"
-    echo "10) Công cụ S3 (presign, upload/download, ls)"
-    echo "11) Chẩn đoán (status/layout/logs/ports/nginx)"
-    echo "12) Gỡ cài đặt"
-    echo "13) Thoát"
+    echo "9) Công cụ S3 (presign, upload/download, ls)"
+    echo "10) Chẩn đoán (status/layout/logs/ports/nginx)"
+    echo "11) Gỡ cài đặt"
+    echo "12) Thoát"
     echo
-    read -rp "Chọn [1-13]: " choice
+    read -rp "Chọn [1-12]: " choice
     case "$choice" in
       1) full_install; pause ;;
       2) configure_params; pause ;;
@@ -754,11 +687,10 @@ main_menu() {
       6) show_status; pause ;;
       7) backup_all; pause ;;
       8) restore_all; pause ;;
-      9) menu_website ;;
-      10) menu_s3_tools ;;
-      11) menu_diag ;;
-      12) uninstall_all; pause ;;
-      13) exit 0 ;;
+      9) menu_s3_tools ;;
+      10) menu_diag ;;
+      11) uninstall_all; pause ;;
+      12) exit 0 ;;
       *) echo "Chọn không hợp lệ"; sleep 1 ;;
     esac
   done
