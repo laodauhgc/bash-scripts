@@ -2,7 +2,7 @@
 # Force UTF-8 để tránh lỗi hiển thị ký tự trên một số VPS
 export LC_ALL=C.UTF-8 LANG=C.UTF-8
 # Garage Menu Installer for Ubuntu 22.04 — dùng menu tương tác
-SCRIPT_VERSION="v1.3.6-2025-11-06"
+SCRIPT_VERSION="v1.4.2-2025-11-06"
 # Cách chạy: sudo bash garage_menu.sh
 
 set -euo pipefail
@@ -285,8 +285,10 @@ show_status() {
 }
 
 apply_and_restart() {
-  info "Reload cấu hình (restart container)"
-  docker compose -f "$COMPOSE_FILE" restart || true
+  write_config
+  write_compose
+  start_stack
+  optimize_nginx_s3_site
   show_status
 }
 
@@ -296,20 +298,21 @@ edit_config() {
 
 # ====== QUY TRÌNH TRIỂN KHAI TỰ ĐỘNG ======
 full_install() {
-  need_root; load_state; save_state
-  apt_install
+  need_root
+  save_state
   setup_dirs
+  apt_install
   write_config
   write_compose
-  ufw_rules
+  ufw_open
   start_stack
-  nginx_basic
-  letsencrypt
+  setup_nginx_s3
+  optimize_nginx_s3_site
+  setup_cert
   init_cluster_single
   create_bucket
   create_key
   allow_key_bucket
-  final_summary
 }
 
 final_summary() {
@@ -450,7 +453,281 @@ menu_bucket_key() {
   done
 }
 
-# (ĐÃ LOẠI BỎ WEBSITE FEATURE THEO YÊU CẦU)
+# ====== NGINX GLOBAL TUNING (cache + gzip) ======
+nginx_global_tune() {
+  mkdir -p /var/cache/nginx/garage_public
+  local CONF="/etc/nginx/conf.d/garage_global.conf"
+  cat > "$CONF" <<'CONF'
+# Cache store for public gateway
+proxy_cache_path /var/cache/nginx/garage_public levels=1:2 \
+                 keys_zone=gp_cache:100m max_size=20g inactive=7d \
+                 use_temp_path=off;
+
+# Sensible gzip for text assets
+gzip on;
+gzip_comp_level 5;
+gzip_min_length 512;
+gzip_types text/plain text/css text/javascript application/javascript application/json application/xml image/svg+xml application/rss+xml font/ttf font/otf application/vnd.ms-fontobject application/x-font-ttf;
+
+# General proxy buffers (safe defaults)
+proxy_buffering on;
+proxy_buffers 64 64k;
+proxy_buffer_size 16k;
+proxy_busy_buffers_size 256k;
+
+# Improve TLS/http2 (server blocks should enable http2 on 443)
+# (Certbot keeps ssl params; we don't override here.)
+CONF
+  nginx -t && systemctl reload nginx || true
+}
+
+# ====== PUBLIC GATEWAY (public.<base-domain>) ======
+# Mục tiêu: URL public không hết hạn dưới 1 domain, dạng: https://public.example.com/<bucket>/<path>
+# Cách làm: bật s3_web nội bộ (127.0.0.1:3902, root_domain=.public.<base>), Nginx map path → s3_web (Host: <bucket>.public.<base>)
+
+public_gateway_enable() {
+  load_state
+  nginx_global_tune
+  local BASE=${S3_DOMAIN#*.}
+  local PUB_DOMAIN_SUGGEST="public.$BASE"
+  read -rp "Nhập public domain cho link public [$PUB_DOMAIN_SUGGEST]: " PUB_DOMAIN
+  PUB_DOMAIN=${PUB_DOMAIN:-$PUB_DOMAIN_SUGGEST}
+  # enable/replace [s3_web]
+  if grep -q '^\[s3_web\]' "$CFG_FILE"; then
+    awk 'BEGIN{skip=0} /^\[s3_web\]/{print "# [s3_web] (replaced by installer)"; skip=1; next} /^\[/{if(skip==1){skip=0}} skip==0{print}' "$CFG_FILE" > "$CFG_FILE.tmp" && mv "$CFG_FILE.tmp" "$CFG_FILE"
+  fi
+  cat >> "$CFG_FILE" <<EOF
+[s3_web]
+bind_addr  = "127.0.0.1:3902"
+root_domain = ".${PUB_DOMAIN}"
+index      = "index.html"
+EOF
+  docker compose -f "$COMPOSE_FILE" restart || start_stack
+
+  # Ensure allowlist map file exists
+  local ALLOW_MAP="/etc/nginx/garage_public_allow.map.conf"
+  [[ -f "$ALLOW_MAP" ]] || echo "# format: regex 1;  (ex: ~^/files/docker/introduction\-to\-docker\-light\.pdf$ 1;)" > "$ALLOW_MAP"
+
+  # Nginx optimized cache proxy for public domain with allowlist map
+  local SITE="/etc/nginx/sites-available/garage_public"
+  cat > "$SITE" <<'NGINX'
+# allow-list for public files
+map $request_uri $public_ok {
+  default 0;
+  include /etc/nginx/garage_public_allow.map.conf;
+}
+
+upstream garage_web {
+  server 127.0.0.1:3902;
+  keepalive 64;
+}
+
+map $request_method $skip_cache {
+  default 1;  # disable cache for non-GET/HEAD
+  GET 0;
+  HEAD 0;
+}
+
+server { listen 80; listen [::]:80; server_name PUBLIC_DOMAIN; return 301 https://$host$request_uri; }
+server {
+  listen 443 ssl http2;
+  server_name PUBLIC_DOMAIN;
+
+  proxy_cache gp_cache;
+  proxy_cache_methods GET HEAD;
+  proxy_cache_key "$scheme$host$uri$is_args$args";
+  proxy_cache_lock on;
+  proxy_cache_min_uses 1;
+  proxy_cache_valid 200 206 10m;
+  proxy_cache_valid 301 302 1h;
+  proxy_cache_use_stale error timeout invalid_header updating http_500 http_502 http_503 http_504;
+  proxy_cache_background_update on;
+  proxy_cache_revalidate on;
+  add_header X-Cache $upstream_cache_status always;
+
+  location ~ ^/([^/]+)/?(.*)$ {
+    if ($public_ok = 0) { return 403; }
+    set $bucket $1; set $rest $2;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $bucket.PUBLIC_DOMAIN;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_no_cache $skip_cache;
+    proxy_cache_bypass $skip_cache;
+    proxy_pass http://garage_web/$rest;
+  }
+}
+NGINX
+  sed -i "s/PUBLIC_DOMAIN/${PUB_DOMAIN}/g" "$SITE"
+  ln -sf "$SITE" /etc/nginx/sites-enabled/garage_public
+  nginx -t && systemctl reload nginx
+  info "Public gateway sẵn sàng tại: https://${PUB_DOMAIN}. Ví dụ: https://${PUB_DOMAIN}/<bucket>/<path>"
+}
+NGINX
+  sed -i "s/PUBLIC_DOMAIN/${PUB_DOMAIN}/g" "$SITE"
+  ln -sf "$SITE" /etc/nginx/sites-enabled/garage_public
+  nginx -t && systemctl reload nginx
+  info "Public gateway đã bật cho https://${PUB_DOMAIN}. Hãy cấp HTTPS ở mục 'Cấp chứng thư public domain'."
+}
+
+public_issue_cert() {
+  load_state
+  local BASE=${S3_DOMAIN#*.}
+  local PUB_DOMAIN_SUGGEST="public.$BASE"
+  read -rp "Cấp chứng thư cho public domain nào [$PUB_DOMAIN_SUGGEST]: " PUB_DOMAIN
+  PUB_DOMAIN=${PUB_DOMAIN:-$PUB_DOMAIN_SUGGEST}
+  certbot --nginx -d "$PUB_DOMAIN" -m "$EMAIL" --agree-tos --non-interactive || true
+}
+
+public_bucket_allow() {
+  load_state; wait_ready
+  read -rp "Bucket cần public [$BUCKET_NAME]: " b; b=${b:-$BUCKET_NAME}
+  info "Cho phép website cho bucket: $b"
+  GCLI bucket website --allow "$b" || true
+  local BASE=${S3_DOMAIN#*.}
+  local PUB_DOMAIN="public.$BASE"
+  echo "URL mẫu: https://$PUB_DOMAIN/$b/<path>"
+}
+
+public_bucket_disallow() {
+  load_state; wait_ready
+  read -rp "Bucket cần thu hồi public [$BUCKET_NAME]: " b; b=${b:-$BUCKET_NAME}
+  info "Tắt website cho bucket: $b"
+  GCLI bucket website --disallow "$b" || true
+}
+
+public_gateway_disable() {
+  load_state
+  info "Gỡ public gateway (bỏ [s3_web], xoá nginx site, tuỳ chọn xoá cert)"
+  if grep -q '^\[s3_web\]' "$CFG_FILE"; then
+    awk 'BEGIN{skip=0} /^\[s3_web\]/{skip=1; next} /^\[/{if(skip==1){skip=0}} skip==0{print}' "$CFG_FILE" > "$CFG_FILE.tmp" && mv "$CFG_FILE.tmp" "$CFG_FILE"
+  fi
+  docker compose -f "$COMPOSE_FILE" restart || true
+  rm -f /etc/nginx/sites-enabled/garage_public /etc/nginx/sites-available/garage_public
+  nginx -t && systemctl reload nginx || true
+  read -rp "Xoá chứng thư liên quan đến public domain? (y/N) " del
+  if [[ ${del,,} == y ]]; then
+    certbot certificates 2>/dev/null | awk '/Certificate Name:/{name=$3} /Domains:/{print name":"$0}' | while IFS= read -r line; do
+      name=${line%%:*}
+      info "Xoá cert: $name"; certbot delete --cert-name "$name" --non-interactive || true
+    done
+  fi
+  info "Đã gỡ public gateway."
+}
+
+public_allow_file() {
+  load_state
+  local ALLOW_MAP="/etc/nginx/garage_public_allow.map.conf"
+  read -rp "Bucket: " b
+  read -rp "Object path (ví dụ docker/introduction-to-docker-light.pdf): " o
+  # auto-allow website cho bucket (chỉ nội bộ)
+  wait_ready; GCLI bucket website --allow "$b" >/dev/null 2>&1 || true
+  # escape regex metachars in object path
+  local esc
+  esc=$(printf '%s' "$o" | sed -e 's/[].[^$*\/+?|(){}]/\&/g')
+  local pat="~^/"$b"/"$esc"$ 1;"
+  echo "$pat" >> "$ALLOW_MAP"
+  nginx -t && systemctl reload nginx
+  info "Đã bật public cho: /$b/$o"
+}
+
+public_revoke_file() {
+  local ALLOW_MAP="/etc/nginx/garage_public_allow.map.conf"
+  read -rp "Bucket: " b
+  read -rp "Object path: " o
+  local esc
+  esc=$(printf '%s' "$o" | sed -e 's/[].[^$*\/+?|(){}]/\&/g')
+  local pat="~^/"$b"/"$esc"$ 1;"
+  if [[ -f "$ALLOW_MAP" ]]; then
+    grep -vF "$pat" "$ALLOW_MAP" > "$ALLOW_MAP.tmp" && mv "$ALLOW_MAP.tmp" "$ALLOW_MAP"
+    nginx -t && systemctl reload nginx
+    info "Đã thu hồi public cho: /$b/$o"
+  else
+    warn "Chưa có allowlist file: $ALLOW_MAP"
+  fi
+}
+
+public_list_allowed() {
+  local ALLOW_MAP="/etc/nginx/garage_public_allow.map.conf"
+  if [[ -f "$ALLOW_MAP" ]]; then
+    nl -ba "$ALLOW_MAP"
+  else
+    warn "Chưa có allowlist."
+  fi
+}
+
+menu_public_gateway() {
+  PS3=$'Chọn tác vụ: '
+  select opt in \
+    "Bật public gateway (s3_web nội bộ + nginx public.<base>)" \
+    "Cho phép public cho bucket" \
+    "Thu hồi public cho bucket" \
+    "Cấp chứng thư public domain" \
+    "Bật public CHO MỘT FILE" \
+    "Thu hồi public CHO MỘT FILE" \
+    "Liệt kê các file public" \
+    "Gỡ public gateway" \
+    "Quay lại"; do
+    case $REPLY in
+      1) public_gateway_enable; pause ;;
+      2) public_bucket_allow; pause ;;
+      3) public_bucket_disallow; pause ;;
+      4) public_issue_cert; pause ;;
+      5) public_allow_file; pause ;;
+      6) public_revoke_file; pause ;;
+      7) public_list_allowed; pause ;;
+      8) public_gateway_disable; pause ;;
+      9) break ;;
+      *) echo "Chọn không hợp lệ" ;;
+    esac
+  done
+}
+
+# ====== S3 API NGINX (optimize, no-cache) ======
+optimize_nginx_s3_site() {
+  load_state
+  local SITE="$NGINX_SITE"
+  # Rebuild S3 vhost with streaming uploads and keepalive, without cache
+  cat > "$SITE" <<'NGINX'
+upstream garage_s3 {
+  server 127.0.0.1:3900;
+  keepalive 32;
+}
+
+server {
+  listen 80; listen [::]:80;
+  server_name S3_DOMAIN;
+  return 301 https://$host$request_uri;
+}
+
+server {
+  listen 443 ssl http2;
+  server_name S3_DOMAIN;
+
+  # Large uploads
+  client_max_body_size 0;
+  proxy_request_buffering off;
+
+  location / {
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+    # do NOT cache API
+    proxy_no_cache 1;
+    proxy_cache_bypass 1;
+
+    proxy_pass http://garage_s3;
+  }
+}
+NGINX
+  sed -i "s/S3_DOMAIN/$S3_DOMAIN/g" "$SITE"
+  ln -sf "$SITE" /etc/nginx/sites-enabled/garage_s3
+  nginx -t && systemctl reload nginx
+}
 
 # ====== CÔNG CỤ S3 ======
 ensure_aws_env() {
@@ -676,12 +953,13 @@ main_menu() {
     echo "6) Xem trạng thái"
     echo "7) Backup hệ thống → .tar.zst/.zip"
     echo "8) Khôi phục từ file backup .tar.zst/.zip"
-    echo "9) Công cụ S3 (presign, upload/download, ls)"
-    echo "10) Chẩn đoán (status/layout/logs/ports/nginx)"
-    echo "11) Gỡ cài đặt"
-    echo "12) Thoát"
+    echo "9) Public gateway (public.<base> path → s3_web)"
+    echo "10) Công cụ S3 (presign, upload/download, ls)"
+    echo "11) Chẩn đoán (status/layout/logs/ports/nginx)"
+    echo "12) Gỡ cài đặt"
+    echo "13) Thoát"
     echo
-    read -rp "Chọn [1-12]: " choice
+    read -rp "Chọn [1-13]: " choice
     case "$choice" in
       1) full_install; pause ;;
       2) configure_params; pause ;;
@@ -691,10 +969,11 @@ main_menu() {
       6) show_status; pause ;;
       7) backup_all; pause ;;
       8) restore_all; pause ;;
-      9) menu_s3_tools ;;
-      10) menu_diag ;;
-      11) uninstall_all; pause ;;
-      12) exit 0 ;;
+      9) menu_public_gateway ;;
+      10) menu_s3_tools ;;
+      11) menu_diag ;;
+      12) uninstall_all; pause ;;
+      13) exit 0 ;;
       *) echo "Chọn không hợp lệ"; sleep 1 ;;
     esac
   done
