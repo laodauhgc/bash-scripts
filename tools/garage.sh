@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Force UTF-8 để tránh lỗi hiển thị ký tự trên một số VPS
 export LC_ALL=C.UTF-8 LANG=C.UTF-8
-# Garage Menu Installer for Ubuntu 22.04 — dùng menu tương tác
+# Garage Menu Installer for Ubuntu 22.04 — dùng menu tương tác.
 SCRIPT_VERSION="v1.4.2-2025-11-06"
 # Cách chạy: sudo bash garage_menu.sh
 
