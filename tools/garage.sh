@@ -458,8 +458,8 @@ CONF
 }
 
 # ====== PUBLIC GATEWAY (public.<base-domain>) ======
-# Mục tiêu: URL public không hết hạn dưới 1 domain, dạng: https://public.example.com/<bucket>/<path>
-# Cách làm: bật s3_web nội bộ (127.0.0.1:3902, root_domain=.public.<base>), Nginx map path → s3_web (Host: <bucket>.public.<base>)
+# Mục tiêu: URL public không hết hạn: https://public.<base>/<bucket>/<path>
+# Cách làm: bật s3_web nội bộ (127.0.0.1:3902, root_domain=.public.<base>), Nginx map path → s3_web
 
 public_gateway_enable() {
   load_state
@@ -492,6 +492,47 @@ EOF
 map $request_uri $public_ok {
   default 0;
   include /etc/nginx/garage_public_allow.map.conf;
+}
+
+upstream garage_web { server 127.0.0.1:3902; keepalive 64; }
+map $request_method $skip_cache { default 1; GET 0; HEAD 0; }
+
+server { listen 80; listen [::]:80; server_name PUBLIC_DOMAIN; return 301 https://$host$request_uri; }
+server {
+  listen 443 ssl http2;
+  server_name PUBLIC_DOMAIN;
+
+  proxy_cache gp_cache;
+  proxy_cache_methods GET HEAD;
+  proxy_cache_key "$scheme$host$uri$is_args$args";
+  proxy_cache_lock on;
+  proxy_cache_min_uses 1;
+  proxy_cache_valid 200 206 10m;
+  proxy_cache_valid 301 302 1h;
+  proxy_cache_use_stale error timeout invalid_header updating http_500 http_502 http_503 http_504;
+  proxy_cache_background_update on;
+  proxy_cache_revalidate on;
+  add_header X-Cache $upstream_cache_status always;
+
+  location ~ ^/([^/]+)/?(.*)$ {
+    if ($public_ok = 0) { return 403; }
+    set $bucket $1; set $rest $2;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $bucket.PUBLIC_DOMAIN;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_no_cache $skip_cache;
+    proxy_cache_bypass $skip_cache;
+    proxy_pass http://127.0.0.1:3902/$rest;
+  }
+}
+NGINX
+
+  sed -i "s/PUBLIC_DOMAIN/${PUB_DOMAIN}/g" "$SITE"
+  ln -sf "$SITE" /etc/nginx/sites-enabled/garage_public
+  nginx -t && systemctl reload nginx
+  info "Public gateway sẵn sàng: https://${PUB_DOMAIN} (VD: https://${PUB_DOMAIN}/<bucket>/<path>)"
 }
 
 public_issue_cert() {
@@ -545,7 +586,7 @@ public_allow_file() {
   read -rp "Bucket: " b
   read -rp "Object path (ví dụ docker/introduction-to-docker-light.pdf): " o
   wait_ready; GCLI bucket website --allow "$b" >/dev/null 2>&1 || true
-  # escape regex metachars for nginx map regex
+  # escape regex metachars for nginx map regex (prefix backslash for char)
   local esc
   esc=$(printf '%s' "$o" | sed -e 's/[][()^.$*+?{}|\/_-]/\&/g')
   local pat="~^/"$b"/"$esc"$ 1;"
@@ -607,6 +648,7 @@ menu_public_gateway() {
 }
 
 # ====== S3 API NGINX (optimize, no-cache) ======
+ ======
 optimize_nginx_s3_site() {
   load_state
   local SITE="$NGINX_SITE"
