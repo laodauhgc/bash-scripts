@@ -2,7 +2,7 @@
 # Force UTF-8 để tránh lỗi hiển thị ký tự trên một số VPS
 export LC_ALL=C.UTF-8 LANG=C.UTF-8
 # Garage Menu Installer for Ubuntu 22.04 — dùng menu tương tác
-SCRIPT_VERSION="v1.5.6-2025-11-09"
+SCRIPT_VERSION="v1.5.8-2025-11-09"
 # Cách chạy: sudo bash garage_menu.sh
 
 set -euo pipefail
@@ -20,7 +20,7 @@ BUCKET_DEFAULT="default"
 KEY_NAME_DEFAULT="df-key"
 
 # ====== HÀM TIỆN ÍCH ======
-color() { echo -e "[1;${2}m$1[0m"; }
+color() { echo -e "\e[1;${2}m$1\e[0m"; }
 info()  { color "[INFO] $1" 34; }
 warn()  { color "[WARN] $1" 33; }
 err()   { color "[ERR ] $1" 31; }
@@ -63,8 +63,7 @@ EOF
   info "Đã lưu tham số: $STATE_FILE"
 }
 
-pause() { read -rp $'
-Nhấn Enter để tiếp tục... '; }
+pause() { read -rp $'\nNhấn Enter để tiếp tục... '; }
 
 # ====== THIẾT LẬP HỆ THỐNG ======
 apt_install() {
@@ -299,8 +298,7 @@ full_install() {
 
 final_summary() {
   cat <<END
-$(color "
-Hoàn tất!" 32)
+$(color "\nHoàn tất!" 32)
 S3 endpoint:   https://$S3_DOMAIN
 Region:        $REGION
 Bucket:        $BUCKET_NAME
@@ -439,6 +437,8 @@ menu_bucket_key() {
 nginx_global_tune() {
   mkdir -p /var/cache/nginx/garage_public
   local CONF="/etc/nginx/conf.d/garage_global.conf"
+  # v1.5.8: Xoá file cũ để tránh ký tự lạ còn sót (ví dụ backslash)
+  rm -f "$CONF" 2>/dev/null || true
   cat > "$CONF" <<'CONF'
 # Cache store for public gateway
 proxy_cache_path /var/cache/nginx/garage_public levels=1:2 keys_zone=gp_cache:100m max_size=20g inactive=7d use_temp_path=off;
@@ -584,57 +584,15 @@ NGINX
   fi
 }
 
-upstream garage_web { server 127.0.0.1:3902; keepalive 64; }
-map $request_method $skip_cache { default 1; GET 0; HEAD 0; }
-
-server { listen 80; listen [::]:80; server_name PUBLIC_DOMAIN; return 301 https://$host$request_uri; }
-server {
-  listen 443 ssl http2;
-  server_name PUBLIC_DOMAIN;
-
-  proxy_cache gp_cache;
-  proxy_cache_methods GET HEAD;
-  proxy_cache_key "$scheme$host$uri$is_args$args";
-  proxy_cache_lock on;
-  proxy_cache_min_uses 1;
-  proxy_cache_valid 200 206 10m;
-  proxy_cache_valid 301 302 1h;
-  proxy_cache_use_stale error timeout invalid_header updating http_500 http_502 http_503 http_504;
-  proxy_cache_background_update on;
-  proxy_cache_revalidate on;
-  add_header X-Cache $upstream_cache_status always;
-
-  location ~ ^/([^/]+)/?(.*)$ {
-    if ($public_ok = 0) { return 403; }
-    set $bucket $1; set $rest $2;
-    proxy_http_version 1.1;
-    proxy_set_header Connection "";
-    proxy_set_header Host $bucket.PUBLIC_DOMAIN;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_no_cache $skip_cache;
-    proxy_cache_bypass $skip_cache;
-    proxy_pass http://127.0.0.1:3902/$rest;
-  }
-}
-NGINX
-
-  sed -i "s/PUBLIC_DOMAIN/${PUB_DOMAIN}/g" "$SITE"
-  ln -sf "$SITE" /etc/nginx/sites-enabled/garage_public
-  nginx -t && systemctl reload nginx
-  info "Public gateway sẵn sàng: https://${PUB_DOMAIN} (VD: https://${PUB_DOMAIN}/<bucket>/<path>)"
-}
-
 public_issue_cert() {
   load_state
   local BASE=${S3_DOMAIN#*.}
   local PUB_DOMAIN_SUGGEST="public.$BASE"
   read -rp "Cấp chứng thư cho public domain nào [$PUB_DOMAIN_SUGGEST]: " PUB_DOMAIN
   PUB_DOMAIN=${PUB_DOMAIN:-$PUB_DOMAIN_SUGGEST}
+  # HTTP-first: certbot chèn cấu hình; sau đó render lại để append 443 ssl nếu cần
   certbot --nginx -d "$PUB_DOMAIN" -m "$EMAIL" --agree-tos --non-interactive --redirect || true
-  # Sau khi có cert → render lại site để thêm 443 ssl
-  public_gateway_enable <<< $'
-' || true
+  public_gateway_enable <<< $'\n' || true
 }
 
 public_bucket_allow() {
@@ -679,9 +637,9 @@ public_allow_file() {
   read -rp "Bucket: " b
   read -rp "Object path (ví dụ docker/introduction-to-docker-light.pdf): " o
   wait_ready; GCLI bucket website --allow "$b" >/dev/null 2>&1 || true
-  # v1.5.6: escape regex metachars for nginx map regex (prefix backslash for each matched char)
+  # v1.5.8: escape regex metachars cho nginx map (thêm backslash trước mỗi ký tự đặc biệt)
   local esc
-  esc=$(printf '%s' "$o" | sed -e 's/[][()^.$*+?{}|\/_-]/\&/g')
+  esc=$(printf '%s' "$o" | sed -e 's/[][()^.$*+?{}|\/_-]/\\&/g')
   local pat="~^/"$b"/"$esc"$ 1;"
   echo "$pat" >> "$ALLOW_MAP"
   nginx -t && systemctl reload nginx
@@ -692,9 +650,9 @@ public_revoke_file() {
   local ALLOW_MAP="/etc/nginx/garage_public_allow.map.conf"
   read -rp "Bucket: " b
   read -rp "Object path: " o
-  # v1.5.6: escape regex to match exact stored pattern
+  # v1.5.8: escape regex giống allow để khớp chính xác
   local esc
-  esc=$(printf '%s' "$o" | sed -e 's/[][()^.$*+?{}|\/_-]/\&/g')
+  esc=$(printf '%s' "$o" | sed -e 's/[][()^.$*+?{}|\/_-]/\\&/g')
   local pat="~^/"$b"/"$esc"$ 1;"
   if [[ -f "$ALLOW_MAP" ]]; then
     grep -vF "$pat" "$ALLOW_MAP" > "$ALLOW_MAP.tmp" && mv "$ALLOW_MAP.tmp" "$ALLOW_MAP"
@@ -809,8 +767,7 @@ ensure_aws_env() {
   load_state
   # Nạp từ file cred nếu có (an toàn, không dùng xargs/export kiểu dễ vỡ)
   if [[ -f /root/garage-credentials.txt ]]; then
-    sed -i 's/
-$//' /root/garage-credentials.txt 2>/dev/null || true
+    sed -i 's/\r$//' /root/garage-credentials.txt 2>/dev/null || true
     set -a
     . /root/garage-credentials.txt
     set +a
@@ -949,7 +906,7 @@ backup_all() {
 restore_all() {
   need_root; load_state
   echo
-  read -rp "Nhập đường dẫn file backup (.tar.zst): " BACKUP_FILE
+  read -rp "Nhập đường dẫn file backup (.tar.zst|.zip): " BACKUP_FILE
   [[ -f "$BACKUP_FILE" ]] || { err "Không tìm thấy $BACKUP_FILE"; pause; return 1; }
   warn "Khôi phục sẽ ghi đè cấu hình/dữ liệu hiện có (sẽ tạo bản sao dự phòng)."
   read -rp "Tiếp tục khôi phục? (y/N) " ans
