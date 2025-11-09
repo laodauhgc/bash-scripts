@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Force UTF-8 để tránh lỗi hiển thị ký tự trên một số VPS
 export LC_ALL=C.UTF-8 LANG=C.UTF-8
-# Garage Menu Installer for Ubuntu 22.04 — dùng menu tương tác.
-SCRIPT_VERSION="v1.4.2-2025-11-06"
+# Garage Menu Installer for Ubuntu 22.04 — dùng menu tương tác
+SCRIPT_VERSION="v1.4.4-2025-11-06"
 # Cách chạy: sudo bash garage_menu.sh
 
 set -euo pipefail
@@ -190,11 +190,6 @@ server {
     proxy_http_version 1.1;
   }
 }
-NGINX
-  ln -sf "$NGINX_SITE" /etc/nginx/sites-enabled/garage_s3
-  nginx -t
-  systemctl reload nginx
-}
 
 letsencrypt() {
   info "Yêu cầu chứng thư Let's Encrypt cho $S3_DOMAIN"
@@ -304,11 +299,10 @@ full_install() {
   apt_install
   write_config
   write_compose
-  ufw_open
+  ufw_rules
   start_stack
-  setup_nginx_s3
   optimize_nginx_s3_site
-  setup_cert
+  letsencrypt
   init_cluster_single
   create_bucket
   create_key
@@ -621,11 +615,9 @@ public_allow_file() {
   local ALLOW_MAP="/etc/nginx/garage_public_allow.map.conf"
   read -rp "Bucket: " b
   read -rp "Object path (ví dụ docker/introduction-to-docker-light.pdf): " o
-  # auto-allow website cho bucket (chỉ nội bộ)
   wait_ready; GCLI bucket website --allow "$b" >/dev/null 2>&1 || true
-  # escape regex metachars in object path
   local esc
-  esc=$(printf '%s' "$o" | sed -e 's/[].[^$*\/+?|(){}]/\&/g')
+  esc=$(printf '%s' "$o" | sed -e 's/[].[^$*\/+?|(){}-]/\&/g')
   local pat="~^/"$b"/"$esc"$ 1;"
   echo "$pat" >> "$ALLOW_MAP"
   nginx -t && systemctl reload nginx
@@ -637,7 +629,7 @@ public_revoke_file() {
   read -rp "Bucket: " b
   read -rp "Object path: " o
   local esc
-  esc=$(printf '%s' "$o" | sed -e 's/[].[^$*\/+?|(){}]/\&/g')
+  esc=$(printf '%s' "$o" | sed -e 's/[].[^$*\/+?|(){}-]/\&/g')
   local pat="~^/"$b"/"$esc"$ 1;"
   if [[ -f "$ALLOW_MAP" ]]; then
     grep -vF "$pat" "$ALLOW_MAP" > "$ALLOW_MAP.tmp" && mv "$ALLOW_MAP.tmp" "$ALLOW_MAP"
@@ -803,14 +795,8 @@ menu_s3_tools() {
 
 # ====== CHẨN ĐOÁN ======
 diag_status() { GCLI status || true; echo; GCLI layout show || true; }
-ndiag_logs() { docker logs --tail 200 "$SERVICE_NAME" 2>/dev/null || true; }
-diag_ports() { ss -ltnp | egrep ':(3900|3901|3902|80|443)' || true; }
-ndiag_nginx_test() { nginx -t || true; }
-
-# (Re)define diagnostic helpers to ensure availability
-diag_status() { GCLI status || true; echo; GCLI layout show || true; }
-diag_logs() { docker logs --tail 200 "$SERVICE_NAME" 2>/dev/null || true; }
-diag_ports() { command -v ss >/dev/null 2>&1 && ss -ltnp | egrep ':(3900|3901|3902|80|443)' || netstat -ltnp 2>/dev/null | egrep ':(3900|3901|3902|80|443)' || true; }
+diag_logs()   { docker logs --tail 200 "$SERVICE_NAME" 2>/dev/null || true; }
+diag_ports()  { command -v ss >/dev/null 2>&1 && ss -ltnp | egrep ':(3900|3901|3902|80|443)\b' || netstat -ltnp 2>/dev/null | egrep ':(3900|3901|3902|80|443)\b' || true; }
 diag_nginx_test() { nginx -t || true; }
 
 menu_diag() {
