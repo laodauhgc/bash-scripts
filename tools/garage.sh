@@ -2,7 +2,7 @@
 # Force UTF-8 để tránh lỗi hiển thị ký tự trên một số VPS
 export LC_ALL=C.UTF-8 LANG=C.UTF-8
 # Garage Menu Installer for Ubuntu 22.04 — dùng menu tương tác
-SCRIPT_VERSION="v1.5.8-2025-11-09"
+SCRIPT_VERSION="v1.5.9-2025-11-09"
 # Cách chạy: sudo bash garage_menu.sh
 
 set -euo pipefail
@@ -437,17 +437,11 @@ menu_bucket_key() {
 nginx_global_tune() {
   mkdir -p /var/cache/nginx/garage_public
   local CONF="/etc/nginx/conf.d/garage_global.conf"
-  # v1.5.8: Xoá file cũ để tránh ký tự lạ còn sót (ví dụ backslash)
+  # v1.5.9: Xoá file cũ để tránh ký tự rác & lỗi trùng lặp gzip
   rm -f "$CONF" 2>/dev/null || true
   cat > "$CONF" <<'CONF'
 # Cache store for public gateway
 proxy_cache_path /var/cache/nginx/garage_public levels=1:2 keys_zone=gp_cache:100m max_size=20g inactive=7d use_temp_path=off;
-
-# Sensible gzip for text assets
-gzip on;
-gzip_comp_level 5;
-gzip_min_length 512;
-gzip_types text/plain text/css text/javascript application/javascript application/json application/xml image/svg+xml application/rss+xml font/ttf font/otf application/vnd.ms-fontobject application/x-font-ttf;
 
 # General proxy buffers (safe defaults)
 proxy_buffering on;
@@ -457,6 +451,7 @@ proxy_busy_buffers_size 256k;
 CONF
   nginx -t && systemctl reload nginx || true
 }
+
 
 # ====== PUBLIC GATEWAY (public.<base-domain>) ======
 # Mục tiêu: URL public không hết hạn: https://public.<base>/<bucket>/<path>
@@ -619,7 +614,7 @@ public_gateway_disable() {
     awk 'BEGIN{skip=0} /^\[s3_web\]/{skip=1; next} /^\[/{if(skip==1){skip=0}} skip==0{print}' "$CFG_FILE" > "$CFG_FILE.tmp" && mv "$CFG_FILE.tmp" "$CFG_FILE"
   fi
   docker compose -f "$COMPOSE_FILE" restart || true
-  rm -f /etc/nginx/sites-enabled/garage_public /etc/nginx/sites-available/garage_public
+  rm -f /etc/nginx/sites-enabled/garage_public /etc/nginx/sites-available/garage_public /etc/nginx/conf.d/garage_global.conf
   nginx -t && systemctl reload nginx || true
   read -rp "Xoá chứng thư liên quan đến public domain? (y/N) " del
   if [[ ${del,,} == y ]]; then
