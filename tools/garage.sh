@@ -2,7 +2,7 @@
 # Force UTF-8 để tránh lỗi hiển thị ký tự trên một số VPS
 export LC_ALL=C.UTF-8 LANG=C.UTF-8
 # Garage Menu Installer for Ubuntu 22.04 — dùng menu tương tác
-SCRIPT_VERSION="v1.5.0-2025-11-06"
+SCRIPT_VERSION="v1.5.1-2025-11-06"
 # Cách chạy: sudo bash garage_menu.sh
 
 set -euo pipefail
@@ -670,84 +670,6 @@ upstream garage_s3 {
   keepalive 32;
 }
 
-server {
-  listen 80; listen [::]:80;
-  server_name S3_DOMAIN;
-  # Cho ACME-challenge (plugin --nginx vẫn có thể override, đây là fallback)
-  location ^~ /.well-known/acme-challenge/ {
-    root /var/www/html;
-  }
-  return 301 https://$host$request_uri;
-}
-NGINX
-
-  if (( HAVE_CERT == 1 )); then
-    # Khi đã có cert, thêm server 443 ssl với proxy tới S3 API
-    cat >> "$SITE" <<'NGINX'
-server {
-  listen 443 ssl http2; listen [::]:443 ssl http2;
-  server_name S3_DOMAIN;
-
-  ssl_certificate     CERT_FULLCHAIN;
-  ssl_certificate_key CERT_PRIVKEY;
-
-  # Large uploads
-  client_max_body_size 0;
-  proxy_request_buffering off;
-
-  location / {
-    proxy_http_version 1.1;
-    proxy_set_header Connection "";
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_no_cache 1;
-    proxy_cache_bypass 1;
-    proxy_pass http://garage_s3;
-  }
-}
-NGINX
-    sed -i "s|CERT_FULLCHAIN|$CERT_DIR/fullchain.pem|; s|CERT_PRIVKEY|$CERT_DIR/privkey.pem|" "$SITE"
-  fi
-
-  sed -i "s/S3_DOMAIN/$S3_DOMAIN/g" "$SITE"
-  ln -sf "$SITE" /etc/nginx/sites-enabled/garage_s3
-  nginx -t && systemctl reload nginx || true
-}
-
-server {
-  listen 80; listen [::]:80;
-  server_name S3_DOMAIN;
-  return 301 https://$host$request_uri;
-}
-
-server {
-  listen 443 ssl http2;
-  server_name S3_DOMAIN;
-
-  # Large uploads
-  client_max_body_size 0;
-  proxy_request_buffering off;
-
-  location / {
-    proxy_http_version 1.1;
-    proxy_set_header Connection "";
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-
-    # do NOT cache API
-    proxy_no_cache 1;
-    proxy_cache_bypass 1;
-
-    proxy_pass http://garage_s3;
-  }
-}
-NGINX
-  sed -i "s/S3_DOMAIN/$S3_DOMAIN/g" "$SITE"
-  ln -sf "$SITE" /etc/nginx/sites-enabled/garage_s3
-  nginx -t && systemctl reload nginx
-}
 
 # ====== CÔNG CỤ S3 ======
 ensure_aws_env() {
