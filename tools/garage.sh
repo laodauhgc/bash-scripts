@@ -2,7 +2,7 @@
 # Force UTF-8 để tránh lỗi hiển thị ký tự trên một số VPS
 export LC_ALL=C.UTF-8 LANG=C.UTF-8
 # Garage Menu Installer for Ubuntu 22.04 — dùng menu tương tác
-SCRIPT_VERSION="v1.5.9-2025-11-09"
+SCRIPT_VERSION="v1.6.0-2025-11-09"
 # Cách chạy: sudo bash garage_menu.sh
 
 set -euo pipefail
@@ -524,7 +524,8 @@ server {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_no_cache $skip_cache;
     proxy_cache_bypass $skip_cache;
-    proxy_pass http://127.0.0.1:3902/$rest;
+    rewrite ^/[^/]+/?(.*)$ /$1 break;
+    proxy_pass http://127.0.0.1:3902;
   }
 }
 NGINX
@@ -560,7 +561,8 @@ server {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_no_cache $skip_cache;
     proxy_cache_bypass $skip_cache;
-    proxy_pass http://127.0.0.1:3902/$rest;
+    rewrite ^/[^/]+/?(.*)$ /$1 break;
+    proxy_pass http://127.0.0.1:3902;
   }
 }
 NGINX
