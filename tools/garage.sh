@@ -2,7 +2,7 @@
 # Force UTF-8 để tránh lỗi hiển thị ký tự trên một số VPS
 export LC_ALL=C.UTF-8 LANG=C.UTF-8
 # Garage Menu Installer for Ubuntu 22.04 — dùng menu tương tác
-SCRIPT_VERSION="v1.5.3-2025-11-06"
+SCRIPT_VERSION="v1.5.6-2025-11-09"
 # Cách chạy: sudo bash garage_menu.sh
 
 set -euo pipefail
@@ -441,9 +441,7 @@ nginx_global_tune() {
   local CONF="/etc/nginx/conf.d/garage_global.conf"
   cat > "$CONF" <<'CONF'
 # Cache store for public gateway
-proxy_cache_path /var/cache/nginx/garage_public levels=1:2 \
-                 keys_zone=gp_cache:100m max_size=20g inactive=7d \
-                 use_temp_path=off;
+proxy_cache_path /var/cache/nginx/garage_public levels=1:2 keys_zone=gp_cache:100m max_size=20g inactive=7d use_temp_path=off;
 
 # Sensible gzip for text assets
 gzip on;
@@ -456,9 +454,6 @@ proxy_buffering on;
 proxy_buffers 64 64k;
 proxy_buffer_size 16k;
 proxy_busy_buffers_size 256k;
-
-# Improve TLS/http2 (server blocks should enable http2 on 443)
-# (Certbot keeps ssl params; we don't override here.)
 CONF
   nginx -t && systemctl reload nginx || true
 }
@@ -491,13 +486,102 @@ EOF
   local ALLOW_MAP="/etc/nginx/garage_public_allow.map.conf"
   [[ -f "$ALLOW_MAP" ]] || echo "# ~^/bucket/path$ 1;" > "$ALLOW_MAP"
 
-  # Nginx optimized cache proxy for public domain (heredoc QUOTED)
+  # Render Nginx site: HTTP first; append HTTPS only if cert exists
   local SITE="/etc/nginx/sites-available/garage_public"
+  local CERT_DIR="/etc/letsencrypt/live/$PUB_DOMAIN"
+  local HAVE_CERT=0
+  [[ -f "$CERT_DIR/fullchain.pem" && -f "$CERT_DIR/privkey.pem" ]] && HAVE_CERT=1
+
+  # HTTP server (no redirect so it works before cert)
   cat > "$SITE" <<'NGINX'
 # allow-list cho file public
 map $request_uri $public_ok {
   default 0;
   include /etc/nginx/garage_public_allow.map.conf;
+}
+
+upstream garage_web { server 127.0.0.1:3902; keepalive 64; }
+map $request_method $skip_cache { default 1; GET 0; HEAD 0; }
+
+server {
+  listen 80; listen [::]:80;
+  server_name PUBLIC_DOMAIN;
+
+  proxy_cache gp_cache;
+  proxy_cache_methods GET HEAD;
+  proxy_cache_key "$scheme$host$uri$is_args$args";
+  proxy_cache_lock on;
+  proxy_cache_min_uses 1;
+  proxy_cache_valid 200 206 10m;
+  proxy_cache_valid 301 302 1h;
+  proxy_cache_use_stale error timeout invalid_header updating http_500 http_502 http_503 http_504;
+  proxy_cache_background_update on;
+  proxy_cache_revalidate on;
+  add_header X-Cache $upstream_cache_status always;
+
+  location ~ ^/([^/]+)/?(.*)$ {
+    if ($public_ok = 0) { return 403; }
+    set $bucket $1; set $rest $2;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $bucket.PUBLIC_DOMAIN;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_no_cache $skip_cache;
+    proxy_cache_bypass $skip_cache;
+    proxy_pass http://127.0.0.1:3902/$rest;
+  }
+}
+NGINX
+
+  if (( HAVE_CERT == 1 )); then
+    cat >> "$SITE" <<'NGINX'
+server {
+  listen 443 ssl http2; listen [::]:443 ssl http2;
+  server_name PUBLIC_DOMAIN;
+
+  ssl_certificate     CERT_FULLCHAIN;
+  ssl_certificate_key CERT_PRIVKEY;
+
+  proxy_cache gp_cache;
+  proxy_cache_methods GET HEAD;
+  proxy_cache_key "$scheme$host$uri$is_args$args";
+  proxy_cache_lock on;
+  proxy_cache_min_uses 1;
+  proxy_cache_valid 200 206 10m;
+  proxy_cache_valid 301 302 1h;
+  proxy_cache_use_stale error timeout invalid_header updating http_500 http_502 http_503 http_504;
+  proxy_cache_background_update on;
+  proxy_cache_revalidate on;
+  add_header X-Cache $upstream_cache_status always;
+
+  location ~ ^/([^/]+)/?(.*)$ {
+    if ($public_ok = 0) { return 403; }
+    set $bucket $1; set $rest $2;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $bucket.PUBLIC_DOMAIN;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_no_cache $skip_cache;
+    proxy_cache_bypass $skip_cache;
+    proxy_pass http://127.0.0.1:3902/$rest;
+  }
+}
+NGINX
+    sed -i "s|CERT_FULLCHAIN|$CERT_DIR/fullchain.pem|; s|CERT_PRIVKEY|$CERT_DIR/privkey.pem|" "$SITE"
+  fi
+
+  sed -i "s/PUBLIC_DOMAIN/${PUB_DOMAIN}/g" "$SITE"
+  ln -sf "$SITE" /etc/nginx/sites-enabled/garage_public
+  nginx -t && systemctl reload nginx
+
+  if (( HAVE_CERT == 1 )); then
+    info "Public gateway sẵn sàng: https://${PUB_DOMAIN} (VD: https://${PUB_DOMAIN}/<bucket>/<path>)"
+  else
+    warn "Chưa có chứng thư cho ${PUB_DOMAIN}. Dùng menu: 'Cấp chứng thư public domain', sau đó chạy lại mục (1)."
+    info "Tạm thời truy cập HTTP: http://${PUB_DOMAIN}/<bucket>/<path>"
+  fi
 }
 
 upstream garage_web { server 127.0.0.1:3902; keepalive 64; }
@@ -547,7 +631,10 @@ public_issue_cert() {
   local PUB_DOMAIN_SUGGEST="public.$BASE"
   read -rp "Cấp chứng thư cho public domain nào [$PUB_DOMAIN_SUGGEST]: " PUB_DOMAIN
   PUB_DOMAIN=${PUB_DOMAIN:-$PUB_DOMAIN_SUGGEST}
-  certbot --nginx -d "$PUB_DOMAIN" -m "$EMAIL" --agree-tos --non-interactive || true
+  certbot --nginx -d "$PUB_DOMAIN" -m "$EMAIL" --agree-tos --non-interactive --redirect || true
+  # Sau khi có cert → render lại site để thêm 443 ssl
+  public_gateway_enable <<< $'
+' || true
 }
 
 public_bucket_allow() {
@@ -592,7 +679,7 @@ public_allow_file() {
   read -rp "Bucket: " b
   read -rp "Object path (ví dụ docker/introduction-to-docker-light.pdf): " o
   wait_ready; GCLI bucket website --allow "$b" >/dev/null 2>&1 || true
-  # escape regex metachars for nginx map regex (prefix backslash for each matched char)
+  # v1.5.6: escape regex metachars for nginx map regex (prefix backslash for each matched char)
   local esc
   esc=$(printf '%s' "$o" | sed -e 's/[][()^.$*+?{}|\/_-]/\&/g')
   local pat="~^/"$b"/"$esc"$ 1;"
@@ -605,6 +692,7 @@ public_revoke_file() {
   local ALLOW_MAP="/etc/nginx/garage_public_allow.map.conf"
   read -rp "Bucket: " b
   read -rp "Object path: " o
+  # v1.5.6: escape regex to match exact stored pattern
   local esc
   esc=$(printf '%s' "$o" | sed -e 's/[][()^.$*+?{}|\/_-]/\&/g')
   local pat="~^/"$b"/"$esc"$ 1;"
