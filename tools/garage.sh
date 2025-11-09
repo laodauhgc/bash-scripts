@@ -2,7 +2,7 @@
 # Force UTF-8 để tránh lỗi hiển thị ký tự trên một số VPS
 export LC_ALL=C.UTF-8 LANG=C.UTF-8
 # Garage Menu Installer for Ubuntu 22.04 — dùng menu tương tác
-SCRIPT_VERSION="v1.4.4-2025-11-06"
+SCRIPT_VERSION="v1.4.8-2025-11-06"
 # Cách chạy: sudo bash garage_menu.sh
 
 set -euo pipefail
@@ -171,24 +171,6 @@ stop_stack() {
   if docker compose -f "$COMPOSE_FILE" ps >/dev/null 2>&1; then
     info "Dừng Garage..."; docker compose -f "$COMPOSE_FILE" down || true
   fi
-}
-
-nginx_basic() {
-  info "Tạo site NGINX cho $S3_DOMAIN (HTTP proxy → 3900)"
-  cat > "$NGINX_SITE" <<NGINX
-server {
-  listen 80;
-  listen [::]:80;
-  server_name $S3_DOMAIN;
-  client_max_body_size 0;
-  proxy_request_buffering off;
-  location / {
-    proxy_pass http://127.0.0.1:3900;
-    proxy_set_header Host \$host;
-    proxy_set_header X-Real-IP \$remote_addr;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    proxy_http_version 1.1;
-  }
 }
 
 letsencrypt() {
@@ -486,6 +468,7 @@ public_gateway_enable() {
   local PUB_DOMAIN_SUGGEST="public.$BASE"
   read -rp "Nhập public domain cho link public [$PUB_DOMAIN_SUGGEST]: " PUB_DOMAIN
   PUB_DOMAIN=${PUB_DOMAIN:-$PUB_DOMAIN_SUGGEST}
+
   # enable/replace [s3_web]
   if grep -q '^\[s3_web\]' "$CFG_FILE"; then
     awk 'BEGIN{skip=0} /^\[s3_web\]/{print "# [s3_web] (replaced by installer)"; skip=1; next} /^\[/{if(skip==1){skip=0}} skip==0{print}' "$CFG_FILE" > "$CFG_FILE.tmp" && mv "$CFG_FILE.tmp" "$CFG_FILE"
@@ -498,71 +481,17 @@ index      = "index.html"
 EOF
   docker compose -f "$COMPOSE_FILE" restart || start_stack
 
-  # Ensure allowlist map file exists
+  # allowlist file for per-file public access
   local ALLOW_MAP="/etc/nginx/garage_public_allow.map.conf"
-  [[ -f "$ALLOW_MAP" ]] || echo "# format: regex 1;  (ex: ~^/files/docker/introduction\-to\-docker\-light\.pdf$ 1;)" > "$ALLOW_MAP"
+  [[ -f "$ALLOW_MAP" ]] || echo "# ~^/bucket/path$ 1;" > "$ALLOW_MAP"
 
-  # Nginx optimized cache proxy for public domain with allowlist map
+  # Nginx optimized cache proxy for public domain (heredoc QUOTED)
   local SITE="/etc/nginx/sites-available/garage_public"
   cat > "$SITE" <<'NGINX'
-# allow-list for public files
+# allow-list cho file public
 map $request_uri $public_ok {
   default 0;
   include /etc/nginx/garage_public_allow.map.conf;
-}
-
-upstream garage_web {
-  server 127.0.0.1:3902;
-  keepalive 64;
-}
-
-map $request_method $skip_cache {
-  default 1;  # disable cache for non-GET/HEAD
-  GET 0;
-  HEAD 0;
-}
-
-server { listen 80; listen [::]:80; server_name PUBLIC_DOMAIN; return 301 https://$host$request_uri; }
-server {
-  listen 443 ssl http2;
-  server_name PUBLIC_DOMAIN;
-
-  proxy_cache gp_cache;
-  proxy_cache_methods GET HEAD;
-  proxy_cache_key "$scheme$host$uri$is_args$args";
-  proxy_cache_lock on;
-  proxy_cache_min_uses 1;
-  proxy_cache_valid 200 206 10m;
-  proxy_cache_valid 301 302 1h;
-  proxy_cache_use_stale error timeout invalid_header updating http_500 http_502 http_503 http_504;
-  proxy_cache_background_update on;
-  proxy_cache_revalidate on;
-  add_header X-Cache $upstream_cache_status always;
-
-  location ~ ^/([^/]+)/?(.*)$ {
-    if ($public_ok = 0) { return 403; }
-    set $bucket $1; set $rest $2;
-    proxy_http_version 1.1;
-    proxy_set_header Connection "";
-    proxy_set_header Host $bucket.PUBLIC_DOMAIN;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_no_cache $skip_cache;
-    proxy_cache_bypass $skip_cache;
-    proxy_pass http://garage_web/$rest;
-  }
-}
-NGINX
-  sed -i "s/PUBLIC_DOMAIN/${PUB_DOMAIN}/g" "$SITE"
-  ln -sf "$SITE" /etc/nginx/sites-enabled/garage_public
-  nginx -t && systemctl reload nginx
-  info "Public gateway sẵn sàng tại: https://${PUB_DOMAIN}. Ví dụ: https://${PUB_DOMAIN}/<bucket>/<path>"
-}
-NGINX
-  sed -i "s/PUBLIC_DOMAIN/${PUB_DOMAIN}/g" "$SITE"
-  ln -sf "$SITE" /etc/nginx/sites-enabled/garage_public
-  nginx -t && systemctl reload nginx
-  info "Public gateway đã bật cho https://${PUB_DOMAIN}. Hãy cấp HTTPS ở mục 'Cấp chứng thư public domain'."
 }
 
 public_issue_cert() {
@@ -616,8 +545,9 @@ public_allow_file() {
   read -rp "Bucket: " b
   read -rp "Object path (ví dụ docker/introduction-to-docker-light.pdf): " o
   wait_ready; GCLI bucket website --allow "$b" >/dev/null 2>&1 || true
+  # escape regex metachars for nginx map regex
   local esc
-  esc=$(printf '%s' "$o" | sed -e 's/[].[^$*\/+?|(){}-]/\&/g')
+  esc=$(printf '%s' "$o" | sed -e 's/[][()^.$*+?{}|\/_-]/\&/g')
   local pat="~^/"$b"/"$esc"$ 1;"
   echo "$pat" >> "$ALLOW_MAP"
   nginx -t && systemctl reload nginx
@@ -629,7 +559,7 @@ public_revoke_file() {
   read -rp "Bucket: " b
   read -rp "Object path: " o
   local esc
-  esc=$(printf '%s' "$o" | sed -e 's/[].[^$*\/+?|(){}-]/\&/g')
+  esc=$(printf '%s' "$o" | sed -e 's/[][()^.$*+?{}|\/_-]/\&/g')
   local pat="~^/"$b"/"$esc"$ 1;"
   if [[ -f "$ALLOW_MAP" ]]; then
     grep -vF "$pat" "$ALLOW_MAP" > "$ALLOW_MAP.tmp" && mv "$ALLOW_MAP.tmp" "$ALLOW_MAP"
