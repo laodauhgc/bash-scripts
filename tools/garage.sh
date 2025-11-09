@@ -2,7 +2,7 @@
 # Force UTF-8 để tránh lỗi hiển thị ký tự trên một số VPS
 export LC_ALL=C.UTF-8 LANG=C.UTF-8
 # Garage Menu Installer for Ubuntu 22.04 — dùng menu tương tác
-SCRIPT_VERSION="v1.4.9-2025-11-06"
+SCRIPT_VERSION="v1.5.0-2025-11-06"
 # Cách chạy: sudo bash garage_menu.sh
 
 set -euo pipefail
@@ -175,7 +175,9 @@ stop_stack() {
 
 letsencrypt() {
   info "Yêu cầu chứng thư Let's Encrypt cho $S3_DOMAIN"
-  certbot --nginx -d "$S3_DOMAIN" -m "$EMAIL" --agree-tos --non-interactive --redirect
+  certbot --nginx -d "$S3_DOMAIN" -m "$EMAIL" --agree-tos --non-interactive --redirect || true
+  # Sau khi có chứng thư, viết lại site để bật 443 ssl (nếu trước đó chưa có)
+  optimize_nginx_s3_site
 }
 
 ufw_rules() {
@@ -283,8 +285,12 @@ full_install() {
   write_compose
   ufw_rules
   start_stack
+  # Lần 1: viết site HTTP (chưa có cert) → nginx -t OK
   optimize_nginx_s3_site
+  # Cấp chứng thư rồi viết lại site HTTPS
   letsencrypt
+  # Viết lại site để bật 443 ssl nếu cert đã có
+  optimize_nginx_s3_site
   init_cluster_single
   create_bucket
   create_key
@@ -652,11 +658,61 @@ menu_public_gateway() {
 optimize_nginx_s3_site() {
   load_state
   local SITE="$NGINX_SITE"
-  # Rebuild S3 vhost with streaming uploads and keepalive, without cache
+  local CERT_DIR="/etc/letsencrypt/live/$S3_DOMAIN"
+  local HAVE_CERT=0
+  [[ -f "$CERT_DIR/fullchain.pem" && -f "$CERT_DIR/privkey.pem" ]] && HAVE_CERT=1
+  mkdir -p /var/www/html
+
+  # Luôn có upstream và server 80 để ACME hoạt động
   cat > "$SITE" <<'NGINX'
 upstream garage_s3 {
   server 127.0.0.1:3900;
   keepalive 32;
+}
+
+server {
+  listen 80; listen [::]:80;
+  server_name S3_DOMAIN;
+  # Cho ACME-challenge (plugin --nginx vẫn có thể override, đây là fallback)
+  location ^~ /.well-known/acme-challenge/ {
+    root /var/www/html;
+  }
+  return 301 https://$host$request_uri;
+}
+NGINX
+
+  if (( HAVE_CERT == 1 )); then
+    # Khi đã có cert, thêm server 443 ssl với proxy tới S3 API
+    cat >> "$SITE" <<'NGINX'
+server {
+  listen 443 ssl http2; listen [::]:443 ssl http2;
+  server_name S3_DOMAIN;
+
+  ssl_certificate     CERT_FULLCHAIN;
+  ssl_certificate_key CERT_PRIVKEY;
+
+  # Large uploads
+  client_max_body_size 0;
+  proxy_request_buffering off;
+
+  location / {
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_no_cache 1;
+    proxy_cache_bypass 1;
+    proxy_pass http://garage_s3;
+  }
+}
+NGINX
+    sed -i "s|CERT_FULLCHAIN|$CERT_DIR/fullchain.pem|; s|CERT_PRIVKEY|$CERT_DIR/privkey.pem|" "$SITE"
+  fi
+
+  sed -i "s/S3_DOMAIN/$S3_DOMAIN/g" "$SITE"
+  ln -sf "$SITE" /etc/nginx/sites-enabled/garage_s3
+  nginx -t && systemctl reload nginx || true
 }
 
 server {
