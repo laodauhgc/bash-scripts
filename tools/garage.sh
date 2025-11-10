@@ -2,7 +2,7 @@
 # Force UTF-8 để tránh lỗi hiển thị ký tự
 export LC_ALL=C.UTF-8 LANG=C.UTF-8
 # Garage Menu Installer for Ubuntu 22.04 — dùng menu tương tác
-SCRIPT_VERSION="v1.6.4-2025-11-10"
+SCRIPT_VERSION="v1.6.5-2025-11-10"
 # Cách chạy: sudo bash garage.sh
 
 set -euo pipefail
@@ -451,7 +451,6 @@ public_bucket_disallow() {
   GCLI bucket website --disable "$b" 2>/dev/null || \
   GCLI bucket website "$b" --disable 2>/dev/null || true
 }
-  }
 
 public_gateway_disable() {
   load_state; info "Gỡ public gateway (bỏ [s3_web], xoá nginx site, tuỳ chọn xoá cert)"
