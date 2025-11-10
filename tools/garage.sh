@@ -2,7 +2,7 @@
 # Force UTF-8 để tránh lỗi hiển thị ký tự
 export LC_ALL=C.UTF-8 LANG=C.UTF-8
 # Garage Menu Installer for Ubuntu 22.04 — dùng menu tương tác
-SCRIPT_VERSION="v1.6.2-2025-11-09"
+SCRIPT_VERSION="v1.6.3-2025-11-09"
 # Cách chạy: sudo bash garage.sh
 
 set -euo pipefail
@@ -326,7 +326,7 @@ EOF
   # HTTP server (giữ http để ACME hoạt động, redirect nếu đã có cert)
   cat > "$SITE" <<'NGINX'
 # allow-list cho file/bucket public
-map $request_uri $public_ok {
+map $uri $public_ok {
   default 0;
   include /etc/nginx/garage_public_allow.map.conf;
 }
@@ -350,9 +350,9 @@ server {
   proxy_cache_revalidate on;
   add_header X-Cache $upstream_cache_status always;
 
-  location ~ ^/([^/]+)/?(.*)$ {
+  location ~ ^/(?<bucket>[^/]+)/?(?<rest>.*)$ {
     if ($public_ok = 0) { return 403; }
-    set $bucket $1;
+    set $upstream_uri /$rest;
     proxy_http_version 1.1;
     proxy_set_header Connection "";
     proxy_set_header Host $bucket.PUBLIC_DOMAIN;
@@ -360,9 +360,7 @@ server {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_no_cache $skip_cache;
     proxy_cache_bypass $skip_cache;
-    # Bỏ prefix bucket rồi forward, KHÔNG dùng proxy_pass có URI (tránh 404)
-    rewrite ^/[^/]+/?(.*)$ /$1 break;
-    proxy_pass http://127.0.0.1:3902;
+    proxy_pass http://127.0.0.1:3902$upstream_uri;
   }
 }
 NGINX
@@ -388,9 +386,9 @@ server {
   proxy_cache_revalidate on;
   add_header X-Cache $upstream_cache_status always;
 
-  location ~ ^/([^/]+)/?(.*)$ {
+  location ~ ^/(?<bucket>[^/]+)/?(?<rest>.*)$ {
     if ($public_ok = 0) { return 403; }
-    set $bucket $1;
+    set $upstream_uri /$rest;
     proxy_http_version 1.1;
     proxy_set_header Connection "";
     proxy_set_header Host $bucket.PUBLIC_DOMAIN;
@@ -398,8 +396,7 @@ server {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_no_cache $skip_cache;
     proxy_cache_bypass $skip_cache;
-    rewrite ^/[^/]+/?(.*)$ /$1 break;
-    proxy_pass http://127.0.0.1:3902;
+    proxy_pass http://127.0.0.1:3902$upstream_uri;
   }
 }
 NGINX
@@ -440,6 +437,17 @@ public_bucket_allow() {
 public_bucket_disallow() {
   load_state; wait_ready
   read -rp "Bucket cần thu hồi public [$BUCKET_NAME]: " b; b=${b:-$BUCKET_NAME}
+  info "Thu hồi public (chỉ phía NGINX) cho bucket: $b"
+  # Gỡ wildcard trong allow-list
+  local ALLOW_MAP="/etc/nginx/garage_public_allow.map.conf"
+  if [[ -f "$ALLOW_MAP" ]]; then
+    grep -vE "^~\^/${b}/\.\*\$ 1;" "$ALLOW_MAP" > "$ALLOW_MAP.tmp" || true
+    mv -f "$ALLOW_MAP.tmp" "$ALLOW_MAP" 2>/dev/null || true
+    nginx -t && systemctl reload nginx || true
+  fi
+  # Thử tắt website mode (không bắt buộc – khác version CLI có tên cờ khác nhau)
+  GCLI bucket website "$b" --deny 2>/dev/null || GCLI bucket website "$b" --disallow 2>/dev/null || true
+}
   info "Tắt website cho bucket: $b"; GCLI bucket website --disable "$b" || true
 }
 
