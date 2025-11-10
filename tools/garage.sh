@@ -2,7 +2,7 @@
 # Force UTF-8 để tránh lỗi hiển thị ký tự
 export LC_ALL=C.UTF-8 LANG=C.UTF-8
 # Garage Menu Installer for Ubuntu 22.04 — dùng menu tương tác
-SCRIPT_VERSION="v1.6.3-2025-11-09"
+SCRIPT_VERSION="v1.6.4-2025-11-10"
 # Cách chạy: sudo bash garage.sh
 
 set -euo pipefail
@@ -437,7 +437,7 @@ public_bucket_allow() {
 public_bucket_disallow() {
   load_state; wait_ready
   read -rp "Bucket cần thu hồi public [$BUCKET_NAME]: " b; b=${b:-$BUCKET_NAME}
-  info "Thu hồi public (chỉ phía NGINX) cho bucket: $b"
+  info "Thu hồi public (phía NGINX) cho bucket: $b"
   # Gỡ wildcard trong allow-list
   local ALLOW_MAP="/etc/nginx/garage_public_allow.map.conf"
   if [[ -f "$ALLOW_MAP" ]]; then
@@ -445,11 +445,13 @@ public_bucket_disallow() {
     mv -f "$ALLOW_MAP.tmp" "$ALLOW_MAP" 2>/dev/null || true
     nginx -t && systemctl reload nginx || true
   fi
-  # Thử tắt website mode (không bắt buộc – khác version CLI có tên cờ khác nhau)
-  GCLI bucket website "$b" --deny 2>/dev/null || GCLI bucket website "$b" --disallow 2>/dev/null || true
+  # CLI best‑effort (tương thích các phiên bản Garage khác nhau)
+  GCLI bucket website --deny "$b"    2>/dev/null || \
+  GCLI bucket website "$b" --deny    2>/dev/null || \
+  GCLI bucket website --disable "$b" 2>/dev/null || \
+  GCLI bucket website "$b" --disable 2>/dev/null || true
 }
-  info "Tắt website cho bucket: $b"; GCLI bucket website --disable "$b" || true
-}
+  }
 
 public_gateway_disable() {
   load_state; info "Gỡ public gateway (bỏ [s3_web], xoá nginx site, tuỳ chọn xoá cert)"
