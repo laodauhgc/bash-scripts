@@ -116,7 +116,7 @@ echo -e "\n${GREEN}=== Hoàn tất! ===${NC}"
 echo "Trạng thái container:"
 docker ps --filter "name=nockpool-miner" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" || true
 echo -e "\n${YELLOW}Lưu ý:${NC}"
-echo "- Chạy: ./setup_nockpool.sh [token] để truyền token mới."
+echo "- Chạy: ./nockpool_docker.sh [token] để truyền token mới."
 echo "- Container auto-restart khi WSL reboot (nhờ --restart=unless-stopped)."
 echo "- Dừng: docker stop nockpool-miner | Xóa: docker rm -f nockpool-miner."
 echo "- Env load từ ~/.profile khi WSL start. Kiểm tra: echo \$ACCOUNT_TOKEN."
