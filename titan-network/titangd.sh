@@ -62,7 +62,7 @@ echo "StorageClass has been configured."
 
 # Download and install titan-L1 guardian
 echo "Downloading titan-L1 guardian..."
-wget https://github.com/Titannet-dao/titan-node/releases/download/v0.1.22/titan-l1-guardian
+wget https://github.com/Titannet-dao/titan-node/releases/download/v0.1.23/titan-l1-guardian
 mv titan-l1-guardian /usr/local/bin/
 chmod 0755 /usr/local/bin/titan-l1-guardian
 echo "titan-L1 guardian has been installed."
