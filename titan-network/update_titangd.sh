@@ -2,6 +2,13 @@
 set -euo pipefail
 
 ########################################
+# Titan Guardian Updater for titand
+# Script version: 1.1.0
+########################################
+
+SCRIPT_VERSION="1.1.0"
+
+########################################
 # CẤU HÌNH
 ########################################
 TITAN_REPO_API="https://api.github.com/repos/Titannet-dao/titan-node/releases/latest"
@@ -16,12 +23,14 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-MODE="update"      # mặc định: update
-DO_REBOOT=0        # mặc định: không reboot
-EXPLICIT_VERSION="" # nếu truyền --version thì dùng cái này
+MODE="update"        # mặc định: update
+DO_REBOOT=0          # mặc định: không reboot
+EXPLICIT_VERSION=""  # nếu truyền --version thì dùng cái này
 
 usage() {
   cat <<EOF
+Titan Guardian Updater (script version: ${SCRIPT_VERSION})
+
 Usage: $0 [mode] [options]
 
 Modes:
@@ -50,36 +59,30 @@ check_error() {
   fi
 }
 
-# Hàm lấy URL (curl hoặc wget)
+# Chắc chắn có curl
+if ! command -v curl >/dev/null 2>&1; then
+  echo -e "${RED}curl is required but not installed. Please install curl first.${NC}"
+  exit 1
+fi
+
+# Hàm lấy nội dung URL
 fetch_url() {
   local url="$1"
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$url"
-  elif command -v wget >/dev/null 2>&1; then
-    wget -qO- "$url"
-  else
-    echo -e "${RED}Neither curl nor wget is available. Please install one of them.${NC}" >&2
-    return 1
-  fi
+  curl -fsSL "$url"
 }
 
 # Hàm download file
 download_file() {
   local url="$1"
   local dest="$2"
-  if command -v curl >/dev/null 2>&1; then
-    curl -fL "$url" -o "$dest"
-  elif command -v wget >/dev/null 2>&1; then
-    wget -O "$dest" "$url"
-  else
-    echo -e "${RED}Neither curl nor wget is available. Please install one of them.${NC}" >&2
-    return 1
-  fi
+  curl -fL "$url" -o "$dest"
 }
 
 ########################################
 # PARSE THAM SỐ
 ########################################
+
+# Mode có thể truyền đầu tiên: check / update
 if [[ $# -ge 1 ]]; then
   case "$1" in
     check|--check|-c)
@@ -93,6 +96,7 @@ if [[ $# -ge 1 ]]; then
   esac
 fi
 
+# Các option khác
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --reboot)
@@ -132,6 +136,7 @@ fi
 # LẤY VERSION MỚI NHẤT / VERSION CHỈ ĐỊNH
 ########################################
 echo -e "${YELLOW}Detecting Titan Guardian version...${NC}"
+echo "Script version: ${SCRIPT_VERSION}"
 
 if [[ -n "$EXPLICIT_VERSION" ]]; then
   TITAN_VERSION="$EXPLICIT_VERSION"
@@ -162,12 +167,24 @@ echo
 # KIỂM TRA VERSION ĐANG CÀI
 ########################################
 CURRENT_BIN_PATH="$(command -v "$TITAN_BINARY" 2>/dev/null || true)"
+UP_TO_DATE=0
+
 if [[ -n "$CURRENT_BIN_PATH" ]]; then
   echo "Current binary path: $CURRENT_BIN_PATH"
   CURRENT_VERSION_OUTPUT="$("$TITAN_BINARY" -v 2>&1 || true)"
   echo "Current version output: $CURRENT_VERSION_OUTPUT"
 
-  if [[ "$CURRENT_VERSION_OUTPUT" == *"$TITAN_VERSION"* ]]; then
+  # Lấy core version X.Y.Z từ output, ví dụ: 0.1.23 từ "titan-candidate version 0.1.23+git.a62ef10"
+  CURRENT_BASE_VERSION="$(echo "$CURRENT_VERSION_OUTPUT" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
+
+  # Bỏ chữ 'v' ở phía trước tag GitHub, ví dụ: v0.1.23 -> 0.1.23
+  LATEST_BASE_VERSION="${TITAN_VERSION#v}"
+
+  if [[ -n "$CURRENT_BASE_VERSION" && "$CURRENT_BASE_VERSION" = "$LATEST_BASE_VERSION" ]]; then
+    echo -e "${GREEN}Hiện tại đang chạy đúng version ${CURRENT_BASE_VERSION} (tag ${TITAN_VERSION}).${NC}"
+    UP_TO_DATE=1
+  elif [[ "$CURRENT_VERSION_OUTPUT" == *"$TITAN_VERSION"* ]]; then
+    # fallback: nếu output chứa nguyên chuỗi tag
     echo -e "${GREEN}Hiện tại có vẻ đã là bản ${TITAN_VERSION} rồi.${NC}"
     UP_TO_DATE=1
   else
@@ -185,6 +202,13 @@ fi
 if [[ "$MODE" = "check" ]]; then
   echo
   echo -e "${YELLOW}Check-only mode: không stop service, không download, không update, không reboot.${NC}"
+  exit 0
+fi
+
+# Nếu đang update mà đã đúng version rồi thì thôi
+if [[ "$MODE" = "update" && "$UP_TO_DATE" -eq 1 ]]; then
+  echo
+  echo -e "${GREEN}Đã chạy đúng version mục tiêu (${TITAN_VERSION}), không cần update thêm.${NC}"
   exit 0
 fi
 
