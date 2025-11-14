@@ -3,7 +3,7 @@
 # Script to automate the update of Titan Guardian (titand systemd service)
 
 # Define variables
-TITAN_VERSION="v0.1.22"
+TITAN_VERSION="v0.1.23"
 TITAN_URL="https://github.com/Titannet-dao/titan-node/releases/download/${TITAN_VERSION}/titan-l1-guardian"
 TITAN_BINARY="titan-l1-guardian"
 SYSTEM_DIR="/usr/local/bin"
