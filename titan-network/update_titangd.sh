@@ -3,10 +3,10 @@ set -euo pipefail
 
 ########################################
 # Titan Guardian Updater for titand
-# Script version: 1.1.0
+# Script version: 1.2.0
 ########################################
 
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.2.0"
 
 ########################################
 # CẤU HÌNH
@@ -14,7 +14,10 @@ SCRIPT_VERSION="1.1.0"
 TITAN_REPO_API="https://api.github.com/repos/Titannet-dao/titan-node/releases/latest"
 TITAN_BINARY="titan-l1-guardian"
 SYSTEM_DIR="/usr/local/bin"
-SERVICE_NAME="titand"   # systemd unit: titand.service
+
+# Tên service mặc định, có thể override bằng env TITAN_SERVICE_NAME hoặc --service
+SERVICE_NAME_DEFAULT="titand"
+SERVICE_NAME="${TITAN_SERVICE_NAME:-$SERVICE_NAME_DEFAULT}"
 ########################################
 
 # Màu sắc cho output
@@ -34,19 +37,25 @@ Titan Guardian Updater (script version: ${SCRIPT_VERSION})
 Usage: $0 [mode] [options]
 
 Modes:
-  check           Chỉ kiểm tra: version mới nhất trên GitHub & version đang cài
-  update          Cập nhật lên bản mới nhất (mặc định nếu không ghi gì)
+  check               Chỉ kiểm tra: version mới nhất trên GitHub & version đang cài
+  update              Cập nhật lên bản mới nhất (mặc định nếu không ghi gì)
 
 Options:
-  --version X     Cập nhật / kiểm tra với version cụ thể (vd: v0.1.23)
-  --reboot        Sau khi update xong sẽ reboot máy
-  -h, --help      Hiển thị trợ giúp
+  --version X         Cập nhật / kiểm tra với version cụ thể (vd: v0.1.23)
+  --service NAME      Tên systemd service (mặc định: ${SERVICE_NAME_DEFAULT})
+                      Ví dụ: --service titan-node
+  --reboot            Sau khi update xong sẽ reboot máy
+  -h, --help          Hiển thị trợ giúp
+
+Env:
+  TITAN_SERVICE_NAME  Override tên service mặc định (ví dụ: TITAN_SERVICE_NAME=titan-node)
 
 Ví dụ:
   $0 check
   $0 update
+  $0 update --service titan-node
   $0 update --reboot
-  $0 update --version v0.1.23
+  $0 update --version v0.1.23 --service titan-node
 EOF
 }
 
@@ -112,6 +121,15 @@ while [[ $# -gt 0 ]]; do
       EXPLICIT_VERSION="$1"
       shift
       ;;
+    --service)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo -e "${RED}--service cần 1 giá trị, ví dụ: --service titan-node${NC}"
+        exit 1
+      fi
+      SERVICE_NAME="$1"
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -137,6 +155,7 @@ fi
 ########################################
 echo -e "${YELLOW}Detecting Titan Guardian version...${NC}"
 echo "Script version: ${SCRIPT_VERSION}"
+echo "Using systemd service name: ${SERVICE_NAME}"
 
 if [[ -n "$EXPLICIT_VERSION" ]]; then
   TITAN_VERSION="$EXPLICIT_VERSION"
@@ -218,7 +237,7 @@ fi
 echo
 echo "Starting the update process for Titan Guardian version ${TITAN_VERSION}..."
 
-# Step 0: Stop the titand service
+# Step 0: Stop the service
 echo "Stopping the ${SERVICE_NAME} service..."
 systemctl stop "$SERVICE_NAME"
 check_error "Failed to stop the ${SERVICE_NAME} service"
