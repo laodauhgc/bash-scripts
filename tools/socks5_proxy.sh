@@ -1,243 +1,257 @@
-#!/bin/bash
-# Script tự động cài đặt SOCKS5 Proxy trên Ubuntu bằng Docker
-# Ngày: 07/07/2025
-# Phiên bản: 1.0.0
+#!/usr/bin/env bash
+# Universal SOCKS5 Proxy Setup Script
+# Supports: Ubuntu, Debian, CentOS, AlmaLinux, Rocky Linux
+# Uses Docker Compose V2 & Auto Firewall Config
 
-# Màu sắc cho output
-RED='\033[0;31m'
+set -Eeuo pipefail
+trap 'echo "❌ Error at line $LINENO: $BASH_COMMAND" >&2' ERR
+
+# ==============================================================================
+# CONFIGURATION
+# ==============================================================================
+OUTPUT_FILE="/root/socks5proxy.txt"
+WORK_DIR="/root/socks5-proxy"
+DEFAULT_START_PORT=5000
+PROXY_IMAGE="ghcr.io/tarampampam/3proxy:latest" # Lightweight & maintained
+
+# Colors
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+RED='\033[0;31m'
+BLUE='\033[0;34m'
+NC='\033[0m'
 
-# File lưu thông tin proxy
-OUTPUT_FILE="/root/socks5proxy.txt"
+# ==============================================================================
+# HELPER FUNCTIONS
+# ==============================================================================
 
-# Thư mục làm việc
-WORK_DIR="/root/socks5-proxy"
+log_info()  { echo -e "${BLUE}[INFO] $1${NC}"; }
+log_ok()    { echo -e "${GREEN}[OK] $1${NC}"; }
+log_warn()  { echo -e "${YELLOW}[WARN] $1${NC}"; }
+log_error() { echo -e "${RED}[ERROR] $1${NC}"; exit 1; }
 
-# Cổng mặc định
-START_PORT=5000
-
-# Địa chỉ IP công cộng
-PUBLIC_IP=$(curl -s ifconfig.me)
-if [ -z "$PUBLIC_IP" ]; then
-    echo -e "${RED}Lỗi: Không thể lấy IP công cộng. Kiểm tra kết nối mạng!${NC}"
-    exit 1
-fi
-
-# Hàm kiểm tra lệnh
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
+check_root() {
+    [[ $EUID -eq 0 ]] || log_error "This script must be run as root/sudo."
 }
 
-# Hàm kiểm tra cổng
-check_port() {
+detect_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS_ID=$ID
+        OS_LIKE=${ID_LIKE:-$ID}
+    else
+        OS_ID="unknown"
+        OS_LIKE="unknown"
+    fi
+
+    case "$OS_LIKE" in
+        *debian*|ubuntu) PKG_MANAGER="apt" ;;
+        *rhel*|*centos*|*fedora*) PKG_MANAGER="dnf" ;;
+        *) log_error "Unsupported OS: $OS_ID ($OS_LIKE)" ;;
+    esac
+}
+
+check_port_availability() {
     local port=$1
-    if netstat -tuln | grep -q ":$port\s"; then
-        echo -e "${RED}Lỗi: Cổng $port đã được sử dụng!${NC}"
-        exit 1
+    if netstat -tuln | grep -q ":$port "; then
+        log_error "Port $port is already in use!"
     fi
 }
 
-# Hàm hiển thị hướng dẫn sử dụng
-usage() {
-    echo -e "${YELLOW}Cách sử dụng: $0 [-p <start_port>] [-r]${NC}"
-    echo -e "  -p <start_port>: Chỉ định cổng bắt đầu (mặc định: 5000)"
-    echo -e "  -r: Xóa tất cả proxy đã cài đặt"
-    echo -e "Ví dụ: $0 -p 8000"
-    echo -e "       $0 -r"
-    exit 1
+get_public_ip() {
+    local ip
+    ip=$(curl -s -m 5 ifconfig.me || curl -s -m 5 api.ipify.org)
+    if [[ -z "$ip" ]]; then
+        log_error "Could not determine Public IP."
+    fi
+    echo "$ip"
 }
 
-# Hàm xóa tất cả proxy
+update_firewall() {
+    local port=$1
+    local action=$2 # allow or delete
+
+    if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
+        if [[ "$action" == "allow" ]]; then
+            ufw allow "$port"/tcp >/dev/null 2>&1
+        else
+            ufw delete allow "$port"/tcp >/dev/null 2>&1
+        fi
+    elif command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
+        if [[ "$action" == "allow" ]]; then
+            firewall-cmd --permanent --add-port="$port"/tcp >/dev/null 2>&1
+            firewall-cmd --reload >/dev/null 2>&1
+        else
+            firewall-cmd --permanent --remove-port="$port"/tcp >/dev/null 2>&1
+            firewall-cmd --reload >/dev/null 2>&1
+        fi
+    fi
+}
+
+# ==============================================================================
+# INSTALLATION & REMOVAL LOGIC
+# ==============================================================================
+
+install_dependencies() {
+    log_info "Installing system dependencies..."
+    case "$PKG_MANAGER" in
+        apt)
+            apt-get update -qq
+            apt-get install -y -qq apt-transport-https ca-certificates curl net-tools software-properties-common
+            ;;
+        dnf)
+            $PKG_MANAGER install -y curl net-tools
+            ;;
+    esac
+}
+
+install_docker() {
+    if ! command -v docker >/dev/null 2>&1; then
+        log_info "Installing Docker & Compose V2..."
+        curl -fsSL https://get.docker.com | sh
+        systemctl enable --now docker
+    else
+        log_ok "Docker is already installed."
+    fi
+
+    # Check for Compose Plugin (V2)
+    if ! docker compose version >/dev/null 2>&1; then
+        log_warn "Docker Compose Plugin not found. Attempting to fix..."
+        case "$PKG_MANAGER" in
+            apt) apt-get install -y docker-compose-plugin ;;
+            dnf) $PKG_MANAGER install -y docker-compose-plugin ;;
+        esac
+    fi
+}
+
 remove_proxies() {
-    echo -e "${YELLOW}Đang xóa tất cả proxy SOCKS5...${NC}"
+    log_warn "Removing all SOCKS5 proxies..."
 
-    # Dừng và xóa container
-    if [ -f "$WORK_DIR/docker-compose.yml" ]; then
+    if [[ -d "$WORK_DIR" ]]; then
         cd "$WORK_DIR"
-        docker-compose down >/dev/null 2>&1
-        echo -e "${GREEN}Đã dừng và xóa các container proxy.${NC}"
-    fi
-
-    # Xóa thư mục làm việc
-    if [ -d "$WORK_DIR" ]; then
+        if docker compose ls | grep -q socks5-proxy; then
+            docker compose down >/dev/null 2>&1
+        elif [[ -f "docker-compose.yml" ]]; then
+            docker compose down >/dev/null 2>&1 || docker-compose down >/dev/null 2>&1
+        fi
+        cd ..
         rm -rf "$WORK_DIR"
-        echo -e "${GREEN}Đã xóa thư mục $WORK_DIR$.${NC}"
+        log_ok "Removed containers and directory."
     fi
 
-    # Xóa file thông tin proxy
-    if [ -f "$OUTPUT_FILE" ]; then
+    if [[ -f "$OUTPUT_FILE" ]]; then
         rm -f "$OUTPUT_FILE"
-        echo -e "${GREEN}Đã xóa file $OUTPUT_FILE$.${NC}"
+        log_ok "Removed info file."
     fi
 
-    # Đóng các cổng trong UFW
-    if command_exists ufw; then
-        for i in $(seq 0 9); do
-            PORT=$((START_PORT + i))
-            ufw delete allow $PORT/tcp >/dev/null 2>&1
-        done
-        echo -e "${GREEN}Đã đóng các cổng UFW (nếu có).${NC}"
-    fi
-
-    echo -e "${GREEN}Hoàn tất xóa!${NC}"
+    log_ok "Cleanup complete."
     exit 0
 }
 
-# Xử lý tùy chọn dòng lệnh
-REMOVE_FLAG=0
+# ==============================================================================
+# MAIN EXECUTION
+# ==============================================================================
+
+check_root
+detect_os
+
+START_PORT=$DEFAULT_START_PORT
+REMOVE_MODE=0
+
 while getopts "p:r" opt; do
     case $opt in
-        p)
-            START_PORT=$OPTARG
-            if ! [[ "$START_PORT" =~ ^[0-9]+$ ]] || [ "$START_PORT" -lt 1024 ] || [ "$START_PORT" -gt 65535 ]; then
-                echo -e "${RED}Lỗi: Cổng phải từ 1024 đến 65535!${NC}"
-                exit 1
-            fi
-            ;;
-        r)
-            REMOVE_FLAG=1
-            ;;
-        *)
-            usage
-            ;;
+        p) START_PORT=$OPTARG ;;
+        r) REMOVE_MODE=1 ;;
+        *) echo "Usage: $0 [-p start_port] [-r (remove)]"; exit 1 ;;
     esac
 done
 
-# Thực hiện xóa nếu có tùy chọn -r
-if [ "$REMOVE_FLAG" -eq 1 ]; then
+if [[ $REMOVE_MODE -eq 1 ]]; then
     remove_proxies
 fi
 
-# Hàm ghi log và hiển thị
-log_and_show() {
-    echo -e "$1"
-    echo "$1" >> "$OUTPUT_FILE"
-}
-
-# Kiểm tra quyền root
-if [ "$EUID" -ne 0 ]; then
-    echo -e "${RED}Script phải chạy với quyền root!${NC}"
-    exit 1
+# Validations
+if ! [[ "$START_PORT" =~ ^[0-9]+$ ]] || [ "$START_PORT" -lt 1024 ] || [ "$START_PORT" -gt 65535 ]; then
+    log_error "Port must be between 1024 and 65535."
 fi
 
-# Cập nhật hệ thống
-echo -e "${YELLOW}Cập nhật hệ thống...${NC}"
-apt update && apt upgrade -y
+install_dependencies
+install_docker
 
-# Kiểm tra và cài đặt các gói phụ thuộc
-echo -e "${YELLOW}Cài đặt các gói phụ thuộc...${NC}"
-apt install -y apt-transport-https ca-certificates curl software-properties-common net-tools
+PUBLIC_IP=$(get_public_ip)
+log_info "Public IP: $PUBLIC_IP"
 
-# Kiểm tra và cài đặt Docker
-if ! command_exists docker; then
-    echo -e "${YELLOW}Cài đặt Docker...${NC}"
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-    apt update
-    apt install -y docker-ce docker-ce-cli containerd.io
-    systemctl start docker
-    systemctl enable docker
-else
-    echo -e "${GREEN}Docker đã được cài đặt.${NC}"
-fi
-
-# Kiểm tra và cài đặt Docker Compose
-if ! command_exists docker-compose; then
-    echo -e "${YELLOW}Cài đặt Docker Compose...${NC}"
-    curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-    chmod +x /usr/local/bin/docker-compose
-else
-    echo -e "${GREEN}Docker Compose đã được cài đặt.${NC}"
-fi
-
-# Tính toán số proxy dựa trên RAM
+# Calculate RAM & Instances
 TOTAL_RAM=$(free -m | awk '/^Mem:/{print $2}')
-if [ "$TOTAL_RAM" -lt 512 ]; then
-    PROXY_COUNT=1
-elif [ "$TOTAL_RAM" -lt 1024 ]; then
-    PROXY_COUNT=2
-elif [ "$TOTAL_RAM" -lt 2048 ]; then
-    PROXY_COUNT=5
-else
-    PROXY_COUNT=10
+if [ "$TOTAL_RAM" -lt 512 ]; then PROXY_COUNT=1
+elif [ "$TOTAL_RAM" -lt 1024 ]; then PROXY_COUNT=2
+elif [ "$TOTAL_RAM" -lt 2048 ]; then PROXY_COUNT=5
+else PROXY_COUNT=10
 fi
-echo -e "${YELLOW}Tổng RAM: ${TOTAL_RAM}MB. Sẽ tạo $PROXY_COUNT proxy SOCKS5 với cổng bắt đầu từ $START_PORT.${NC}"
 
-# Kiểm tra cổng trước khi tạo proxy
-for i in $(seq 0 $((PROXY_COUNT - 1))); do
-    PORT=$((START_PORT + i))
-    check_port $PORT
+log_info "RAM: ${TOTAL_RAM}MB -> Creating $PROXY_COUNT proxies starting at port $START_PORT."
+
+# Check ports
+for ((i=0; i<PROXY_COUNT; i++)); do
+    current_port=$((START_PORT + i))
+    check_port_availability $current_port
 done
 
-# Kiểm tra và cài đặt ufw nếu chưa có
-if ! command_exists ufw; then
-    echo -e "${YELLOW}Cài đặt ufw...${NC}"
-    apt install -y ufw
-fi
-
-# Kích hoạt ufw nếu chưa bật và đảm bảo SSH được phép
-if ! ufw status | grep -q "Status: active"; then
-    echo -e "${YELLOW}Kích hoạt ufw và cho phép SSH...${NC}"
-    ufw allow 22/tcp comment 'Allow SSH' >/dev/null 2>&1
-    ufw --force enable
-else
-    echo -e "${YELLOW}Đảm bảo SSH được phép...${NC}"
-    ufw allow 22/tcp comment 'Allow SSH' >/dev/null 2>&1
-fi
-
-# Tạo thư mục làm việc
-mkdir -p "$WORK_DIR/logs"
+# Prepare Workspace
+mkdir -p "$WORK_DIR"
 cd "$WORK_DIR"
 
-# Tạo file docker-compose.yml
+# Create docker-compose.yml
 cat > docker-compose.yml <<EOF
-version: '3'
+name: socks5-proxy
 services:
 EOF
 
-# Tạo dịch vụ proxy
-for i in $(seq 1 $PROXY_COUNT); do
+# Generate Configs
+> "$OUTPUT_FILE"
+echo "-------------------------------------------------------" >> "$OUTPUT_FILE"
+echo " SOCKS5 PROXY LIST ($PUBLIC_IP)" >> "$OUTPUT_FILE"
+echo "-------------------------------------------------------" >> "$OUTPUT_FILE"
+
+for ((i=1; i<=PROXY_COUNT; i++)); do
     PORT=$((START_PORT + i - 1))
-    USERNAME=$(openssl rand -hex 4)
-    PASSWORD=$(openssl rand -hex 4)
-    echo "  socks5-proxy-$i:" >> docker-compose.yml
-    echo "    image: serjs/go-socks5-proxy:latest" >> docker-compose.yml
-    echo "    container_name: socks5-proxy-$i" >> docker-compose.yml
-    echo "    ports:" >> docker-compose.yml
-    echo "      - \"$PORT:1080\"" >> docker-compose.yml
-    echo "    environment:" >> docker-compose.yml
-    echo "      - SOCKS_USER=$USERNAME" >> docker-compose.yml
-    echo "      - SOCKS_PASS=$PASSWORD" >> docker-compose.yml
-    echo "    restart: always" >> docker-compose.yml
-    echo "    cap_add:" >> docker-compose.yml
-    echo "      - NET_ADMIN" >> docker-compose.yml
+    USER=$(openssl rand -hex 4)
+    PASS=$(openssl rand -hex 4)
+    
+    # Append to compose file
+    cat >> docker-compose.yml <<EOF
+  proxy-$i:
+    image: $PROXY_IMAGE
+    container_name: socks5-$i
+    restart: always
+    ports:
+      - "$PORT:1080/tcp"
+    environment:
+      - SOCKS5_USER=$USER
+      - SOCKS5_PASS=$PASS
+      # 3proxy specific vars (simple auth)
+      - CL=0.0.0.0
+EOF
 
-    # Mở cổng trong ufw
-    ufw allow $PORT/tcp comment "SOCKS5 Proxy $i" >/dev/null 2>&1
+    # Open Firewall
+    update_firewall "$PORT" "allow"
 
-    # Lưu thông tin proxy
-    PROXY_INFO="Proxy $i: socks5://$PUBLIC_IP:$PORT@$USERNAME:$PASSWORD"
-    if [ $i -eq 1 ]; then
-        echo -e "\nDanh sách proxy SOCKS5:\n" > "$OUTPUT_FILE"
-    fi
-    log_and_show "$PROXY_INFO"
+    # Save Info
+    echo "Proxy $i: socks5://$USER:$PASS@$PUBLIC_IP:$PORT" >> "$OUTPUT_FILE"
 done
 
-# Khởi chạy proxy
-echo -e "${YELLOW}Khởi chạy $PROXY_COUNT proxy SOCKS5...${NC}"
-docker-compose up -d
+# Start Services
+log_info "Starting containers..."
+if docker compose up -d; then
+    log_ok "Proxies are running!"
+else
+    log_error "Failed to start proxies."
+fi
 
-# Kiểm tra trạng thái và log
-echo -e "${YELLOW}Kiểm tra trạng thái container...${NC}"
-docker ps
-echo -e "${YELLOW}Log của socks5-proxy-1:${NC}"
-docker logs socks5-proxy-1 || echo -e "${RED}Không thể lấy log của socks5-proxy-1${NC}"
-
-# Hiển thị thông tin
-echo -e "${GREEN}Hoàn tất! Thông tin proxy đã được lưu tại $OUTPUT_FILE${NC}"
-echo -e "${YELLOW}Danh sách proxy để sao chép:${NC}"
+# Display Info
+echo ""
+log_ok "Installation Successful!"
+echo -e "${YELLOW}Proxy Details:${NC}"
 cat "$OUTPUT_FILE"
-
-exit 0
+echo ""
+echo -e "${BLUE}Saved to: $OUTPUT_FILE${NC}"
