@@ -1,11 +1,5 @@
 # Bash Script Auto Install
 
-**System Info**
-
-```bash
-curl -s https://raw.githubusercontent.com/laodauhgc/bash-scripts/refs/heads/main/cfg.sh | bash
-```
-
 **Titan Edge Install**
 
 ```bash
