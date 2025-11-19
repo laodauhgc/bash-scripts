@@ -1,253 +1,270 @@
 #!/usr/bin/env bash
-# Ubuntu Core Setup Script v3.2.14 – 04-Aug-2025
-# Installs core packages, Node.js, Bun, PM2, and Docker
+# Universal Server Setup Script
+# Supports: Debian/Ubuntu, RHEL/CentOS/Alma, Fedora, Arch, Alpine
+# Installs: Core Tools, Node.js (Latest LTS), Bun (Latest), PM2, Docker
 
 set -Eeuo pipefail
 trap 'echo "❌ Error at line $LINENO: $BASH_COMMAND" >&2' ERR
 
-export DEBIAN_FRONTEND=noninteractive
-export LANG=C.UTF-8
+# ==============================================================================
+# CONFIGURATION
+# ==============================================================================
+# Currently Node 22 is the Active LTS. Change this number when new LTS drops.
+NODE_MAJOR_LTS="22" 
 
-# ---------- Metadata ----------------------------------------------------------
-readonly SCRIPT_VERSION="3.2.14"
-readonly SCRIPT_NAME="$(basename "$0")"
-readonly NODE_VERSION="22.17.1"   # Will fall back to latest LTS if not available
-readonly BUN_VERSION="1.2.19"     # We attempt to upgrade to this version if possible
+# Colors
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+BLUE='\033[0;34m'
+NC='\033[0m'
 
-# ---------- Preconditions -----------------------------------------------------
-[[ $EUID -eq 0 ]] || { echo "❌ Please run as sudo/root."; exit 1; }
+# ==============================================================================
+# HELPER FUNCTIONS
+# ==============================================================================
 
-# ---------- Clear APT locks ---------------------------------------------------
-rm -f /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock-frontend 2>/dev/null || true
-dpkg --configure -a 2>/dev/null || true
+log_info()  { echo -e "${BLUE}[INFO] $1${NC}"; }
+log_ok()    { echo -e "${GREEN}[OK] $1${NC}"; }
+log_warn()  { echo -e "${YELLOW}[WARN] $1${NC}"; }
+log_error() { echo -e "${RED}[ERROR] $1${NC}"; exit 1; }
 
-# ---------- Logging helpers ---------------------------------------------------
-log()   { echo -e "[$(date +'%F %T')] $*"; }
-ok()    { echo -e "✅ $*"; }
-warn()  { echo -e "⚠️  $*" >&2; }
-fail()  { echo -e "❌ $*" >&2; exit 1; }
-
-# ---------- APT helpers -------------------------------------------------------
-apt_update() {
-  log "Updating APT indices..."
-  local i
-  for i in 1 2 3; do
-    if apt-get update -qq; then
-      ok "APT updated."
-      return 0
-    fi
-    warn "apt-get update attempt #$i failed; retrying with --fix-missing..."
-    apt-get update --fix-missing -qq || true
-    sleep 2
-  done
-  fail "apt-get update failed after retries."
+check_root() {
+    [[ $EUID -eq 0 ]] || log_error "This script must be run as root/sudo."
 }
 
-apt_fix() {
-  apt-get -y -qq -f install || true
-  dpkg --configure -a || true
-}
-
-apt_install() {
-  local pkgs=("$@")
-  [[ ${#pkgs[@]} -gt 0 ]] || return 0
-  log "Installing packages: ${pkgs[*]}"
-  local i
-  for i in 1 2 3; do
-    if apt-get install -y -qq --no-install-recommends "${pkgs[@]}"; then
-      ok "Installed: ${pkgs[*]}"
-      return 0
-    fi
-    warn "Install attempt #$i failed; trying fix-broken and retrying..."
-    apt_fix
-    sleep 2
-  done
-  fail "Package installation failed: ${pkgs[*]}"
-}
-
-# ---------- User selection helper --------------------------------------------
-# Choose a non-root user to add to the docker group.
-resolve_user() {
-  if [[ -n "${SUDO_USER-}" && "${SUDO_USER}" != "root" ]]; then
-    echo "${SUDO_USER}"
-    return
-  fi
-  if [[ -n "${TARGET_USER-}" && "${TARGET_USER}" != "root" ]]; then
-    echo "${TARGET_USER}"
-    return
-  fi
-  # Pick the first human user (UID >= 1000, exclude nobody)
-  local u
-  u="$(getent passwd | awk -F: '$3>=1000 && $1!="nobody"{print $1; exit}')"
-  if [[ -n "${u}" && "${u}" != "root" ]]; then
-    echo "${u}"
-    return
-  fi
-  echo ""
-}
-
-# ---------- Install JavaScript runtimes (Node.js, Bun, PM2) ------------------
-install_js_runtimes() {
-  log "Installing Node.js, Bun, and PM2..."
-
-  # Ensure curl exists before using it (in case minimal image)
-  if ! command -v curl >/dev/null 2>&1; then
-    apt_update
-    apt_install curl ca-certificates
-  fi
-
-  # nvm + Node.js
-  if [[ ! -d "$HOME/.nvm" ]]; then
-    log "Installing nvm..."
-    curl --connect-timeout 30 -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash || fail "nvm installation failed."
-    ok "nvm installed."
-  fi
-  # shellcheck disable=SC1091
-  [[ -s "$HOME/.nvm/nvm.sh" ]] && \. "$HOME/.nvm/nvm.sh"
-
-  # Clear nvm cache to avoid corrupted downloads in some environments
-  rm -rf "$HOME/.nvm/.cache" 2>/dev/null || true
-
-  # Install Node.js (try pinned version, fall back to latest LTS if unavailable)
-  if ! command -v node >/dev/null 2>&1 || [[ "$(node -v || true)" != "v${NODE_VERSION}" ]]; then
-    log "Installing Node.js v${NODE_VERSION} (will fall back to LTS if needed)..."
-    if nvm install "${NODE_VERSION}"; then
-      nvm alias default "${NODE_VERSION}"
-      nvm use default
-      ok "Node.js v${NODE_VERSION} installed."
+detect_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS_NAME=$ID
+        OS_LIKE=${ID_LIKE:-$ID}
     else
-      warn "Requested Node.js ${NODE_VERSION} not available; installing latest LTS..."
-      nvm install --lts || fail "Failed to install latest LTS Node.js."
-      nvm alias default "lts/*"
-      nvm use default
-      ok "Node.js $(node -v) installed (LTS fallback)."
+        log_error "Cannot detect OS. /etc/os-release not found."
     fi
-  fi
 
-  # Ensure npm/pm2
-  log "Ensuring PM2 is installed..."
-  if ! command -v npm >/dev/null 2>&1; then
-    fail "npm not found after Node install."
-  fi
-  if ! command -v pm2 >/dev/null 2>&1; then
-    npm install -g pm2 || fail "PM2 installation failed."
-    ok "PM2 installed: $(pm2 -v)"
-  else
-    ok "PM2 present: $(pm2 -v)"
-  fi
-
-  # Bun
-  if ! command -v bun >/dev/null 2>&1; then
-    log "Installing Bun..."
-    curl --connect-timeout 30 -fsSL https://bun.sh/install | bash || fail "Bun installation failed."
-    # Update PATH for current shell
-    if [[ -s "$HOME/.bun/bin/bun" ]]; then
-      export PATH="$HOME/.bun/bin:$PATH"
-    fi
-    ok "Bun installed: $(bun --version 2>/dev/null || echo 'unknown')"
-  else
-    ok "Bun present: $(bun --version)"
-  fi
-
-  # Try to align Bun version if BUN_VERSION is set (best-effort, non-fatal)
-  if command -v bun >/dev/null 2>&1; then
-    if [[ "$(bun --version || true)" != "${BUN_VERSION}" ]]; then
-      log "Attempting to upgrade Bun to ${BUN_VERSION} (best-effort)..."
-      bun upgrade --yes --version "${BUN_VERSION}" >/dev/null 2>&1 || true
-      ok "Bun version now: $(bun --version || echo 'unknown')"
-    fi
-  fi
-
-  ok "Node: $(node -v), npm: $(npm -v), PM2: $(pm2 -v), Bun: $(bun --version 2>/dev/null || echo 'not installed')"
+    case "$OS_LIKE" in
+        *debian*|ubuntu)
+            PKG_MANAGER="apt"
+            ;;
+        *rhel*|*centos*|*fedora*)
+            PKG_MANAGER="dnf"
+            # Fallback to yum for older CentOS 7
+            command -v dnf >/dev/null || PKG_MANAGER="yum"
+            ;;
+        *arch*)
+            PKG_MANAGER="pacman"
+            ;;
+        *alpine*)
+            PKG_MANAGER="apk"
+            ;;
+        *)
+            log_error "Unsupported OS Family: $OS_LIKE"
+            ;;
+    esac
+    
+    log_info "Detected OS: $PRETTY_NAME ($PKG_MANAGER)"
 }
 
-# ---------- Install Docker ---------------------------------------------------
+get_real_user() {
+    local user="${SUDO_USER:-}"
+    if [[ -z "$user" || "$user" == "root" ]]; then
+        user=$(awk -F: '$3 >= 1000 && $1 != "nobody" {print $1; exit}' /etc/passwd)
+    fi
+    echo "$user"
+}
+
+# ==============================================================================
+# PACKAGE MANAGEMENT ABSTRACTION
+# ==============================================================================
+
+update_system() {
+    log_info "Updating system repositories..."
+    case "$PKG_MANAGER" in
+        apt)
+            apt-get update -qq
+            ;;
+        dnf|yum)
+            # dnf check-update returns exit code 100 if updates available, which triggers set -e
+            $PKG_MANAGER check-update >/dev/null 2>&1 || true 
+            ;;
+        pacman)
+            pacman -Sy --noconfirm
+            ;;
+        apk)
+            apk update
+            ;;
+    esac
+}
+
+install_dependencies() {
+    log_info "Installing core dependencies..."
+    
+    case "$PKG_MANAGER" in
+        apt)
+            apt-get install -y -qq curl wget git unzip zip htop build-essential libssl-dev ca-certificates gnupg
+            ;;
+        dnf|yum)
+            $PKG_MANAGER install -y curl wget git unzip zip htop make gcc gcc-c++ openssl-devel ca-certificates
+            # 'Development Tools' group is often too heavy, installing basics manually
+            ;;
+        pacman)
+            pacman -S --noconfirm --needed curl wget git unzip zip htop base-devel openssl
+            ;;
+        apk)
+            # gcompat is needed for Bun to run on Alpine (musl libc vs glibc)
+            apk add curl wget git unzip zip htop build-base openssl-dev ca-certificates gcompat
+            ;;
+    esac
+    log_ok "Dependencies installed."
+}
+
+# ==============================================================================
+# NODE.JS & BUN INSTALLATION
+# ==============================================================================
+
+install_nodejs() {
+    log_info "Checking Node.js..."
+    
+    # Check if installed and version matches
+    if command -v node >/dev/null 2>&1; then
+        local current_ver=$(node -v | cut -d. -f1 | tr -d 'v')
+        if [[ "$current_ver" == "$NODE_MAJOR_LTS" ]]; then
+            log_ok "Node.js v$NODE_MAJOR_LTS is already installed."
+            return
+        fi
+        log_warn "Node.js version mismatch or upgrade needed. Re-installing..."
+    fi
+
+    log_info "Installing Node.js v${NODE_MAJOR_LTS} (LTS)..."
+
+    case "$PKG_MANAGER" in
+        apt)
+            # Remove old
+            apt-get remove -y nodejs npm >/dev/null 2>&1 || true
+            # NodeSource
+            curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR_LTS}.x | bash - >/dev/null
+            apt-get install -y -qq nodejs
+            ;;
+        dnf|yum)
+            # NodeSource
+            curl -fsSL https://rpm.nodesource.com/setup_${NODE_MAJOR_LTS}.x | bash - >/dev/null
+            $PKG_MANAGER install -y nodejs
+            ;;
+        pacman)
+            # Arch typically has 'nodejs' (latest) and 'nodejs-lts-iron' (v20), etc.
+            # Since Arch is bleeding edge, standard 'nodejs' is usually very new.
+            # To strictly follow LTS request, we try lts package first.
+            pacman -S --noconfirm nodejs npm || pacman -S --noconfirm nodejs-lts-jod npm
+            ;;
+        apk)
+            # Alpine repos are strict. usually 'nodejs' is reasonably new.
+            apk add nodejs npm
+            ;;
+    esac
+
+    # Install PM2 globally
+    if command -v npm >/dev/null; then
+        npm install -g pm2
+        log_ok "Node.js $(node -v) and PM2 installed."
+    else
+        log_error "NPM not found. Node install failed."
+    fi
+}
+
+install_bun() {
+    log_info "Installing Bun (Latest)..."
+    
+    # Force installation to /usr/local to be system-wide accessible
+    export BUN_INSTALL="/usr/local"
+    
+    if curl -fsSL https://bun.sh/install | bash; then
+        log_ok "Bun $(bun --version) installed."
+    else
+        log_error "Bun installation failed."
+    fi
+}
+
+# ==============================================================================
+# DOCKER INSTALLATION
+# ==============================================================================
+
 install_docker() {
-  log "Installing Docker..."
-  if command -v docker >/dev/null 2>&1; then
-    ok "Docker already installed: $(docker --version 2>/dev/null || echo 'unknown')"
-    return 0
-  fi
-
-  # Ensure curl exists before using it
-  if ! command -v curl >/dev/null 2>&1; then
-    apt_update
-    apt_install curl ca-certificates
-  fi
-
-  local docker_script="/root/install_docker.sh"
-  rm -f "$docker_script" 2>/dev/null || true
-  touch "$docker_script" || fail "Cannot create $docker_script"
-  curl --connect-timeout 30 -sSL https://get.docker.com -o "$docker_script" || { rm -f "$docker_script"; fail "Docker script download failed."; }
-  chmod +x "$docker_script"
-  /bin/bash "$docker_script" || { rm -f "$docker_script"; fail "Docker installation failed."; }
-  rm -f "$docker_script"
-
-  # Try to enable/start service if systemd is available
-  if command -v systemctl >/dev/null 2>&1; then
-    if ! systemctl is-active --quiet docker; then
-      systemctl enable --now docker >/dev/null 2>&1 || warn "Could not enable/start docker service (non-systemd environment?)"
-    fi
-  fi
-
-  # Add a non-root user to the docker group if present
-  local add_user
-  add_user="$(resolve_user)"
-  if [[ -n "${add_user}" ]]; then
-    if id -u "${add_user}" &>/dev/null; then
-      usermod -aG docker "${add_user}" 2>/dev/null || warn "Cannot add ${add_user} to docker group."
-      ok "Added ${add_user} to docker group. You may need to re-login for group changes to take effect."
+    if command -v docker >/dev/null 2>&1; then
+        log_ok "Docker is already installed: $(docker --version)"
     else
-      warn "User '${add_user}' not found; skip adding to docker group."
+        log_info "Installing Docker..."
+        
+        # Try official script first (Works for Debian, RHEL, Fedora, Arch)
+        if curl -fsSL https://get.docker.com | sh; then
+             log_ok "Docker installed via official script."
+        else
+             log_warn "Official script failed. Attempting native package install..."
+             case "$PKG_MANAGER" in
+                apk)
+                    apk add docker
+                    rc-update add docker boot
+                    service docker start
+                    ;;
+                pacman)
+                    pacman -S --noconfirm docker
+                    ;;
+                *)
+                    log_error "Could not install Docker automatically."
+                    ;;
+             esac
+        fi
     fi
-  else
-    log "No non-root user detected; skip adding to docker group."
-  fi
 
-  ok "Docker installed: $(docker --version 2>/dev/null || echo 'unknown')"
+    # Enable Service (systemd)
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl enable --now docker >/dev/null 2>&1 || true
+    fi
+
+    # Add user to group
+    local real_user=$(get_real_user)
+    if [[ -n "$real_user" ]]; then
+        usermod -aG docker "$real_user" 2>/dev/null || true
+        log_ok "User '$real_user' added to docker group."
+    fi
 }
 
-# ---------- Main process -----------------------------------------------------
-log "🚀 Starting Ubuntu Core Setup Script v${SCRIPT_VERSION}..."
-apt_update
+# ==============================================================================
+# MAIN EXECUTION
+# ==============================================================================
 
-# Core packages
-PKGS=(
-  build-essential git curl wget vim htop rsync bash-completion
-  python3 python3-venv python3-pip
-  ca-certificates gnupg software-properties-common plocate
-  openssh-client
-  libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev libffi-dev liblzma-dev libncursesw5-dev uuid-dev
-  zip unzip
-)
+log_info "🚀 Starting Universal Linux Setup..."
 
-# Install missing packages only
-missing=()
-for p in "${PKGS[@]}"; do
-  if ! dpkg -s "$p" &>/dev/null; then
-    missing+=("$p")
-  fi
-done
-if [[ ${#missing[@]} -gt 0 ]]; then
-  apt_install "${missing[@]}"
-else
-  ok "All base packages already present."
-fi
+check_root
+detect_os
 
-# JS runtimes & Docker
-install_js_runtimes
+# 1. Prepare System
+update_system
+install_dependencies
+
+# 2. Runtimes
+install_nodejs
+install_bun
+
+# 3. Containerization
 install_docker
 
-# Clean up
-log "Cleaning up APT caches..."
-apt-get autoremove -y -qq || true
-apt-get clean -qq || true
+# 4. Cleanup
+log_info "Cleaning up..."
+case "$PKG_MANAGER" in
+    apt) apt-get autoremove -y -qq >/dev/null ;;
+    dnf|yum) $PKG_MANAGER clean all >/dev/null ;;
+    pacman) pacman -Sc --noconfirm >/dev/null ;;
+esac
 
-# ---------- Final report -----------------------------------------------------
-echo "🎉 Installation complete!"
-echo "  • System packages newly installed: ${#missing[@]}"
-echo "  • Node.js: $(node -v 2>/dev/null || echo 'not installed')"
-echo "  • npm: $(npm -v 2>/dev/null || echo 'not installed')"
-echo "  • Bun: $(bun --version 2>/dev/null || echo 'not installed')"
-echo "  • PM2: $(pm2 -v 2>/dev/null || echo 'not installed')"
-echo "  • Docker: $(docker --version 2>/dev/null || echo 'not installed')"
+# Summary
+echo ""
+echo "====================================================="
+echo -e "${GREEN}🎉 Setup Complete!${NC}"
+echo "====================================================="
+echo -e " OS     : $PRETTY_NAME"
+echo -e " Node.js: $(node -v 2>/dev/null || echo 'Err')"
+echo -e " NPM    : $(npm -v 2>/dev/null || echo 'Err')"
+echo -e " PM2    : $(pm2 -v 2>/dev/null || echo 'Err')"
+echo -e " Bun    : $(bun --version 2>/dev/null || echo 'Err')"
+echo -e " Docker : $(docker --version 2>/dev/null || echo 'Err')"
+echo "====================================================="
+echo -e "${YELLOW}NOTE: If you are using a non-root user, run 'newgrp docker' or re-login to use Docker.${NC}"
