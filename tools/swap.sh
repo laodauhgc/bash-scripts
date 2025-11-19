@@ -1,76 +1,169 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Universal Swap Manager
+# Hỗ trợ: Ubuntu, Debian, CentOS, RHEL, Fedora, Arch, Alpine
+# Tính năng: Smart Size, Fallback dd, Kernel Tuning
 
-# Kiểm tra quyền root
-[[ $EUID -ne 0 ]] && { echo "Cần quyền root (sudo)."; exit 1; }
+set -Eeuo pipefail
 
-# Hàm hiển thị hướng dẫn
-usage() { echo "Cách dùng: $0 [-r]"; echo "  -r: Gỡ bỏ swap và khôi phục trạng thái ban đầu"; exit 1; }
+# ==============================================================================
+# CẤU HÌNH & BIẾN
+# ==============================================================================
+SWAP_FILE="/swapfile"
+FSTAB="/etc/fstab"
+SYSCTL_CONF="/etc/sysctl.d/99-swap-tuning.conf"
 
-# Xử lý tùy chọn
-while getopts "r" opt; do
-    case $opt in
-        r) RESTORE=1 ;;
-        *) usage ;;
-    esac
-done
+# Màu sắc
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+BLUE='\033[0;34m'
+NC='\033[0m'
 
-# Chế độ gỡ bỏ swap và khôi phục
-if [[ $RESTORE -eq 1 ]]; then
-    echo "Gỡ bỏ swap và khôi phục trạng thái..."
-    # Tắt swap nếu đang hoạt động
-    if swapon --show | grep -q '/swapfile'; then
-        swapoff /swapfile && echo "Đã tắt swap." || { echo "Tắt swap thất bại."; exit 1; }
+# ==============================================================================
+# HÀM HỖ TRỢ
+# ==============================================================================
+
+log_info()  { echo -e "${BLUE}[INFO] $1${NC}"; }
+log_ok()    { echo -e "${GREEN}[OK] $1${NC}"; }
+log_warn()  { echo -e "${YELLOW}[WARN] $1${NC}"; }
+log_error() { echo -e "${RED}[ERROR] $1${NC}"; exit 1; }
+
+check_root() {
+    [[ $EUID -eq 0 ]] || log_error "Vui lòng chạy với quyền root (sudo)."
+}
+
+remove_swap() {
+    log_warn "Đang tiến hành gỡ bỏ Swap..."
+
+    # 1. Tắt swap
+    if swapon --show | grep -q "$SWAP_FILE"; then
+        swapoff "$SWAP_FILE" || log_error "Không thể tắt swap."
+        log_ok "Đã tắt swap."
     else
-        echo "Không có swap đang hoạt động."
+        log_info "Swap không hoạt động."
     fi
-    # Xóa file swap
-    [[ -f /swapfile ]] && { rm /swapfile && echo "Đã xóa file swap."; } || echo "Không tìm thấy file swap."
-    # Khôi phục fstab
-    [[ -f /etc/fstab.bak ]] && { mv /etc/fstab.bak /etc/fstab && echo "Đã khôi phục /etc/fstab."; } || echo "Không tìm thấy bản sao lưu /etc/fstab.bak."
-    # Kiểm tra trạng thái
-    echo "Trạng thái swap hiện tại:"
-    swapon --show
+
+    # 2. Xóa khỏi fstab (Chỉ xóa dòng chứa /swapfile)
+    if grep -q "$SWAP_FILE" "$FSTAB"; then
+        # Tạo backup an toàn trước khi sửa
+        cp "$FSTAB" "${FSTAB}.bak.$(date +%s)"
+        # Dùng sed để xóa dòng chứa /swapfile
+        sed -i "\#$SWAP_FILE#d" "$FSTAB"
+        log_ok "Đã xóa cấu hình trong /etc/fstab."
+    fi
+
+    # 3. Xóa file
+    if [[ -f "$SWAP_FILE" ]]; then
+        rm -f "$SWAP_FILE"
+        log_ok "Đã xóa file $SWAP_FILE."
+    fi
+
+    # 4. Xóa cấu hình sysctl tuning
+    if [[ -f "$SYSCTL_CONF" ]]; then
+        rm -f "$SYSCTL_CONF"
+        # Reload lại sysctl mặc định (hoặc gần nhất)
+        sysctl --system >/dev/null 2>&1 || true
+        log_ok "Đã gỡ bỏ cấu hình tối ưu kernel."
+    fi
+
+    log_ok "Hoàn tất gỡ bỏ!"
     free -h
-    echo "Hoàn tất gỡ bỏ và khôi phục!"
     exit 0
+}
+
+# ==============================================================================
+# CHƯƠNG TRÌNH CHÍNH
+# ==============================================================================
+
+check_root
+
+# Xử lý tham số
+if [[ "${1:-}" == "-r" ]]; then
+    remove_swap
 fi
 
-# Chế độ tạo swap
-RAM_SIZE=$(free -m | awk '/^Mem:/{print $2}')
-DISK_FREE=$(df -m / | awk 'NR==2 {print $4}')  # Dung lượng trống (MB)
+# 1. Tính toán dung lượng Swap (Smart Sizing)
+# Lấy RAM bằng MB
+RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
+DISK_FREE_MB=$(df -m / | awk 'NR==2 {print $4}')
 
-# Kiểm tra dung lượng ổ cứng
-if [[ $DISK_FREE -lt $RAM_SIZE ]]; then
-    echo "Lỗi: Dung lượng trống ($DISK_FREE MB) nhỏ hơn RAM ($RAM_SIZE MB). Không thể tạo swap."
-    exit 1
-elif [[ $DISK_FREE -lt $((RAM_SIZE * 2)) ]]; then
-    SWAP_SIZE=$RAM_SIZE
-    echo "Cảnh báo: Dung lượng trống ($DISK_FREE MB) không đủ cho swap 2x RAM. Tạo swap $SWAP_SIZE MB."
+log_info "RAM: ${RAM_MB} MB | Đĩa trống: ${DISK_FREE_MB} MB"
+
+# Logic tính toán
+if [ "$RAM_MB" -lt 2048 ]; then
+    # < 2GB RAM -> Swap = 2x RAM
+    TARGET_SWAP=$((RAM_MB * 2))
+elif [ "$RAM_MB" -lt 8192 ]; then
+    # 2GB - 8GB RAM -> Swap = RAM
+    TARGET_SWAP=$RAM_MB
 else
-    SWAP_SIZE=$((RAM_SIZE * 2))
-    echo "Tạo swap $SWAP_SIZE MB (2x RAM)."
+    # > 8GB RAM -> Swap = 8GB (Max cap)
+    TARGET_SWAP=8192
 fi
 
-SWAP_SIZE_GB=$(bc <<< "scale=2; $SWAP_SIZE / 1024")
-echo "RAM: ${RAM_SIZE}MB, Swap: ${SWAP_SIZE}MB (~${SWAP_SIZE_GB}GB)"
+# Đảm bảo đĩa còn trống ít nhất 1GB sau khi tạo swap
+if [ "$DISK_FREE_MB" -lt $((TARGET_SWAP + 1024)) ]; then
+    log_warn "Dung lượng đĩa thấp. Điều chỉnh lại kích thước Swap..."
+    TARGET_SWAP=$((DISK_FREE_MB - 1024))
+    if [ "$TARGET_SWAP" -lt 512 ]; then
+        log_error "Không đủ dung lượng đĩa để tạo Swap an toàn (Cần tối thiểu 512MB)."
+    fi
+fi
 
-# Tắt và xóa swap cũ
-swapoff -a && echo "Đã tắt swap."
-[[ -f /swapfile ]] && { rm /swapfile && echo "Đã xóa swap cũ."; }
+log_info "Kích thước Swap dự kiến: ${TARGET_SWAP} MB"
 
-# Tạo swap mới
-echo "Tạo swap ${SWAP_SIZE}MB..."
-fallocate -l "${SWAP_SIZE}M" /swapfile || { echo "Tạo swap thất bại."; exit 1; }
-chmod 600 /swapfile
-mkswap /swapfile >/dev/null || { echo "Định dạng swap thất bại."; exit 1; }
-swapon /swapfile || { echo "Kích hoạt swap thất bại."; exit 1; }
+# 2. Dọn dẹp swap cũ nếu có
+if grep -q "$SWAP_FILE" "$FSTAB" || [[ -f "$SWAP_FILE" ]]; then
+    log_warn "Phát hiện Swap cũ, đang dọn dẹp..."
+    swapoff "$SWAP_FILE" >/dev/null 2>&1 || true
+    rm -f "$SWAP_FILE"
+    sed -i "\#$SWAP_FILE#d" "$FSTAB"
+fi
 
-# Cập nhật fstab
-[[ -f /etc/fstab.bak ]] || cp /etc/fstab /etc/fstab.bak
-grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+# 3. Tạo file Swap
+log_info "Đang tạo file Swap..."
+if command -v fallocate >/dev/null 2>&1; then
+    if fallocate -l "${TARGET_SWAP}M" "$SWAP_FILE" 2>/dev/null; then
+        log_ok "Đã tạo file bằng fallocate."
+    else
+        log_warn "fallocate thất bại (có thể do File System). Chuyển sang dùng dd..."
+        dd if=/dev/zero of="$SWAP_FILE" bs=1M count="$TARGET_SWAP" status=progress
+    fi
+else
+    dd if=/dev/zero of="$SWAP_FILE" bs=1M count="$TARGET_SWAP" status=progress
+fi
 
-# Kiểm tra
-echo "Trạng thái swap:"
-swapon --show
+# 4. Phân quyền & Format
+chmod 600 "$SWAP_FILE"
+mkswap "$SWAP_FILE" >/dev/null
+swapon "$SWAP_FILE"
+log_ok "Đã kích hoạt Swap."
+
+# 5. Cập nhật fstab
+# Sao lưu fstab gốc nếu chưa có
+if [ ! -f "${FSTAB}.bak" ]; then
+    cp "$FSTAB" "${FSTAB}.bak"
+fi
+echo "$SWAP_FILE none swap sw 0 0" >> "$FSTAB"
+log_ok "Đã cập nhật fstab."
+
+# 6. Tối ưu hóa Kernel (Sysctl)
+log_info "Tối ưu hóa Swappiness..."
+# Swappiness=10: Chỉ dùng swap khi RAM thực sự đầy (tốt cho server)
+# Cache_pressure=50: Cân bằng giữa việc cache file system và giải phóng RAM
+cat > "$SYSCTL_CONF" <<EOF
+vm.swappiness=10
+vm.vfs_cache_pressure=50
+EOF
+
+# Áp dụng ngay lập tức
+sysctl -p "$SYSCTL_CONF" >/dev/null 2>&1 || sysctl -w vm.swappiness=10 >/dev/null 2>&1
+log_ok "Đã áp dụng cấu hình tối ưu."
+
+# 7. Kết quả
+echo "-------------------------------------------------------"
+log_ok "Cài đặt hoàn tất!"
+echo "-------------------------------------------------------"
 free -h
-echo "Swap ${SWAP_SIZE}MB đã được tạo và kích hoạt."
+echo "-------------------------------------------------------"
+echo -e "${YELLOW}Để gỡ bỏ: $0 -r${NC}"
