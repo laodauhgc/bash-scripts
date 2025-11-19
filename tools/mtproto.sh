@@ -1,238 +1,80 @@
 #!/usr/bin/env bash
-# Universal MTProto Proxy Setup Script (Telegram Proxy)
-# Hỗ trợ: Ubuntu, Debian, CentOS, RHEL, AlmaLinux, Rocky
-# Tự động cấu hình Docker, Firewall và tạo Link kết nối
+# Script Fix lỗi & Cài đặt MTProto Proxy (Chuẩn FakeTLS)
+# Fix lỗi: Default secret, Connection timeout
 
 set -Eeuo pipefail
-trap 'echo "❌ Lỗi tại dòng $LINENO: $BASH_COMMAND" >&2' ERR
 
-# ==============================================================================
-# CẤU HÌNH
-# ==============================================================================
-OUTPUT_FILE="/root/mtproxy.txt"
-WORK_DIR="/root/mtproto-proxy"
-DEFAULT_START_PORT=4430 # Dùng port cao để tránh xung đột với web server (443)
-# Sử dụng image cộng đồng được bảo trì tốt hơn bản gốc của Telegram
-PROXY_IMAGE="alexbers/mtprotoproxy:latest" 
+# ================= CONFIG =================
+# Dùng port 4430 để tránh trùng port 443 của hệ thống
+START_PORT=4430
+# Domain giả danh (FakeTLS) - Giúp proxy khó bị chặn hơn
+FAKE_DOMAIN="www.google.com"
+DOMAIN_HEX=$(echo -n "$FAKE_DOMAIN" | xxd -ps | tr -d '\n')
+# File lưu thông tin
+OUTPUT_FILE="/root/mtproxy_fixed.txt"
+# ==========================================
 
 # Màu sắc
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
-BLUE='\033[0;34m'
 NC='\033[0m'
 
-# ==============================================================================
-# HÀM HỖ TRỢ
-# ==============================================================================
+echo -e "${YELLOW}=== BẮT ĐẦU QUÁ TRÌNH SỬA LỖI & CÀI ĐẶT MTPROXY ===${NC}"
 
-log_info()  { echo -e "${BLUE}[INFO] $1${NC}"; }
-log_ok()    { echo -e "${GREEN}[OK] $1${NC}"; }
-log_warn()  { echo -e "${YELLOW}[WARN] $1${NC}"; }
-log_error() { echo -e "${RED}[ERROR] $1${NC}"; exit 1; }
+# 1. Dọn dẹp container cũ nát
+echo -e "${YELLOW}[1/5] Dọn dẹp các container cũ...${NC}"
+if [ -d "/root/mtproto-proxy" ]; then
+    cd /root/mtproto-proxy
+    docker compose down >/dev/null 2>&1 || docker-compose down >/dev/null 2>&1 || true
+    cd ..
+    rm -rf /root/mtproto-proxy
+fi
+# Xóa lẻ tẻ nếu còn sót
+docker ps -a --filter "name=mtproxy" -q | xargs -r docker rm -f >/dev/null 2>&1
 
-check_root() {
-    [[ $EUID -eq 0 ]] || log_error "Script phải được chạy với quyền root (sudo)."
-}
-
-detect_os() {
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        OS_LIKE=${ID_LIKE:-$ID}
-    else
-        OS_LIKE="unknown"
-    fi
-
-    case "$OS_LIKE" in
-        *debian*|ubuntu) PKG_MANAGER="apt" ;;
-        *rhel*|*centos*|*fedora*|*almalinux*|*rocky*) PKG_MANAGER="dnf" ;;
-        *) log_error "Hệ điều hành không được hỗ trợ: $OS_LIKE" ;;
-    esac
-}
-
-get_public_ip() {
-    local ip
-    ip=$(curl -s -m 5 ifconfig.me || curl -s -m 5 api.ipify.org)
-    if [[ -z "$ip" ]]; then
-        log_error "Không thể lấy IP công cộng."
-    fi
-    echo "$ip"
-}
-
-check_port_availability() {
-    local port=$1
-    if netstat -tuln | grep -q ":$port "; then
-        log_error "Cổng $port đang bị chiếm dụng bởi ứng dụng khác!"
-    fi
-}
-
-update_firewall() {
-    local port=$1
-    local action=$2 # allow hoặc delete
-
-    # Xử lý UFW (Debian/Ubuntu)
-    if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
-        if [[ "$action" == "allow" ]]; then
-            ufw allow "$port"/tcp >/dev/null 2>&1
-        else
-            ufw delete allow "$port"/tcp >/dev/null 2>&1
-        fi
-    # Xử lý Firewalld (CentOS/RHEL)
-    elif command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
-        if [[ "$action" == "allow" ]]; then
-            firewall-cmd --permanent --add-port="$port"/tcp >/dev/null 2>&1
-            firewall-cmd --reload >/dev/null 2>&1
-        else
-            firewall-cmd --permanent --remove-port="$port"/tcp >/dev/null 2>&1
-            firewall-cmd --reload >/dev/null 2>&1
-        fi
-    fi
-}
-
-# ==============================================================================
-# CÀI ĐẶT & GỠ BỎ
-# ==============================================================================
-
-install_dependencies() {
-    log_info "Cài đặt các gói phụ thuộc..."
-    case "$PKG_MANAGER" in
-        apt)
-            apt-get update -qq
-            apt-get install -y -qq apt-transport-https ca-certificates curl net-tools software-properties-common
-            ;;
-        dnf)
-            $PKG_MANAGER install -y curl net-tools
-            ;;
-    esac
-}
-
-install_docker() {
-    if ! command -v docker >/dev/null 2>&1; then
-        log_info "Đang cài đặt Docker..."
-        curl -fsSL https://get.docker.com | sh
-        systemctl enable --now docker
-    else
-        log_ok "Docker đã được cài đặt."
-    fi
-
-    # Kiểm tra Docker Compose Plugin
-    if ! docker compose version >/dev/null 2>&1; then
-        log_warn "Docker Compose V2 chưa có. Đang cài đặt plugin..."
-        case "$PKG_MANAGER" in
-            apt) apt-get install -y docker-compose-plugin ;;
-            dnf) $PKG_MANAGER install -y docker-compose-plugin ;;
-        esac
-    fi
-}
-
-remove_proxies() {
-    log_warn "Đang xóa toàn bộ MTProto Proxy..."
-    
-    if [[ -d "$WORK_DIR" ]]; then
-        cd "$WORK_DIR"
-        if docker compose ls | grep -q mtproto-proxy; then
-            docker compose down >/dev/null 2>&1
-        elif [[ -f "docker-compose.yml" ]]; then
-            # Fallback cho trường hợp file tồn tại nhưng project tên khác
-            docker compose down >/dev/null 2>&1 || true
-        fi
-        
-        # Đọc file để đóng port firewall (nỗ lực hết sức)
-        if [[ -f "$OUTPUT_FILE" ]]; then
-            # Logic đơn giản để tìm port cũ, thực tế nên xóa dựa trên range
-            log_info "Đang đóng firewall ports..."
-        fi
-        
-        cd ..
-        rm -rf "$WORK_DIR"
-        log_ok "Đã xóa container và thư mục làm việc."
-    fi
-
-    if [[ -f "$OUTPUT_FILE" ]]; then
-        rm -f "$OUTPUT_FILE"
-        log_ok "Đã xóa file thông tin proxy."
-    fi
-    
-    log_ok "Gỡ bỏ hoàn tất."
-    exit 0
-}
-
-# ==============================================================================
-# CHƯƠNG TRÌNH CHÍNH
-# ==============================================================================
-
-check_root
-detect_os
-
-START_PORT=$DEFAULT_START_PORT
-REMOVE_MODE=0
-
-# Xử lý tham số đầu vào
-while getopts "p:r" opt; do
-    case $opt in
-        p) START_PORT=$OPTARG ;;
-        r) REMOVE_MODE=1 ;;
-        *) echo "Sử dụng: $0 [-p port] [-r (xóa)]"; exit 1 ;;
-    esac
-done
-
-if [[ $REMOVE_MODE -eq 1 ]]; then
-    remove_proxies
+# 2. Lấy IP
+PUBLIC_IP=$(curl -s -m 5 ifconfig.me)
+if [ -z "$PUBLIC_IP" ]; then
+    echo -e "${RED}Lỗi: Không lấy được IP Public.${NC}"
+    exit 1
 fi
 
-# Validate Port
-if ! [[ "$START_PORT" =~ ^[0-9]+$ ]] || [ "$START_PORT" -lt 1024 ] || [ "$START_PORT" -gt 65535 ]; then
-    log_error "Cổng phải là số từ 1024 đến 65535."
-fi
-
-install_dependencies
-install_docker
-
-PUBLIC_IP=$(get_public_ip)
-log_info "IP Công cộng: $PUBLIC_IP"
-
-# Tính toán RAM để quyết định số lượng Proxy
+# 3. Tính toán số lượng Proxy
 TOTAL_RAM=$(free -m | awk '/^Mem:/{print $2}')
-if [ "$TOTAL_RAM" -lt 512 ]; then PROXY_COUNT=1
-elif [ "$TOTAL_RAM" -lt 1024 ]; then PROXY_COUNT=2
-elif [ "$TOTAL_RAM" -lt 2048 ]; then PROXY_COUNT=4
-else PROXY_COUNT=8
+if [ "$TOTAL_RAM" -lt 1024 ]; then PROXY_COUNT=1
+elif [ "$TOTAL_RAM" -lt 2048 ]; then PROXY_COUNT=2
+else PROXY_COUNT=4 
 fi
-# Giới hạn lại số lượng tối đa để tránh spam process không cần thiết
-# Với MTProto, 1 process có thể handle rất nhiều kết nối.
+# Giới hạn 4 proxy là đủ cho nhu cầu lớn, tránh spam port
 
-log_info "RAM: ${TOTAL_RAM}MB -> Sẽ tạo $PROXY_COUNT container bắt đầu từ cổng $START_PORT."
+echo -e "${GREEN}RAM: ${TOTAL_RAM}MB. IP: ${PUBLIC_IP}.${NC}"
+echo -e "${GREEN}Sẽ tạo $PROXY_COUNT Proxy chế độ FakeTLS (giả danh $FAKE_DOMAIN).${NC}"
 
-# Kiểm tra port trước khi chạy
-for ((i=0; i<PROXY_COUNT; i++)); do
-    current_port=$((START_PORT + i))
-    check_port_availability $current_port
-done
+# 4. Tạo Docker Compose mới
+mkdir -p /root/mtproto-proxy
+cd /root/mtproto-proxy
 
-# Chuẩn bị thư mục
-mkdir -p "$WORK_DIR"
-cd "$WORK_DIR"
-
-# Tạo docker-compose.yml
 cat > docker-compose.yml <<EOF
 name: mtproto-proxy
 services:
 EOF
 
-# Tạo Config
+# Xóa file cũ
 > "$OUTPUT_FILE"
 echo "=======================================================" >> "$OUTPUT_FILE"
-echo " MTPROTO PROXY LIST ($PUBLIC_IP)" >> "$OUTPUT_FILE"
+echo " MTPROTO PROXY LIST (FakeTLS Mode - Anti Censorship)" >> "$OUTPUT_FILE"
 echo "=======================================================" >> "$OUTPUT_FILE"
 
 for ((i=1; i<=PROXY_COUNT; i++)); do
     PORT=$((START_PORT + i - 1))
-    # Tạo Secret 32 ký tự hex chuẩn
+    # Tạo Secret 32 ký tự Hex chuẩn
     SECRET=$(openssl rand -hex 16)
     
+    # Thêm vào docker-compose
     cat >> docker-compose.yml <<EOF
   mtproxy-$i:
-    image: $PROXY_IMAGE
+    image: alexbers/mtprotoproxy:latest
     container_name: mtproxy-$i
     restart: always
     ports:
@@ -240,28 +82,40 @@ for ((i=1; i<=PROXY_COUNT; i++)); do
     environment:
       - PORT=443
       - SECRET=$SECRET
+      - TLS_DOMAIN=$FAKE_DOMAIN
+      - WORKERS=1
 EOF
+    
+    # Mở ufw (Local firewall)
+    if command -v ufw >/dev/null; then
+        ufw allow "$PORT"/tcp >/dev/null 2>&1
+    fi
 
-    # Mở Firewall
-    update_firewall "$PORT" "allow"
-
-    # Tạo Link Telegram
-    TG_LINK="tg://proxy?server=$PUBLIC_IP&port=$PORT&secret=$SECRET"
-    echo "Proxy $i: $TG_LINK" >> "$OUTPUT_FILE"
+    # Tạo Link kết nối chuẩn FakeTLS
+    # Cấu trúc: tg://proxy?server=IP&port=PORT&secret=ee + SECRET + HEX_DOMAIN
+    # ee: đánh dấu FakeTLS
+    FULL_SECRET="ee${SECRET}${DOMAIN_HEX}"
+    TG_LINK="tg://proxy?server=$PUBLIC_IP&port=$PORT&secret=$FULL_SECRET"
+    
+    echo "Proxy $i (Port $PORT):" >> "$OUTPUT_FILE"
+    echo "Link: $TG_LINK" >> "$OUTPUT_FILE"
+    echo "-------------------------------------------------------" >> "$OUTPUT_FILE"
 done
 
-# Khởi chạy
-log_info "Đang khởi chạy các container..."
+# 5. Khởi chạy
+echo -e "${YELLOW}[4/5] Đang khởi chạy container...${NC}"
 if docker compose up -d; then
-    log_ok "MTProto Proxy đang chạy!"
+    echo -e "${GREEN}[5/5] Thành công! Container đang chạy.${NC}"
 else
-    log_error "Không thể khởi chạy Docker Compose."
+    # Fallback nếu docker compose v2 chưa cài
+    docker-compose up -d
 fi
 
-# Hiển thị kết quả
 echo ""
-log_ok "Cài đặt hoàn tất!"
-echo -e "${YELLOW}Danh sách Proxy:${NC}"
+echo -e "${YELLOW}LƯU Ý QUAN TRỌNG VỚI GOOGLE CLOUD (GCP):${NC}"
+echo -e "Bạn PHẢI mở port trên trang quản trị Google Cloud Firewall:"
+echo -e "   - Port Range: ${START_PORT}-$((START_PORT + PROXY_COUNT - 1))"
+echo -e "   - Protocol: TCP"
+echo ""
+echo -e "${GREEN}Thông tin kết nối đã lưu tại: $OUTPUT_FILE${NC}"
 cat "$OUTPUT_FILE"
-echo ""
-echo -e "${BLUE}Đã lưu tại: $OUTPUT_FILE${NC}"
