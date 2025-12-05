@@ -1,8 +1,6 @@
 # 🚀 Harbor Registry + Cloudflare Tunnel — Auto Installer
-
-Triển khai **Harbor (Docker Registry UI)** trên Ubuntu và **ẩn hoàn toàn IP máy chủ** qua **Cloudflare Tunnel** — bảo mật hơn, không cần mở cổng 80/443, vẫn push/pull Docker mượt mà.
-
 ---
+Triển khai **Harbor (Docker Registry UI)** trên Ubuntu và **ẩn IP máy chủ** qua **Cloudflare Tunnel**
 
 ## ✨ Tính năng
 
@@ -14,8 +12,6 @@ Triển khai **Harbor (Docker Registry UI)** trên Ubuntu và **ẩn hoàn toàn
 * Cấu hình **cloudflared** chạy như **systemd service**.
 * Tùy chọn bật **UFW** để chặn truy cập trực tiếp qua IP.
 * Hỗ trợ **Ubuntu 22.04 / 24.04**.
-
----
 
 ## 📌 Yêu cầu
 
@@ -35,8 +31,6 @@ Triển khai **Harbor (Docker Registry UI)** trên Ubuntu và **ẩn hoàn toàn
 * Đang đăng nhập trên trình duyệt
 * Có quyền quản lý DNS cho domain
 
----
-
 ## 📥 Tải script
 
 **Repo script:**
@@ -51,8 +45,6 @@ Tải & cấp quyền chạy:
 curl -O https://raw.githubusercontent.com/laodauhgc/bash-scripts/refs/heads/main/harbor/install_harbor_tunnel.sh
 chmod +x install_harbor_tunnel.sh
 ```
-
----
 
 ## ▶️ Cài đặt
 
@@ -69,8 +61,6 @@ Script sẽ hỏi các thông tin:
 | Version Harbor        | Phiên bản Harbor       | `v2.11.0`            |
 | Tunnel name           | Tên Cloudflare Tunnel  | `harbor-tunnel`      |
 | Installation dir      | Thư mục cài đặt Harbor | `/opt/harbor`        |
-
----
 
 ## 🔐 Xác thực Cloudflare Tunnel
 
@@ -99,8 +89,6 @@ Sau đó script tự động:
 * khởi động **cloudflared** (systemd)
 * hoàn tất setup Harbor
 
----
-
 ## 🌐 Truy cập Harbor
 
 Mở trình duyệt:
@@ -115,8 +103,6 @@ https://harbor.example.com
 username: admin
 password: (mật khẩu bạn đã nhập)
 ```
-
----
 
 ## 🐳 Kiểm thử Docker Push/Pull
 
@@ -137,8 +123,6 @@ docker push harbor.example.com/demo/alpine:latest
 
 Nếu thấy log `Pushed` → thành công 🎉
 
----
-
 ## 🔥 Bảo mật nâng cao (UFW)
 
 Khi được hỏi, chọn **Yes** để bật firewall:
@@ -151,8 +135,6 @@ Lợi ích:
 
 * ✔ **Ẩn IP hoàn toàn**
 * ✔ Tránh bị scan/đánh thẳng vào IP máy chủ
-
----
 
 ## 📁 Cấu trúc sau cài đặt
 
@@ -168,8 +150,6 @@ Lợi ích:
 
 /etc/cloudflared/config.yml
 ```
-
----
 
 ## 🛠 Troubleshooting
 
@@ -195,14 +175,6 @@ docker ps
 ```bash
 cloudflared tunnel route dns <tunnel-name> harbor.example.com
 ```
-
----
-
-## 🤝 Đóng góp
-
-Mở issue hoặc tạo Pull Request tại repo:
-`https://github.com/laodauhgc/bash-scripts`
-
 ---
 
 ## 📄 License
