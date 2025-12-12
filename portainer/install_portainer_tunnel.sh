@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ### ============================
-###  CONFIG & INPUT
+###  CONFIG & INPUT...
 ### ============================
 
 if [ "$EUID" -ne 0 ]; then
@@ -123,17 +123,23 @@ if ! command -v cloudflared &>/dev/null; then
   dpkg -i cloudflared.deb || apt -f install -y
 fi
 
-echo
-echo "🔑 Bước tiếp theo: ĐĂNG NHẬP CLOUDFLARE ĐỂ CẤP QUYỀN CHO TUNNEL."
-echo "   - Lệnh sau sẽ in ra một URL."
-echo "   - Bạn copy URL đó, mở trong trình duyệt, đăng nhập Cloudflare."
-echo "   - Chọn zone chứa domain: ${PORTAINER_HOST}"
-echo "   - Sau khi màn hình báo thành công, quay lại terminal."
-echo
-read -rp "Nhấn Enter để chạy 'cloudflared tunnel login'..." _
-cloudflared tunnel login
+CLOUDFLARE_CERT="/root/.cloudflared/cert.pem"
 
-echo "✅ Đăng nhập Cloudflare xong."
+echo
+if [ ! -f "$CLOUDFLARE_CERT" ]; then
+  echo "🔑 Chưa có cert Cloudflare, cần login để cấp quyền cho tunnel."
+  echo "   - Lệnh sau sẽ in ra một URL."
+  echo "   - Bạn copy URL đó, mở trong trình duyệt, đăng nhập Cloudflare."
+  echo "   - Chọn zone chứa domain: ${PORTAINER_HOST}"
+  echo "   - Sau khi màn hình báo thành công, quay lại terminal."
+  echo
+  read -rp "Nhấn Enter để chạy 'cloudflared tunnel login'..." _
+  cloudflared tunnel login
+else
+  echo "ℹ️ Đã có cert Cloudflare tại ${CLOUDFLARE_CERT}, bỏ qua bước 'cloudflared tunnel login'."
+fi
+
+echo "✅ Chuẩn bị xong chứng chỉ Cloudflare."
 
 # Nếu tunnel đã tồn tại, không cần tạo lại
 if cloudflared tunnel list 2>/dev/null | grep -w "$TUNNEL_NAME" >/dev/null; then
@@ -161,8 +167,9 @@ fi
 
 echo "   Dùng credentials file: $CRED_FILE"
 
-echo "▶ Tạo DNS record trên Cloudflare cho ${PORTAINER_HOST}..."
-cloudflared tunnel route dns "$TUNNEL_NAME" "$PORTAINER_HOST"
+echo "▶ Tạo / cập nhật DNS record trên Cloudflare cho ${PORTAINER_HOST}..."
+# Dùng TUNNEL_ID để đảm bảo chắc chắn trỏ đúng tunnel
+cloudflared tunnel route dns "$TUNNEL_ID" "$PORTAINER_HOST"
 
 echo "▶ Tạo file cấu hình tunnel riêng cho Portainer..."
 
@@ -171,7 +178,7 @@ CF_CONFIG_FILE="/etc/cloudflared/${TUNNEL_NAME}.yml"                # vd: /etc/c
 CF_SERVICE_FILE="/etc/systemd/system/cloudflared-portainer.service" # tên service cố định
 
 cat >"$CF_CONFIG_FILE" <<EOF
-tunnel: ${TUNNEL_ID}
+tunnel: ${TUNNEL_NAME}
 credentials-file: ${CRED_FILE}
 
 ingress:
@@ -187,6 +194,11 @@ echo "   → Đã tạo config: $CF_CONFIG_FILE"
 echo "▶ Tạo (hoặc ghi đè) systemd service: cloudflared-portainer.service"
 
 CF_BIN="$(command -v cloudflared)"
+
+# Nếu service cũ tồn tại, dừng trước cho sạch
+if systemctl list-unit-files | grep -q "^cloudflared-portainer.service"; then
+  systemctl disable --now cloudflared-portainer.service 2>/dev/null || true
+fi
 
 cat >"$CF_SERVICE_FILE" <<EOF
 [Unit]
