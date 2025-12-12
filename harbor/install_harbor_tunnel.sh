@@ -6,7 +6,7 @@ set -euo pipefail
 ### ============================
 
 if [ "$EUID" -ne 0 ]; then
-  echo "❌ Vui lòng chạy script với quyền root (sudo su hoặc sudo ./script.sh)"
+  echo "❌ Vui lòng chạy script với quyền root (sudo su hoặc sudo ./install_harbor_tunnel.sh)"
   exit 1
 fi
 
@@ -159,6 +159,8 @@ docker ps | grep harbor || echo "⚠ Không thấy container harbor trong docker
 
 ### ============================
 ###  STEP 3: CÀI CLOUDFLARE TUNNEL
+###  (config: /etc/cloudflared/${TUNNEL_NAME}.yml,
+###   service: cloudflared-harbor.service)
 ### ============================
 
 echo
@@ -178,26 +180,31 @@ echo "   - Chọn zone chứa domain: ${HARBOR_HOST}"
 echo "   - Sau khi màn hình báo thành công, quay lại terminal."
 echo
 read -rp "Nhấn Enter để chạy 'cloudflared tunnel login'..." _
-
 cloudflared tunnel login
 
-echo "✅ Đăng nhập Cloudflare xong. Tạo Tunnel: ${TUNNEL_NAME}..."
+echo "✅ Đăng nhập Cloudflare xong."
 
-cloudflared tunnel create "$TUNNEL_NAME"
+# Nếu tunnel đã tồn tại, không cần tạo lại
+if cloudflared tunnel list 2>/dev/null | grep -w "$TUNNEL_NAME" >/dev/null; then
+  echo "ℹ️ Tunnel '${TUNNEL_NAME}' đã tồn tại, dùng lại tunnel này."
+else
+  echo "▶ Tạo Tunnel mới: ${TUNNEL_NAME}..."
+  cloudflared tunnel create "$TUNNEL_NAME"
+fi
 
-echo "▶ Tìm file credentials mới tạo trong /root/.cloudflared..."
-CLOUDFLARED_DIR="/root/.cloudflared"
-if [ ! -d "$CLOUDFLARED_DIR" ]; then
-  echo "❌ Không tìm thấy thư mục $CLOUDFLARED_DIR"
+echo "▶ Lấy Tunnel ID & credentials file tương ứng..."
+TUNNEL_ID=$(cloudflared tunnel list 2>/dev/null | awk -v t="$TUNNEL_NAME" '$0 ~ t {print $1; exit}')
+if [ -z "$TUNNEL_ID" ]; then
+  echo "❌ Không lấy được Tunnel ID cho '${TUNNEL_NAME}'."
   exit 1
 fi
 
-# Lấy file JSON mới nhất (thường chính là credentials của tunnel vừa tạo)
-CRED_FILE=$(ls -t ${CLOUDFLARED_DIR}/*.json 2>/dev/null | head -n1 || true)
+CLOUDFLARED_DIR="/root/.cloudflared"
+CRED_FILE="${CLOUDFLARED_DIR}/${TUNNEL_ID}.json"
 
-if [ -z "$CRED_FILE" ]; then
-  echo "❌ Không tìm thấy file credentials .json trong $CLOUDFLARED_DIR"
-  echo "   Hãy chạy 'ls -l /root/.cloudflared' để kiểm tra và sửa tay trong /etc/cloudflared/config.yml."
+if [ ! -f "$CRED_FILE" ]; then
+  echo "❌ Không tìm thấy credentials file: $CRED_FILE"
+  echo "   Hãy chạy 'ls -l ${CLOUDFLARED_DIR}' để kiểm tra và sửa tay."
   exit 1
 fi
 
@@ -206,11 +213,13 @@ echo "   Dùng credentials file: $CRED_FILE"
 echo "▶ Tạo DNS record trên Cloudflare cho ${HARBOR_HOST}..."
 cloudflared tunnel route dns "$TUNNEL_NAME" "$HARBOR_HOST"
 
-echo "▶ Tạo file cấu hình /etc/cloudflared/config.yml..."
+echo "▶ Tạo file cấu hình tunnel riêng cho Harbor..."
 
 mkdir -p /etc/cloudflared
+CF_CONFIG_FILE="/etc/cloudflared/${TUNNEL_NAME}.yml"             # vd: /etc/cloudflared/harbor-tunnel.yml
+CF_SERVICE_FILE="/etc/systemd/system/cloudflared-harbor.service" # tên service cố định
 
-cat >/etc/cloudflared/config.yml <<EOF
+cat >"$CF_CONFIG_FILE" <<EOF
 tunnel: ${TUNNEL_NAME}
 credentials-file: ${CRED_FILE}
 
@@ -220,14 +229,37 @@ ingress:
   - service: http_status:404
 EOF
 
-echo "▶ Cài cloudflared như service systemd..."
-cloudflared service install
+echo "   → Đã tạo config: $CF_CONFIG_FILE"
 
-systemctl enable cloudflared
-systemctl restart cloudflared
+echo "▶ Tạo (hoặc ghi đè) systemd service: cloudflared-harbor.service"
 
-echo "✅ Cloudflare Tunnel đã chạy. Kiểm tra:"
-systemctl status cloudflared --no-pager || true
+CF_BIN="$(command -v cloudflared)"
+
+cat >"$CF_SERVICE_FILE" <<EOF
+[Unit]
+Description=Cloudflare Tunnel - ${TUNNEL_NAME} (Harbor)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=${CF_BIN} --no-autoupdate --config ${CF_CONFIG_FILE} tunnel run
+Restart=always
+RestartSec=5
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+echo "   → Đã tạo service file: $CF_SERVICE_FILE"
+
+echo "🔄 Reload systemd & bật service cloudflared-harbor..."
+systemctl daemon-reload
+systemctl enable --now cloudflared-harbor.service
+
+echo "✅ Cloudflare Tunnel đã chạy. Kiểm tra trạng thái:"
+systemctl status cloudflared-harbor.service --no-pager || true
 
 ### ============================
 ###  STEP 4: (TÙY CHỌN) ĐÓNG PORT 80/443 TỪ BÊN NGOÀI
@@ -252,7 +284,7 @@ fi
 
 echo
 echo "🎉 HOÀN TẤT!"
-echo "   - Harbor UI:       https://${HARBOR_HOST}"
+echo "   - Harbor UI qua Cloudflare: https://${HARBOR_HOST}"
 echo "   - User mặc định:   admin"
 echo "   - Mật khẩu admin:  (theo bạn đã nhập)"
 echo
