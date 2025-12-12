@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ### ============================
-###  CONFIG & INPUT...
+###  CONFIG & INPUT
 ### ============================
 
 if [ "$EUID" -ne 0 ]; then
@@ -168,8 +168,24 @@ fi
 echo "   Dùng credentials file: $CRED_FILE"
 
 echo "▶ Tạo / cập nhật DNS record trên Cloudflare cho ${PORTAINER_HOST}..."
-# Dùng TUNNEL_ID để đảm bảo chắc chắn trỏ đúng tunnel
-cloudflared tunnel route dns "$TUNNEL_ID" "$PORTAINER_HOST"
+# Dùng --overwrite-dns để ép trỏ về đúng tunnel, và bắt lỗi "already exists" cho idempotent
+DNS_OUTPUT=""
+if ! DNS_OUTPUT=$(cloudflared tunnel route dns --overwrite-dns "$TUNNEL_ID" "$PORTAINER_HOST" 2>&1); then
+  echo "$DNS_OUTPUT"
+  if echo "$DNS_OUTPUT" | grep -qi "already exists"; then
+    echo "⚠️ DNS record cho ${PORTAINER_HOST} đã tồn tại."
+    echo "   Hãy đảm bảo trong Cloudflare Dashboard:"
+    echo "   - Type: CNAME"
+    echo "   - Name: ${PORTAINER_HOST}"
+    echo "   - Target: ${TUNNEL_ID}.cfargotunnel.com"
+    echo "   Script vẫn tiếp tục vì tunnel & service đã chạy."
+  else
+    echo "❌ Lỗi tạo DNS record (không phải do record đã tồn tại). Dừng script."
+    exit 1
+  fi
+else
+  echo "$DNS_OUTPUT"
+fi
 
 echo "▶ Tạo file cấu hình tunnel riêng cho Portainer..."
 
