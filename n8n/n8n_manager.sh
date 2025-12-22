@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# n8n manager + Cloudflare Tunnel.
+# n8n manager + Cloudflare Tunnel
 N8N_HOST_DEFAULT="n8n.rawcode.io"
 TUNNEL_NAME_DEFAULT="n8n-tunnel"
 INSTALL_DIR_DEFAULT="/opt/n8n"
@@ -20,19 +20,16 @@ ensure_root() {
   fi
 }
 
-pause() {
-  read -rp "Nhấn Enter để tiếp tục..."
-}
-
 install_deps() {
   echo "▶ Cập nhật hệ thống & cài gói phụ thuộc..."
   apt-get update -y
-  apt-get install -y curl ca-certificates gnupg lsb-release wget jq >/dev/null 2>&1 || apt-get install -y curl ca-certificates gnupg lsb-release wget jq
+  apt-get install -y curl ca-certificates gnupg lsb-release wget jq >/dev/null 2>&1 || \
+    apt-get install -y curl ca-certificates gnupg lsb-release wget jq
 }
 
 ensure_docker() {
   if ! command -v docker >/dev/null 2>&1; then
-    echo "❌ Docker chưa được cài. Vui lòng cài Docker trước rồi chạy lại."
+    echo "❌ Docker chưa được cài. Vui lòng cài Docker trước rồi chạy lại." >&2
     exit 1
   fi
 }
@@ -58,13 +55,16 @@ prompt_with_default() {
   printf '%s\n' "$var"
 }
 
+# CHỈ IN PASSWORD RA stdout, mọi thứ khác -> stderr
 prompt_password_twice() {
   local pass1 pass2
   while true; do
     >&2 echo "ℹ️ Lưu ý: khi nhập mật khẩu, terminal sẽ KHÔNG hiện ký tự."
+    read -srp "Mật khẩu database PostgreSQL: " pass1
     >&2 echo
-    read -srp "Mật khẩu database PostgreSQL: " pass1; echo
-    read -srp "Nhập lại mật khẩu database PostgreSQL: " pass2; echo
+    read -srp "Nhập lại mật khẩu PostgreSQL: " pass2
+    >&2 echo
+
     if [[ -z "$pass1" ]]; then
       >&2 echo "❌ Mật khẩu không được để trống."
       continue
@@ -75,6 +75,7 @@ prompt_password_twice() {
     fi
     break
   done
+  # CHỈ dòng này ra stdout
   printf '%s\n' "$pass1"
 }
 
@@ -105,7 +106,6 @@ ensure_tunnel() {
   if [[ ! -f "$CREDENTIALS_FILE" ]]; then
     CREDENTIALS_FILE=$(ls /root/.cloudflared/"${TUNNEL_ID}"*.json 2>/dev/null | head -n1 || true)
   fi
-
   if [[ ! -f "$CREDENTIALS_FILE" ]]; then
     echo "❌ Không tìm thấy credentials file cho tunnel ID $TUNNEL_ID trong /root/.cloudflared." >&2
     exit 1
@@ -274,7 +274,7 @@ EOF
   fi
 
   echo
-  echo "ℹ️ Đã có cert Cloudflare tại /root/.cloudflared/cert.pem, bỏ qua bước 'cloudflared tunnel login' (nếu chưa có, hãy chạy 'cloudflared tunnel login' thủ công trước)."
+  echo "ℹ️ Nếu chưa login cloudflared trước đó, hãy chạy 'cloudflared tunnel login' thủ công để link Cloudflare account."
 
   ensure_tunnel "$TUNNEL_NAME"
 
@@ -468,7 +468,7 @@ main_menu() {
       3) uninstall_n8n ;;
       4) update_n8n_only ;;
       0) echo "Bye!"; exit 0 ;;
-      *) echo "Lựa chọn không hợp lệ."; ;;
+      *) echo "Lựa chọn không hợp lệ." ;;
     esac
     echo
   done
