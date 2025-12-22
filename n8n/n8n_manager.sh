@@ -61,15 +61,16 @@ prompt_with_default() {
 prompt_password_twice() {
   local pass1 pass2
   while true; do
-    echo "ℹ️ Lưu ý: khi nhập mật khẩu, terminal sẽ KHÔNG hiện ký tự."
+    >&2 echo "ℹ️ Lưu ý: khi nhập mật khẩu, terminal sẽ KHÔNG hiện ký tự."
+    >&2 echo
     read -srp "Mật khẩu database PostgreSQL: " pass1; echo
     read -srp "Nhập lại mật khẩu database PostgreSQL: " pass2; echo
     if [[ -z "$pass1" ]]; then
-      echo "❌ Mật khẩu không được để trống."
+      >&2 echo "❌ Mật khẩu không được để trống."
       continue
     fi
     if [[ "$pass1" != "$pass2" ]]; then
-      echo "❌ Mật khẩu nhập lại không khớp, thử lại."
+      >&2 echo "❌ Mật khẩu nhập lại không khớp, thử lại."
       continue
     fi
     break
@@ -92,7 +93,6 @@ ensure_tunnel() {
     echo "$CREATE_OUTPUT"
     TUNNEL_ID=$(printf '%s\n' "$CREATE_OUTPUT" | awk '/Created tunnel/{print $NF}' | tail -n1 || true)
     if [[ -z "${TUNNEL_ID:-}" ]]; then
-      # fallback: tìm trong tunnel list
       TUNNEL_ID=$(cloudflared tunnel list 2>/dev/null | awk -v name="$TUNNEL_NAME" '$2==name{print $1}' | head -n1 || true)
     fi
     if [[ -z "${TUNNEL_ID:-}" ]]; then
@@ -103,7 +103,6 @@ ensure_tunnel() {
 
   local CREDENTIALS_FILE="/root/.cloudflared/${TUNNEL_ID}.json"
   if [[ ! -f "$CREDENTIALS_FILE" ]]; then
-    # cố gắng tìm file tương ứng
     CREDENTIALS_FILE=$(ls /root/.cloudflared/"${TUNNEL_ID}"*.json 2>/dev/null | head -n1 || true)
   fi
 
@@ -115,7 +114,6 @@ ensure_tunnel() {
   echo "   → Tunnel ID:   $TUNNEL_ID"
   echo "   → Credentials: $CREDENTIALS_FILE"
 
-  # export cho caller dùng
   N8N_TUNNEL_ID="$TUNNEL_ID"
   N8N_TUNNEL_CRED="$CREDENTIALS_FILE"
 }
@@ -177,7 +175,6 @@ install_or_update_n8n() {
   DB_NAME=$(prompt_with_default "Tên database PostgreSQL" "$DB_NAME_DEFAULT")
   DB_USER=$(prompt_with_default "User database PostgreSQL" "$DB_USER_DEFAULT")
 
-  echo "ℹ️ Lưu ý: khi nhập mật khẩu DB, terminal sẽ KHÔNG hiện ký tự."
   DB_PASS=$(prompt_password_twice)
 
   N8N_IMAGE=$(prompt_with_default "Image n8n" "$N8N_IMAGE_DEFAULT")
@@ -372,7 +369,6 @@ uninstall_n8n() {
     fi
   fi
 
-  # Xử lý volumes Postgres
   local CANDIDATE_VOLUMES
   CANDIDATE_VOLUMES=$(docker volume ls --format '{{.Name}}' | grep -E '(^n8n_postgres_data$|^n8n_n8n_postgres_data$)' || true)
   if [[ -n "${CANDIDATE_VOLUMES:-}" ]]; then
@@ -392,7 +388,6 @@ uninstall_n8n() {
     fi
   fi
 
-  # Xử lý Cloudflare tunnel & config
   if [[ -f "$CLOUDFLARED_CONFIG" ]]; then
     echo
     echo "▶ Thông tin tunnel từ file cấu hình $CLOUDFLARED_CONFIG:"
