@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# n8n manager + Cloudflare Tunnel
+# n8n manager + Cloudflare Tunnel.
 N8N_HOST_DEFAULT="n8n.rawcode.io"
 TUNNEL_NAME_DEFAULT="n8n-tunnel"
 INSTALL_DIR_DEFAULT="/opt/n8n"
