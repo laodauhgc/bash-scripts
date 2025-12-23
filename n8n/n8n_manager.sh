@@ -1,185 +1,213 @@
 #!/usr/bin/env bash
+# n8n_manager.sh v1.0.1
+# Changelog v1.0.1:
+# - Fix: Tunnel ID bị lẫn text (stdout contamination) -> log ra STDERR, ID lấy từ cloudflared list (UUID sạch)
+# - Fix: DNS CNAME trỏ sai tunnel -> dùng `cloudflared tunnel route dns <TUNNEL_ID> <HOST> --overwrite-dns`
+# - Fix: docker-compose.yml lỗi YAML do password/newline -> chuyển sang .env + escape đúng
+# - Add: N8N_EDITOR_BASE_URL + N8N_PROXY_HOPS=1 để giảm lỗi setup loop/logout/Invalid origin sau Cloudflare Tunnel
+
 set -Eeuo pipefail
 
-# =========================
-# n8n MANAGER + CLOUDFLARE TUNNEL
-# - Fix YAML by using .env (no secrets injected into YAML)
-# - Fix route DNS: always use tunnel UUID + try overwrite
-# - Add proxy/cookie env to avoid "Invalid origin", logout issues behind tunnel
-# =========================
+VERSION="1.0.1"
 
 # ---------- UI ----------
-line() { printf '%s\n' "============================================================"; }
-die() { echo "❌ $*" >&2; exit 1; }
-warn() { echo "⚠ $*" >&2; }
-info() { echo "ℹ️ $*"; }
-ok() { echo "✅ $*"; }
-
-pause() { read -r -p "Nhấn Enter để tiếp tục..." _; }
-
-# ---------- Commands ----------
-dc() {
-  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-    docker compose "$@"
-  elif command -v docker-compose >/dev/null 2>&1; then
-    docker-compose "$@"
-  else
-    die "Không tìm thấy 'docker compose' hoặc 'docker-compose'. Hãy cài Docker + Compose trước."
-  fi
+hr() { printf "%s\n" "============================================================"; }
+title() {
+  hr
+  printf " n8n MANAGER + CLOUDFLARE TUNNEL (v%s)\n" "$VERSION"
+  hr
 }
+log()  { printf "%b\n" "$*" >&2; }
+ok()   { log "✅ $*"; }
+warn() { log "⚠ $*"; }
+die()  { log "❌ $*"; exit 1; }
 
-need_cmd() { command -v "$1" >/dev/null 2>&1 || die "Thiếu lệnh: $1"; }
+pause() { read -r -p "Nhấn Enter để tiếp tục..." _ || true; }
+
+need_root() {
+  [[ "${EUID:-$(id -u)}" -eq 0 ]] || die "Vui lòng chạy bằng root."
+}
 
 # ---------- Defaults ----------
 DEFAULT_HOST="n8n.rawcode.io"
-DEFAULT_TUNNEL="n8n-tunnel"
+DEFAULT_TUNNEL_NAME="n8n-tunnel"
 DEFAULT_INSTALL_DIR="/opt/n8n"
 DEFAULT_TZ="Asia/Ho_Chi_Minh"
+
 DEFAULT_DB_NAME="n8n"
 DEFAULT_DB_USER="n8n"
+
 DEFAULT_N8N_IMAGE="docker.n8n.io/n8nio/n8n"
-DEFAULT_PG_IMAGE="postgres:16"
+DEFAULT_POSTGRES_IMAGE="postgres:16"
 
-DATA_DIR="/root/.n8n"
-PG_VOLUME_NAME="n8n_postgres_data"
+DEFAULT_DATA_DIR="/root/.n8n"
+DEFAULT_PG_VOLUME="n8n_postgres_data"
+LOCAL_PORT="5678"
 
-CFD_CFG_DIR="/etc/cloudflared"
-CFD_CFG_FILE="${CFD_CFG_DIR}/n8n-tunnel.yml"
-CFD_SVC_FILE="/etc/systemd/system/cloudflared-n8n.service"
-
-# ---------- Utils ----------
-rand_str() {
-  # 32 chars base64url-ish
-  tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32
-}
-
-read_default() {
-  local prompt="$1" default="$2" varname="$3"
+# ---------- Helpers ----------
+prompt_default() {
+  # usage: prompt_default "Question" "default" varname
+  local q="$1" def="$2" __var="$3"
   local val
-  read -r -p "${prompt} [${default}]: " val
-  val="${val:-$default}"
-  printf -v "$varname" '%s' "$val"
+  read -r -p "$q [$def]: " val
+  val="${val:-$def}"
+  printf -v "$__var" "%s" "$val"
 }
 
-read_secret_confirm() {
-  local prompt="$1" varname="$2"
-  local p1 p2
+read_password_confirm() {
+  # usage: read_password_confirm "Prompt" varname
+  local prompt="$1" __var="$2"
+  local p1="" p2=""
   while true; do
-    read -rsp "$prompt: " p1; echo
-    read -rsp "Nhập lại mật khẩu PostgreSQL: " p2; echo
-    [[ "$p1" == "$p2" ]] || { warn "Mật khẩu không khớp, nhập lại."; continue; }
-    [[ -n "$p1" ]] || { warn "Không được để trống."; continue; }
-    printf -v "$varname" '%s' "$p1"
+    read -r -s -p "$prompt: " p1; echo >&2
+    read -r -s -p "Nhập lại mật khẩu PostgreSQL: " p2; echo >&2
+    [[ -n "$p1" ]] || { warn "Mật khẩu không được rỗng."; continue; }
+    [[ "$p1" == "$p2" ]] || { warn "Mật khẩu không khớp, thử lại."; continue; }
+    printf -v "$__var" "%s" "$p1"
     return 0
   done
 }
 
-ensure_dirs() {
-  mkdir -p "$DATA_DIR"
-  # n8n container runs as user 1000 (node)
-  chown 1000:1000 "$DATA_DIR"
-  chmod 700 "$DATA_DIR"
+# Escape để ghi .env (dotenv hỗ trợ quotes)
+dotenv_escape() {
+  # Escape backslash và double-quote, giữ nguyên ký tự khác (kể cả #)
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  printf "%s" "$s"
 }
 
-ensure_cloudflared_ready() {
-  need_cmd cloudflared
-  mkdir -p "$CFD_CFG_DIR"
-  # Cloudflared needs cert.pem (login) for creating tunnels/routes unless token-based
-  if [[ ! -f /root/.cloudflared/cert.pem ]]; then
-    warn "Chưa thấy /root/.cloudflared/cert.pem."
-    warn "Nếu thao tác tunnel/route DNS bị fail vì chưa login, hãy chạy: cloudflared tunnel login"
-  fi
+ensure_packages() {
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -y >/dev/null 2>&1 || true
+  apt-get install -y curl ca-certificates jq gnupg lsb-release >/dev/null 2>&1 || true
 }
 
-# Return tunnel id by name if exists, else empty
-get_tunnel_id_by_name() {
-  local name="$1"
-  # Try JSON output first
-  if cloudflared tunnel list --help 2>/dev/null | grep -q -- '--output'; then
-    cloudflared tunnel list --output json 2>/dev/null | jq -r --arg n "$name" '.[] | select(.name==$n) | .id' | head -n1
+ensure_docker() {
+  command -v docker >/dev/null 2>&1 || die "Chưa có docker. Hãy cài Docker trước."
+  docker compose version >/dev/null 2>&1 || die "Chưa có docker compose plugin. Hãy cài docker-compose-plugin."
+}
+
+install_cloudflared_if_missing() {
+  if command -v cloudflared >/dev/null 2>&1; then
     return 0
   fi
-  # Fallback parse table: ID NAME CREATED CONNECTIONS
-  cloudflared tunnel list 2>/dev/null | awk -v n="$name" 'NF>=2 && $2==n {print $1; exit}'
+
+  ensure_packages
+
+  local arch
+  arch="$(uname -m)"
+  local deb=""
+  case "$arch" in
+    x86_64|amd64) deb="cloudflared-linux-amd64.deb" ;;
+    aarch64|arm64) deb="cloudflared-linux-arm64.deb" ;;
+    *) die "Không hỗ trợ arch: $arch" ;;
+  esac
+
+  log "▶ Cài cloudflared ($arch)..."
+  curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/${deb}" -o "/tmp/${deb}"
+  dpkg -i "/tmp/${deb}" >/dev/null 2>&1 || apt-get -f install -y >/dev/null 2>&1
+  rm -f "/tmp/${deb}"
+  command -v cloudflared >/dev/null 2>&1 || die "Cài cloudflared thất bại."
+  ok "Đã cài cloudflared."
+}
+
+ensure_cloudflared_cert() {
+  # cần cert.pem để gọi API tạo tunnel/route dns
+  local cert="/root/.cloudflared/cert.pem"
+  if [[ ! -f "$cert" ]]; then
+    warn "Không thấy $cert."
+    warn "Hãy chạy: cloudflared tunnel login"
+    warn "Sau khi login xong (tạo cert.pem), chạy lại script."
+    return 1
+  fi
+  return 0
+}
+
+compose_cmd() {
+  # usage: compose_cmd <install_dir> <args...>
+  local dir="$1"; shift
+  docker compose -f "$dir/docker-compose.yml" --env-file "$dir/.env" "$@"
+}
+
+# ---------- Cloudflared tunnel ----------
+get_tunnel_id_by_name() {
+  local name="$1"
+  cloudflared tunnel list 2>/dev/null | awk -v n="$name" '$2==n {print $1; exit}'
 }
 
 ensure_tunnel() {
   local name="$1"
-  local id=""
+  local id
   id="$(get_tunnel_id_by_name "$name" || true)"
   if [[ -n "${id:-}" ]]; then
-    info "Tunnel '$name' đã tồn tại, dùng lại."
-    echo "$id"
+    printf "%s" "$id"
     return 0
   fi
 
-  info "Tạo tunnel mới '$name'..."
-  local out
-  out="$(cloudflared tunnel create "$name" 2>&1 | tee /tmp/cloudflared_create_${name}.log || true)"
-  # Parse UUID from output
-  id="$(echo "$out" | grep -Eo '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -n1 || true)"
-  [[ -n "${id:-}" ]] || die "Không parse được Tunnel ID. Xem log: /tmp/cloudflared_create_${name}.log"
-  echo "$id"
+  log "▶ Tạo tunnel mới '$name'..."
+  # tạo xong -> lấy lại ID từ list (UUID sạch, không parse stdout create)
+  cloudflared tunnel create "$name" >/dev/null 2>&1 || true
+  id="$(get_tunnel_id_by_name "$name" || true)"
+  [[ -n "${id:-}" ]] || die "Không lấy được Tunnel ID sau khi tạo tunnel."
+  printf "%s" "$id"
 }
 
-route_dns() {
+find_credentials_file() {
   local tunnel_id="$1"
-  local hostname="$2"
+  local p
 
-  info "Tạo / cập nhật DNS record cho ${hostname} (trỏ về ${tunnel_id}.cfargotunnel.com)..."
+  # ưu tiên nơi phổ biến
+  for p in "/root/.cloudflared/${tunnel_id}.json" "/etc/cloudflared/${tunnel_id}.json"; do
+    [[ -f "$p" ]] && { printf "%s" "$p"; return 0; }
+  done
 
-  # Prefer overwrite if supported
-  if cloudflared tunnel route dns --help 2>/dev/null | grep -q -- '--overwrite-dns'; then
-    if cloudflared tunnel route dns --overwrite-dns "$tunnel_id" "$hostname" 2>&1; then
-      ok "Đã tạo/cập nhật CNAME cho ${hostname} (trỏ đúng tunnel ${tunnel_id})."
-      return 0
-    fi
-  fi
+  # fallback: tìm trong /root
+  p="$(find /root -maxdepth 3 -type f -name "${tunnel_id}.json" 2>/dev/null | head -n1 || true)"
+  [[ -n "${p:-}" ]] && { printf "%s" "$p"; return 0; }
 
-  # Fallback: try normal route
-  if cloudflared tunnel route dns "$tunnel_id" "$hostname" 2>&1; then
-    ok "Đã tạo/cập nhật CNAME cho ${hostname}."
-    return 0
-  fi
-
-  warn "Không tự route/overwrite được DNS (có thể record đã tồn tại và cloudflared không overwrite)."
-  warn "Bạn vào Cloudflare DNS và set:"
-  warn "  CNAME  ${hostname}  ->  ${tunnel_id}.cfargotunnel.com"
   return 1
 }
 
-write_tunnel_config() {
+route_dns_overwrite() {
   local tunnel_id="$1"
   local hostname="$2"
-  local cred="/root/.cloudflared/${tunnel_id}.json"
+  log "▶ Tạo / cập nhật DNS record cho ${hostname} (trỏ về ${tunnel_id}.cfargotunnel.com)..."
+  # Syntax đúng: cloudflared tunnel route dns <TUNNEL_ID|NAME> <HOSTNAME>
+  cloudflared tunnel route dns "$tunnel_id" "$hostname" --overwrite-dns
+}
 
-  [[ -f "$cred" ]] || warn "Không thấy credentials file ${cred} (nếu cloudflared đặt chỗ khác, hãy sửa credentials-file trong YAML)."
+write_tunnel_config_and_service() {
+  local tunnel_id="$1"
+  local cred_file="$2"
+  local hostname="$3"
 
-  cat > "$CFD_CFG_FILE" <<EOF
+  mkdir -p /etc/cloudflared
+
+  local cfg="/etc/cloudflared/n8n-tunnel.yml"
+  cat >"$cfg" <<EOF
 tunnel: ${tunnel_id}
-credentials-file: ${cred}
+credentials-file: ${cred_file}
 
 ingress:
   - hostname: ${hostname}
-    service: http://127.0.0.1:5678
+    service: http://127.0.0.1:${LOCAL_PORT}
   - service: http_status:404
 EOF
 
-  ok "Đã ghi config tunnel: $CFD_CFG_FILE"
-}
-
-write_systemd_service() {
-  cat > "$CFD_SVC_FILE" <<EOF
+  local svc="/etc/systemd/system/cloudflared-n8n.service"
+  cat >"$svc" <<EOF
 [Unit]
-Description=Cloudflare Tunnel - n8n-tunnel (n8n)
+Description=Cloudflare Tunnel - ${hostname} (n8n)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/cloudflared --no-autoupdate --config ${CFD_CFG_FILE} tunnel run
-Restart=always
+ExecStart=/usr/local/bin/cloudflared --no-autoupdate --config ${cfg} tunnel run
+Restart=on-failure
 RestartSec=3
+User=root
 
 [Install]
 WantedBy=multi-user.target
@@ -187,55 +215,29 @@ EOF
 
   systemctl daemon-reload
   systemctl enable --now cloudflared-n8n.service >/dev/null 2>&1 || true
-  ok "Cloudflare Tunnel service đã chạy: cloudflared-n8n.service"
 }
 
+# ---------- n8n deploy ----------
 write_compose_and_env() {
-  local install_dir="$1"
-  local tz="$2"
-  local host="$3"
-  local db_name="$4"
-  local db_user="$5"
-  local db_pass="$6"
-  local n8n_image="$7"
-  local pg_image="$8"
+  local dir="$1"
+  mkdir -p "$dir"
 
-  mkdir -p "$install_dir"
-
-  # .env (secrets live here) — keep perms tight
-  cat > "${install_dir}/.env" <<EOF
-# Generated by n8n_manager.sh
-TZ=${tz}
-
-N8N_HOST=${host}
-WEBHOOK_URL=https://${host}/
-N8N_DATA_DIR=${DATA_DIR}
-
-POSTGRES_DB=${db_name}
-POSTGRES_USER=${db_user}
-POSTGRES_PASSWORD=${db_pass}
-
-N8N_IMAGE=${n8n_image}
-POSTGRES_IMAGE=${pg_image}
-EOF
-  chmod 600 "${install_dir}/.env"
-
-  # docker-compose.yml — no raw secrets injected
-  cat > "${install_dir}/docker-compose.yml" <<'EOF'
+  # docker-compose.yml (KHÔNG nhét password trực tiếp)
+  cat >"$dir/docker-compose.yml" <<'EOF'
 services:
   n8n-postgres:
     image: ${POSTGRES_IMAGE}
     container_name: n8n-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
       TZ: ${TZ}
     volumes:
       - n8n_postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
       timeout: 5s
       retries: 15
@@ -247,8 +249,6 @@ services:
     depends_on:
       n8n-postgres:
         condition: service_healthy
-    ports:
-      - "127.0.0.1:5678:5678"
     environment:
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: n8n-postgres
@@ -257,295 +257,357 @@ services:
       DB_POSTGRESDB_USER: ${POSTGRES_USER}
       DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
 
-      # Base URL (for reverse proxy / tunnel)
+      # External URL (quan trọng để tránh setup loop/logout/Invalid origin sau proxy)
       N8N_HOST: ${N8N_HOST}
-      N8N_PORT: 5678
       N8N_PROTOCOL: https
+      N8N_PORT: 5678
+      N8N_EDITOR_BASE_URL: ${N8N_EDITOR_BASE_URL}
       WEBHOOK_URL: ${WEBHOOK_URL}
+      N8N_PROXY_HOPS: 1
 
-      # Reverse proxy / cookies (fix Invalid origin / logout issues)
-      N8N_SECURE_COOKIE: "true"
-      N8N_PROXY_HOPS: "1"
-      N8N_TRUST_PROXY: "true"
-
-      N8N_DIAGNOSTICS_ENABLED: "false"
       TZ: ${TZ}
       GENERIC_TIMEZONE: ${TZ}
+      N8N_DIAGNOSTICS_ENABLED: "false"
+    ports:
+      - "127.0.0.1:5678:5678"
     volumes:
       - "${N8N_DATA_DIR}:/home/node/.n8n"
 
 volumes:
   n8n_postgres_data:
-    name: n8n_postgres_data
+    name: ${POSTGRES_VOLUME}
 EOF
 
-  ok "Đã ghi ${install_dir}/docker-compose.yml + ${install_dir}/.env"
+  ok "Đã ghi $dir/docker-compose.yml"
 }
 
-compose_up() {
-  local install_dir="$1"
-  pushd "$install_dir" >/dev/null
+write_env_file() {
+  local dir="$1"
 
-  # Validate YAML before up
-  if ! dc config >/dev/null 2>&1; then
-    echo "----- docker-compose.yml (with line numbers) -----"
-    nl -ba docker-compose.yml | sed -n '1,220p'
-    echo "----- .env -----"
-    sed 's/POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=***hidden***/' .env || true
-    popd >/dev/null
-    die "docker compose config fail → YAML/.env lỗi. (Xem dump ở trên)"
+  local esc_db_pass esc_host esc_tz esc_db esc_user esc_n8n_image esc_pg_image esc_data esc_editor esc_webhook esc_pgvol
+
+  esc_db_pass="$(dotenv_escape "$POSTGRES_PASSWORD")"
+  esc_host="$(dotenv_escape "$N8N_HOST")"
+  esc_tz="$(dotenv_escape "$TZ")"
+  esc_db="$(dotenv_escape "$POSTGRES_DB")"
+  esc_user="$(dotenv_escape "$POSTGRES_USER")"
+  esc_n8n_image="$(dotenv_escape "$N8N_IMAGE")"
+  esc_pg_image="$(dotenv_escape "$POSTGRES_IMAGE")"
+  esc_data="$(dotenv_escape "$N8N_DATA_DIR")"
+  esc_editor="$(dotenv_escape "$N8N_EDITOR_BASE_URL")"
+  esc_webhook="$(dotenv_escape "$WEBHOOK_URL")"
+  esc_pgvol="$(dotenv_escape "$POSTGRES_VOLUME")"
+
+  cat >"$dir/.env" <<EOF
+N8N_IMAGE="${esc_n8n_image}"
+POSTGRES_IMAGE="${esc_pg_image}"
+
+N8N_HOST="${esc_host}"
+N8N_EDITOR_BASE_URL="${esc_editor}"
+WEBHOOK_URL="${esc_webhook}"
+
+TZ="${esc_tz}"
+
+POSTGRES_DB="${esc_db}"
+POSTGRES_USER="${esc_user}"
+POSTGRES_PASSWORD="${esc_db_pass}"
+POSTGRES_VOLUME="${esc_pgvol}"
+
+N8N_DATA_DIR="${esc_data}"
+EOF
+
+  chmod 600 "$dir/.env"
+  ok "Đã ghi $dir/.env"
+}
+
+ensure_data_dir() {
+  local d="$1"
+  mkdir -p "$d"
+  chown 1000:1000 "$d" || true
+  chmod 700 "$d" || true
+}
+
+wait_local_n8n() {
+  local tries=30
+  local code=""
+  while ((tries>0)); do
+    code="$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${LOCAL_PORT}/" || true)"
+    if [[ "$code" != "000" ]]; then
+      log "▶ Thử curl local n8n: HTTP code: $code"
+      return 0
+    fi
+    sleep 1
+    tries=$((tries-1))
+  done
+  warn "Không curl được local n8n (có thể vẫn đang khởi động)."
+}
+
+# ---------- Actions ----------
+action_install() {
+  hr
+  log "=== CÀI ĐẶT / CẬP NHẬT n8n + PostgreSQL + Cloudflare Tunnel ==="
+  hr
+
+  prompt_default "Hostname cho n8n" "$DEFAULT_HOST" N8N_HOST
+  prompt_default "Tên tunnel" "$DEFAULT_TUNNEL_NAME" TUNNEL_NAME
+  prompt_default "Thư mục cài n8n" "$DEFAULT_INSTALL_DIR" INSTALL_DIR
+  prompt_default "Timezone" "$DEFAULT_TZ" TZ
+  prompt_default "Tên database PostgreSQL" "$DEFAULT_DB_NAME" POSTGRES_DB
+  prompt_default "User database PostgreSQL" "$DEFAULT_DB_USER" POSTGRES_USER
+
+  log "ℹ️ Lưu ý: khi nhập mật khẩu, terminal sẽ KHÔNG hiện ký tự."
+  read_password_confirm "Mật khẩu database PostgreSQL" POSTGRES_PASSWORD
+
+  prompt_default "Image n8n" "$DEFAULT_N8N_IMAGE" N8N_IMAGE
+  prompt_default "Image PostgreSQL" "$DEFAULT_POSTGRES_IMAGE" POSTGRES_IMAGE
+  POSTGRES_VOLUME="$DEFAULT_PG_VOLUME"
+  N8N_DATA_DIR="$DEFAULT_DATA_DIR"
+  N8N_EDITOR_BASE_URL="https://${N8N_HOST}"
+  WEBHOOK_URL="https://${N8N_HOST}/"
+
+  hr
+  log "📌 Tóm tắt:"
+  log "   - Hostname:        ${N8N_HOST}"
+  log "   - Tunnel name:     ${TUNNEL_NAME}"
+  log "   - Install dir:     ${INSTALL_DIR}"
+  log "   - Timezone:        ${TZ}"
+  log "   - DB:              ${POSTGRES_DB}"
+  log "   - DB user:         ${POSTGRES_USER}"
+  log "   - DB password:     (ẩn)"
+  log "   - Postgres image:  ${POSTGRES_IMAGE}"
+  log "   - n8n image:       ${N8N_IMAGE}"
+  log "   - Data dir:        ${N8N_DATA_DIR} (mount vào /home/node/.n8n)"
+  log "   - Postgres volume: ${POSTGRES_VOLUME}"
+  hr
+
+  read -r -p "Tiếp tục cài đặt? [y/N]: " yn
+  [[ "${yn:-N}" =~ ^[yY]$ ]] || { warn "Hủy."; return 0; }
+
+  ensure_packages
+  ensure_docker
+  install_cloudflared_if_missing
+
+  log "▶ Đảm bảo thư mục data ${N8N_DATA_DIR} tồn tại..."
+  ensure_data_dir "$N8N_DATA_DIR"
+
+  write_compose_and_env "$INSTALL_DIR"
+  write_env_file "$INSTALL_DIR"
+
+  log "ℹ️ Triển khai stack n8n + PostgreSQL..."
+  compose_cmd "$INSTALL_DIR" pull >/dev/null 2>&1 || true
+  compose_cmd "$INSTALL_DIR" up -d
+
+  ok "n8n đã khởi động local: http://127.0.0.1:${LOCAL_PORT}"
+  wait_local_n8n || true
+
+  if ! ensure_cloudflared_cert; then
+    warn "Bỏ qua bước tạo tunnel/DNS vì chưa có cert.pem."
+    warn "Sau khi chạy 'cloudflared tunnel login', chạy lại option (1)."
+    return 0
   fi
 
-  info "Triển khai stack n8n + PostgreSQL..."
-  dc pull >/dev/null 2>&1 || true
-  dc up -d
+  # Tunnel ID sạch
+  local TUNNEL_ID
+  TUNNEL_ID="$(ensure_tunnel "$TUNNEL_NAME")"
+  ok "Tunnel ID: ${TUNNEL_ID}"
 
-  popd >/dev/null
-}
+  local CRED_FILE
+  if ! CRED_FILE="$(find_credentials_file "$TUNNEL_ID")"; then
+    warn "Không tìm thấy credentials file cho tunnel: ${TUNNEL_ID}.json"
+    warn "Hãy kiểm tra thư mục /root/.cloudflared/ rồi chạy lại."
+    die "Thiếu credentials file -> cloudflared service sẽ không chạy."
+  fi
+  ok "Credentials: ${CRED_FILE}"
 
-install_or_update() {
-  line
-  echo "=== CÀI ĐẶT / CẬP NHẬT n8n + PostgreSQL + Cloudflare Tunnel ==="
-  line
+  # Ép DNS trỏ đúng tunnel
+  route_dns_overwrite "$TUNNEL_ID" "$N8N_HOST"
 
-  local host tunnel_name install_dir tz db_name db_user db_pass n8n_image pg_image
+  # Ghi YAML + systemd
+  write_tunnel_config_and_service "$TUNNEL_ID" "$CRED_FILE" "$N8N_HOST"
 
-  read_default "Hostname cho n8n" "$DEFAULT_HOST" host
-  read_default "Tên tunnel" "$DEFAULT_TUNNEL" tunnel_name
-  read_default "Thư mục cài n8n" "$DEFAULT_INSTALL_DIR" install_dir
-  read_default "Timezone" "$DEFAULT_TZ" tz
-  read_default "Tên database PostgreSQL" "$DEFAULT_DB_NAME" db_name
-  read_default "User database PostgreSQL" "$DEFAULT_DB_USER" db_user
+  # Restart service để chắc chắn dùng config mới
+  systemctl restart cloudflared-n8n.service >/dev/null 2>&1 || true
 
-  echo "ℹ️ Lưu ý: khi nhập mật khẩu, terminal sẽ KHÔNG hiện ký tự."
-  read_secret_confirm "Mật khẩu database PostgreSQL" db_pass
-
-  read_default "Image n8n" "$DEFAULT_N8N_IMAGE" n8n_image
-  read_default "Image PostgreSQL" "$DEFAULT_PG_IMAGE" pg_image
-
-  line
-  echo "📌 Tóm tắt:"
-  echo "   - Hostname:       $host"
-  echo "   - Tunnel name:    $tunnel_name"
-  echo "   - Install dir:    $install_dir"
-  echo "   - Timezone:       $tz"
-  echo "   - DB:             $db_name"
-  echo "   - DB user:        $db_user"
-  echo "   - DB password:    (ẩn)"
-  echo "   - Postgres image: $pg_image"
-  echo "   - n8n image:      $n8n_image"
-  echo "   - Data dir:       $DATA_DIR (mount vào /home/node/.n8n)"
-  echo "   - Postgres volume: n8n_postgres_data"
-  line
-  read -r -p "Tiếp tục cài đặt? [y/N]: " yn
-  [[ "${yn:-N}" =~ ^[Yy]$ ]] || { info "Huỷ."; return 0; }
-
-  need_cmd docker
-  need_cmd jq
-  ensure_cloudflared_ready
-  ensure_dirs
-
-  write_compose_and_env "$install_dir" "$tz" "$host" "$db_name" "$db_user" "$db_pass" "$n8n_image" "$pg_image"
-  compose_up "$install_dir"
-
-  ok "n8n đã khởi động local: http://127.0.0.1:5678"
-
-  # Tunnel + DNS + systemd
-  local tunnel_id
-  tunnel_id="$(ensure_tunnel "$tunnel_name")"
-  info "→ Tunnel ID:   $tunnel_id"
-  info "→ Credentials: /root/.cloudflared/${tunnel_id}.json"
-
-  route_dns "$tunnel_id" "$host" || true
-  write_tunnel_config "$tunnel_id" "$host"
-  write_systemd_service
-
-  echo
+  ok "Cloudflare Tunnel service đã chạy: cloudflared-n8n.service"
+  hr
   ok "HOÀN TẤT!"
-  echo "   - n8n qua Cloudflare:  https://${host}"
-  echo "   - Local:              http://127.0.0.1:5678"
-  echo
-  echo "Nếu bạn từng gặp lỗi setup loop/logout/Invalid origin:"
-  echo "  1) Xoá cookies/site data của https://${host} trên trình duyệt"
-  echo "  2) Đảm bảo CNAME ${host} trỏ đúng: ${tunnel_id}.cfargotunnel.com"
-  echo "  3) Restart n8n: (cd ${install_dir} && docker compose restart n8n)"
+  log "   - n8n qua Cloudflare:  https://${N8N_HOST}"
+  log "   - Local:              http://127.0.0.1:${LOCAL_PORT}"
+  log "   - CNAME đúng phải trỏ: ${TUNNEL_ID}.cfargotunnel.com"
+  hr
+  log "Nếu bạn vẫn gặp setup loop/logout/Invalid origin:"
+  log "  1) Xoá cookies/site data của https://${N8N_HOST} trên trình duyệt"
+  log "  2) Restart n8n: (cd ${INSTALL_DIR} && docker compose --env-file .env restart n8n)"
+  log "  3) Kiểm tra cloudflared status: systemctl status cloudflared-n8n -n 50 --no-pager"
+  pause
 }
 
-status() {
-  line
-  echo "=== TRẠNG THÁI n8n + TUNNEL ==="
-  line
+action_status() {
+  hr
+  log "=== TRẠNG THÁI n8n + TUNNEL ==="
+  hr
 
-  echo
-  echo "▶ Docker containers:"
-  docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | sed -n '1p;/\bn8n\b/p;/\bn8n-postgres\b/p' || true
+  log ""
+  log "▶ Docker containers:"
+  docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | sed 's/\t/  /g' || true
 
-  echo
-  echo "▶ Volume n8n postgres:"
-  docker volume ls | awk 'NR==1 || $2=="n8n_postgres_data"' || true
+  log ""
+  log "▶ Docker volumes (grep n8n):"
+  docker volume ls --format "table {{.Driver}}\t{{.Name}}" | grep -i n8n || true
 
-  echo
-  echo "▶ Systemd service cloudflared-n8n:"
-  systemctl status cloudflared-n8n.service --no-pager || true
+  log ""
+  log "▶ Systemd service cloudflared-n8n:"
+  systemctl status cloudflared-n8n.service -n 25 --no-pager || true
 
-  echo
-  echo "▶ Tunnel list (grep n8n):"
-  cloudflared tunnel list 2>/dev/null | (head -n1; grep -i n8n || true) || true
+  if command -v cloudflared >/dev/null 2>&1; then
+    log ""
+    log "▶ Tunnel list (grep n8n):"
+    cloudflared tunnel list 2>/dev/null | grep -i n8n || true
+  fi
+
+  log ""
+  if [[ -f /etc/cloudflared/n8n-tunnel.yml ]]; then
+    log "▶ /etc/cloudflared/n8n-tunnel.yml:"
+    sed 's/^/   /' /etc/cloudflared/n8n-tunnel.yml || true
+  fi
+
+  pause
 }
 
-remove_stack() {
-  line
-  echo "=== GỠ n8n + Cloudflare Tunnel (local) ==="
-  line
+action_uninstall() {
+  hr
+  log "=== GỠ n8n + Cloudflare Tunnel (local) ==="
+  hr
 
   read -r -p "Bạn chắc chắn muốn gỡ n8n (container + service tunnel local)? [y/N]: " yn
-  [[ "${yn:-N}" =~ ^[Yy]$ ]] || { info "Huỷ."; return 0; }
+  [[ "${yn:-N}" =~ ^[yY]$ ]] || { warn "Hủy."; return 0; }
 
-  local install_dir="$DEFAULT_INSTALL_DIR"
-  [[ -f "${DEFAULT_INSTALL_DIR}/docker-compose.yml" ]] || true
-  read_default "Thư mục cài n8n" "$DEFAULT_INSTALL_DIR" install_dir
-
-  # Stop stack
-  if [[ -f "${install_dir}/docker-compose.yml" ]]; then
-    info "Dừng & xoá container n8n / n8n-postgres..."
-    pushd "$install_dir" >/dev/null
-    dc down || true
-    popd >/dev/null
-  else
-    warn "Không thấy ${install_dir}/docker-compose.yml, bỏ qua docker compose down."
+  # Cố lấy install dir từ default (hoặc user có thể dùng default)
+  local INSTALL_DIR="$DEFAULT_INSTALL_DIR"
+  if [[ -f "$INSTALL_DIR/.env" ]]; then
+    # load nhẹ để lấy N8N_DATA_DIR/POSTGRES_VOLUME nếu có
+    set +u
+    # shellcheck disable=SC1090
+    source "$INSTALL_DIR/.env" || true
+    set -u
   fi
 
-  # Stop tunnel service
-  info "Dừng & xoá systemd service cloudflared-n8n..."
+  log "▶ Dừng & xoá container n8n / n8n-postgres (nếu có)..."
+  if [[ -f "$INSTALL_DIR/docker-compose.yml" ]]; then
+    compose_cmd "$INSTALL_DIR" down >/dev/null 2>&1 || true
+  else
+    docker rm -f n8n n8n-postgres >/dev/null 2>&1 || true
+  fi
+
+  log "▶ Dừng & xoá systemd service cloudflared-n8n..."
   systemctl disable --now cloudflared-n8n.service >/dev/null 2>&1 || true
-  rm -f "$CFD_SVC_FILE" || true
-  systemctl daemon-reload || true
+  rm -f /etc/systemd/system/cloudflared-n8n.service
+  systemctl daemon-reload >/dev/null 2>&1 || true
 
-  # Ask remove data dir
-  echo
-  read -r -p "Bạn có muốn XOÁ thư mục data '${DATA_DIR}' (mất workflows/credentials/settings)? [y/N]: " yn_data
-  if [[ "${yn_data:-N}" =~ ^[Yy]$ ]]; then
-    rm -rf "$DATA_DIR"
-    ok "Đã xoá $DATA_DIR"
+  # hỏi xoá data dir
+  local data_dir="${N8N_DATA_DIR:-$DEFAULT_DATA_DIR}"
+  read -r -p "Bạn có muốn XOÁ thư mục data '${data_dir}' (mất workflows/credentials/settings)? [y/N]: " yn
+  if [[ "${yn:-N}" =~ ^[yY]$ ]]; then
+    rm -rf "$data_dir"
+    ok "Đã xoá $data_dir"
   fi
 
-  # Ask remove postgres volume
-  echo
-  if docker volume ls --format '{{.Name}}' | grep -qx 'n8n_postgres_data'; then
-    echo "Các Docker volume Postgres liên quan đến n8n được tìm thấy:"
-    echo "   - n8n_postgres_data"
-    read -r -p "Bạn có muốn XOÁ volume này (XOÁ TOÀN BỘ DB n8n)? [y/N]: " yn_vol
-    if [[ "${yn_vol:-N}" =~ ^[Yy]$ ]]; then
-      docker volume rm n8n_postgres_data || true
-      ok "Đã xoá volume n8n_postgres_data"
+  # hỏi xoá install dir
+  read -r -p "Bạn có muốn XOÁ thư mục cài đặt '${INSTALL_DIR}' (compose/.env)? [y/N]: " yn
+  if [[ "${yn:-N}" =~ ^[yY]$ ]]; then
+    rm -rf "$INSTALL_DIR"
+    ok "Đã xoá $INSTALL_DIR"
+  fi
+
+  # hỏi xoá volume postgres
+  local pgvol="${POSTGRES_VOLUME:-$DEFAULT_PG_VOLUME}"
+  local vols=()
+  while IFS= read -r v; do vols+=("$v"); done < <(docker volume ls --format '{{.Name}}' | grep -E "^${pgvol}$|^n8n_.*postgres.*data$|^n8n_n8n_postgres_data$" || true)
+
+  if ((${#vols[@]} > 0)); then
+    log "Các Docker volume Postgres liên quan đến n8n được tìm thấy:"
+    for v in "${vols[@]}"; do log "   - $v"; done
+    read -r -p "Bạn có muốn XOÁ các volume này (XOÁ TOÀN BỘ DB n8n)? [y/N]: " yn
+    if [[ "${yn:-N}" =~ ^[yY]$ ]]; then
+      docker volume rm "${vols[@]}" >/dev/null 2>&1 || true
+      ok "Đã xoá volume DB."
     fi
-  else
-    info "Không thấy volume n8n_postgres_data."
   fi
 
-  # Ask remove install dir
-  echo
-  read -r -p "Bạn có muốn XOÁ thư mục cài đặt '${install_dir}' (docker-compose.yml, .env)? [y/N]: " yn_dir
-  if [[ "${yn_dir:-N}" =~ ^[Yy]$ ]]; then
-    rm -rf "$install_dir"
-    ok "Đã xoá $install_dir"
-  fi
+  # tunnel info từ config nếu có
+  if [[ -f /etc/cloudflared/n8n-tunnel.yml ]]; then
+    local tid tname
+    tid="$(awk '/^tunnel:/ {print $2}' /etc/cloudflared/n8n-tunnel.yml | tr -d '\r' || true)"
+    tname="$DEFAULT_TUNNEL_NAME"
+    log ""
+    log "▶ Tunnel ID từ config: ${tid:-N/A}"
+    read -r -p "Bạn có muốn XOÁ Cloudflare Tunnel '${tname}' khỏi account (cloudflared tunnel delete)? [y/N]: " yn
+    if [[ "${yn:-N}" =~ ^[yY]$ ]]; then
+      if command -v cloudflared >/dev/null 2>&1 && [[ -n "${tid:-}" ]]; then
+        cloudflared tunnel delete "$tid" || true
+      else
+        warn "Không thể xoá tunnel tự động (thiếu cloudflared hoặc tunnel id)."
+      fi
+    fi
 
-  # Tunnel info (if config exists)
-  local tunnel_id="" tunnel_name=""
-  if [[ -f "$CFD_CFG_FILE" ]]; then
-    tunnel_id="$(awk -F': *' '/^tunnel:/{print $2}' "$CFD_CFG_FILE" | head -n1 || true)"
-    tunnel_name="$(get_tunnel_id_by_name "$DEFAULT_TUNNEL" >/dev/null 2>&1 && echo "$DEFAULT_TUNNEL" || true)"
-  fi
-
-  echo
-  if [[ -f "$CFD_CFG_FILE" ]]; then
-    echo "▶ Thông tin tunnel từ file cấu hình $CFD_CFG_FILE:"
-    echo "   - Tunnel ID:   ${tunnel_id:-"(không đọc được)"}"
-    echo "   - Tunnel name: $DEFAULT_TUNNEL"
-    read -r -p "Bạn có muốn XOÁ file cấu hình local '${CFD_CFG_FILE}'? [y/N]: " yn_cfg
-    if [[ "${yn_cfg:-N}" =~ ^[Yy]$ ]]; then
-      rm -f "$CFD_CFG_FILE"
+    read -r -p "Bạn có muốn XOÁ file cấu hình local '/etc/cloudflared/n8n-tunnel.yml'? [y/N]: " yn
+    if [[ "${yn:-N}" =~ ^[yY]$ ]]; then
+      rm -f /etc/cloudflared/n8n-tunnel.yml
       ok "Đã xoá file cấu hình tunnel local."
     fi
-
-    read -r -p "Bạn có muốn XOÁ Cloudflare Tunnel '$DEFAULT_TUNNEL' khỏi Cloudflare (cloudflared tunnel delete)? [y/N]: " yn_tun
-    if [[ "${yn_tun:-N}" =~ ^[Yy]$ ]]; then
-      if [[ -n "${tunnel_id:-}" ]]; then
-        (cloudflared tunnel delete "$tunnel_id" --force >/dev/null 2>&1) || (yes | cloudflared tunnel delete "$tunnel_id" >/dev/null 2>&1) || warn "Không xoá được tunnel tự động. Hãy chạy: cloudflared tunnel delete ${tunnel_id}"
-      else
-        (cloudflared tunnel delete "$DEFAULT_TUNNEL" --force >/dev/null 2>&1) || (yes | cloudflared tunnel delete "$DEFAULT_TUNNEL" >/dev/null 2>&1) || warn "Không xoá được tunnel tự động. Hãy chạy: cloudflared tunnel delete $DEFAULT_TUNNEL"
-      fi
-      ok "Đã gửi lệnh xoá tunnel (nếu không có lỗi)."
-    fi
-  else
-    warn "Không thấy $CFD_CFG_FILE để đọc tunnel id. Nếu cần xoá tunnel: cloudflared tunnel list && cloudflared tunnel delete <id>"
   fi
 
-  # Ask delete DNS record
-  echo
-  read -r -p "Bạn có muốn XOÁ CNAME DNS n8n.rawcode.io (cloudflared tunnel route dns delete)? [y/N]: " yn_dns
-  if [[ "${yn_dns:-N}" =~ ^[Yy]$ ]]; then
-    if cloudflared tunnel route dns delete "$DEFAULT_HOST" >/dev/null 2>&1; then
-      ok "Đã xoá DNS record cho $DEFAULT_HOST"
-    else
-      warn "Không xoá được DNS tự động. Hãy xoá trong Cloudflare Dashboard: CNAME $DEFAULT_HOST"
-    fi
-  fi
+  warn "Về Cloudflare DNS:"
+  warn " - CLI cloudflared chủ yếu overwrite DNS khi route; việc xoá record DNS thường cần Dashboard/API token."
+  warn " - Nếu không dùng nữa, hãy xoá CNAME n8n.rawcode.io trong Cloudflare Dashboard."
 
-  ok "Đã gỡ n8n (container) + service cloudflared-n8n trên máy chủ."
+  ok "Đã gỡ n8n + service tunnel local (các phần dữ liệu/volume/tunnel theo lựa chọn của bạn)."
+  pause
 }
 
-update_n8n_only() {
-  line
-  echo "=== UPDATE n8n (pull image mới nhất, GIỮ DATA) ==="
-  line
+action_update() {
+  hr
+  log "=== UPDATE n8n (pull image mới nhất, GIỮ DATA) ==="
+  hr
 
-  local install_dir="$DEFAULT_INSTALL_DIR"
-  read_default "Thư mục cài n8n" "$DEFAULT_INSTALL_DIR" install_dir
-  [[ -f "${install_dir}/docker-compose.yml" ]] || die "Không thấy ${install_dir}/docker-compose.yml"
+  local INSTALL_DIR="$DEFAULT_INSTALL_DIR"
+  [[ -f "$INSTALL_DIR/docker-compose.yml" ]] || die "Không thấy $INSTALL_DIR/docker-compose.yml"
 
-  pushd "$install_dir" >/dev/null
-  info "Pull image mới nhất..."
-  dc pull n8n
-  info "Up lại service (không xoá data)..."
-  dc up -d
-  popd >/dev/null
+  read -r -p "Update n8n ngay bây giờ (pull + recreate n8n, giữ DB & ~/.n8n)? [y/N]: " yn
+  [[ "${yn:-N}" =~ ^[yY]$ ]] || { warn "Hủy."; return 0; }
 
-  ok "Đã update n8n. Nếu cần, kiểm tra: docker logs -f n8n"
+  log "▶ Pull image n8n..."
+  compose_cmd "$INSTALL_DIR" pull n8n
+
+  log "▶ Recreate container n8n (không đụng DB volume)..."
+  compose_cmd "$INSTALL_DIR" up -d --no-deps n8n
+
+  ok "Đã update n8n."
+  pause
 }
 
-menu() {
+# ---------- Menu ----------
+main() {
+  need_root
+
   while true; do
-    line
-    echo " n8n MANAGER + CLOUDFLARE TUNNEL"
-    line
+    title
     echo "1) Cài / cập nhật n8n + tunnel"
     echo "2) Kiểm tra trạng thái n8n + tunnel"
-    echo "3) Gỡ n8n + service + (tuỳ chọn) xoá data & volume & tunnel & DNS"
+    echo "3) Gỡ n8n + service + (tuỳ chọn) xoá data & volume & tunnel"
     echo "4) Update n8n (pull image mới nhất, giữ data)"
     echo "0) Thoát"
-    line
-    read -r -p "Chọn chức năng (0-4): " c
-    case "${c:-}" in
-      1) install_or_update; pause;;
-      2) status; pause;;
-      3) remove_stack; pause;;
-      4) update_n8n_only; pause;;
-      0) exit 0;;
-      *) warn "Chọn sai."; pause;;
+    hr
+    read -r -p "Chọn chức năng (0-4): " choice
+    case "${choice:-}" in
+      1) action_install ;;
+      2) action_status ;;
+      3) action_uninstall ;;
+      4) action_update ;;
+      0) exit 0 ;;
+      *) warn "Lựa chọn không hợp lệ." ; sleep 1 ;;
     esac
   done
-}
-
-main() {
-  need_cmd awk
-  need_cmd sed
-  need_cmd nl
-  need_cmd head
-  need_cmd grep
-  need_cmd tr
-  menu
 }
 
 main "$@"
