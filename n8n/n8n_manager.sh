@@ -1,13 +1,14 @@
 #!/bin/bash
 
 # Script Name: n8n-manager.sh
-# Version: v0.1.1
+# Version: v0.1.3
 
-SCRIPT_VERSION="v0.1.1"
+SCRIPT_VERSION="v0.1.3"
 
 BASE_DIR="/opt/n8n-instances"
 CLOUDFLARED_ETC="/etc/cloudflared"
 SYSTEMD_DIR="/etc/systemd/system"
+DEFAULT_CONFIG="$BASE_DIR/default-config.json"
 
 check_dependencies() {
     if ! command -v docker &> /dev/null; then
@@ -22,6 +23,46 @@ check_dependencies() {
         echo "Error: Cloudflared is not installed. Please install it first."
         exit 1
     fi
+    if ! command -v jq &> /dev/null; then
+        echo "Error: jq is not installed. Please install jq for JSON handling (sudo apt install jq)."
+        exit 1
+    fi
+}
+
+save_config() {
+    cat <<EOF > "$DEFAULT_CONFIG"
+{
+  "hostname": "$HOSTNAME",
+  "timezone": "$TIMEZONE",
+  "enable_auth": "$ENABLE_AUTH",
+  "auth_user": "${AUTH_USER:-}",
+  "auth_pass": "${AUTH_PASS:-}",
+  "use_pg": "$USE_PG",
+  "pg_db": "${PG_DB:-}",
+  "pg_user": "${PG_USER:-}",
+  "pg_pass": "${PG_PASS:-}",
+  "n8n_port": "$N8N_PORT"
+}
+EOF
+    echo "Default config saved to $DEFAULT_CONFIG."
+}
+
+load_config() {
+    if [ -f "$DEFAULT_CONFIG" ]; then
+        HOSTNAME=$(jq -r '.hostname' "$DEFAULT_CONFIG")
+        TIMEZONE=$(jq -r '.timezone' "$DEFAULT_CONFIG")
+        ENABLE_AUTH=$(jq -r '.enable_auth' "$DEFAULT_CONFIG")
+        AUTH_USER=$(jq -r '.auth_user' "$DEFAULT_CONFIG")
+        AUTH_PASS=$(jq -r '.auth_pass' "$DEFAULT_CONFIG")
+        USE_PG=$(jq -r '.use_pg' "$DEFAULT_CONFIG")
+        PG_DB=$(jq -r '.pg_db' "$DEFAULT_CONFIG")
+        PG_USER=$(jq -r '.pg_user' "$DEFAULT_CONFIG")
+        PG_PASS=$(jq -r '.pg_pass' "$DEFAULT_CONFIG")
+        N8N_PORT=$(jq -r '.n8n_port' "$DEFAULT_CONFIG")
+        echo "Loaded default config. You can override any field."
+    else
+        echo "No default config found."
+    fi
 }
 
 install_instance() {
@@ -35,23 +76,39 @@ install_instance() {
     mkdir -p "$INSTANCE_DIR"
     cd "$INSTANCE_DIR" || exit
 
-    read -p "Enter hostname (e.g., n8n.example.com): " HOSTNAME
-    read -p "Enter timezone (e.g., Asia/Ho_Chi_Minh): " TIMEZONE
-    read -p "Enable basic auth? (y/n): " ENABLE_AUTH
+    read -p "Load default config? (y/n): " LOAD_CONFIG
+    if [ "$LOAD_CONFIG" == "y" ]; then
+        load_config
+    fi
+
+    read -p "Enter hostname (e.g., n8n.example.com) [${HOSTNAME:-}]: " INPUT
+    HOSTNAME=${INPUT:-$HOSTNAME}
+    read -p "Enter timezone (e.g., Asia/Ho_Chi_Minh) [${TIMEZONE:-}]: " INPUT
+    TIMEZONE=${INPUT:-$TIMEZONE}
+    read -p "Enable basic auth? (y/n) [${ENABLE_AUTH:-}]: " INPUT
+    ENABLE_AUTH=${INPUT:-$ENABLE_AUTH}
     if [ "$ENABLE_AUTH" == "y" ]; then
-        read -p "Enter basic auth username: " AUTH_USER
-        read -s -p "Enter basic auth password: " AUTH_PASS
+        read -p "Enter basic auth username [${AUTH_USER:-}]: " INPUT
+        AUTH_USER=${INPUT:-$AUTH_USER}
+        read -s -p "Enter basic auth password [${AUTH_PASS:-hidden}]: " INPUT
+        if [ ! -z "$INPUT" ]; then AUTH_PASS=$INPUT; fi
         echo
     fi
-    read -p "Use PostgreSQL for database? (y/n, recommended for production): " USE_PG
+    read -p "Use PostgreSQL for database? (y/n) [${USE_PG:-}]: " INPUT
+    USE_PG=${INPUT:-$USE_PG}
     if [ "$USE_PG" == "y" ]; then
-        read -p "Enter PostgreSQL database name: " PG_DB
-        read -p "Enter PostgreSQL username: " PG_USER
-        read -s -p "Enter PostgreSQL password: " PG_PASS
+        read -p "Enter PostgreSQL database name [${PG_DB:-}]: " INPUT
+        PG_DB=${INPUT:-$PG_DB}
+        read -p "Enter PostgreSQL username [${PG_USER:-}]: " INPUT
+        PG_USER=${INPUT:-$PG_USER}
+        read -s -p "Enter PostgreSQL password [${PG_PASS:-hidden}]: " INPUT
+        if [ ! -z "$INPUT" ]; then PG_PASS=$INPUT; fi
         echo
     fi
-    read -p "Enter N8N port (default 5678): " N8N_PORT
-    N8N_PORT=${N8N_PORT:-5678}
+    read -p "Enter N8N port (default 5678) [${N8N_PORT:-5678}]: " INPUT
+    N8N_PORT=${INPUT:-${N8N_PORT:-5678}}
+
+    save_config  # Save after input for next time
 
     cat <<EOF > docker-compose.yml
 version: '3.8'
@@ -119,11 +176,16 @@ EOF
     docker compose up -d
     echo "n8n instance $INSTANCE_NAME started."
 
-    TUNNEL_OUTPUT=$(cloudflared tunnel create ${INSTANCE_NAME}-tunnel)
-    UUID=$(echo "$TUNNEL_OUTPUT" | grep -oP 'Tunnel ID: \K[0-9a-f-]{36}')
+    TUNNEL_OUTPUT=$(cloudflared tunnel create ${INSTANCE_NAME}-tunnel 2>&1)
+    UUID=$(echo "$TUNNEL_OUTPUT" | grep -oP '(Tunnel ID: |with id )\K[0-9a-f-]{36}')
     if [ -z "$UUID" ]; then
-        echo "Error: Failed to extract UUID from tunnel creation."
-        return
+        echo "Warning: Failed to extract UUID directly. Attempting to fetch from tunnel list..."
+        LIST_OUTPUT=$(cloudflared tunnel list | grep "${INSTANCE_NAME}-tunnel")
+        UUID=$(echo "$LIST_OUTPUT" | awk '{print $1}')
+        if [ -z "$UUID" ]; then
+            echo "Error: Failed to get UUID. Please check 'cloudflared tunnel list' manually."
+            return
+        fi
     fi
 
     cat <<EOF > $CLOUDFLARED_ETC/${INSTANCE_NAME}-tunnel.yml
