@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # Script Name: n8n-manager.sh
-# Version: v0.1.4
+# Version: v0.1.5
 
-SCRIPT_VERSION="v0.1.4"
+SCRIPT_VERSION="v0.1.5"
 
 BASE_DIR="/opt/n8n-instances"
 CLOUDFLARED_ETC="/etc/cloudflared"
@@ -176,14 +176,24 @@ EOF
     docker compose up -d
     echo "n8n instance $INSTANCE_NAME started."
 
-    cloudflared tunnel create ${INSTANCE_NAME}-tunnel
-    sleep 5  # Wait for tunnel to sync
-
-    INFO_OUTPUT=$(cloudflared tunnel info ${INSTANCE_NAME}-tunnel 2>&1)
-    UUID=$(echo "$INFO_OUTPUT" | grep -oP 'ID:\s*\K[0-9a-f-]{36}')
-    if [ -z "$UUID" ]; then
-        echo "Error: Failed to get UUID from tunnel info. Please check manually with 'cloudflared tunnel info ${INSTANCE_NAME}-tunnel'."
-        return
+    # Check if tunnel exists
+    EXISTING_UUID=$(cloudflared tunnel list | grep "${INSTANCE_NAME}-tunnel" | awk '{print $1}')
+    if [ -n "$EXISTING_UUID" ]; then
+        echo "Tunnel ${INSTANCE_NAME}-tunnel already exists. Using existing UUID: $EXISTING_UUID"
+        UUID="$EXISTING_UUID"
+    else
+        CREATE_OUTPUT=$(cloudflared tunnel create ${INSTANCE_NAME}-tunnel 2>&1)
+        if echo "$CREATE_OUTPUT" | grep -q "failed"; then
+            echo "Error: Failed to create tunnel. $CREATE_OUTPUT"
+            return
+        fi
+        sleep 5  # Wait for sync
+        INFO_OUTPUT=$(cloudflared tunnel info ${INSTANCE_NAME}-tunnel 2>&1)
+        UUID=$(echo "$INFO_OUTPUT" | grep -oP 'ID:\s*\K[0-9a-f-]{36}')
+        if [ -z "$UUID" ]; then
+            echo "Error: Failed to get UUID from tunnel info."
+            return
+        fi
     fi
 
     cat <<EOF > $CLOUDFLARED_ETC/${INSTANCE_NAME}-tunnel.yml
@@ -195,7 +205,12 @@ ingress:
   - service: http_status:404
 EOF
 
-    cloudflared tunnel route dns ${INSTANCE_NAME}-tunnel ${HOSTNAME}
+    # Route DNS only if not already routed
+    if ! cloudflared tunnel route list | grep -q "${HOSTNAME}"; then
+        cloudflared tunnel route dns ${INSTANCE_NAME}-tunnel ${HOSTNAME}
+    else
+        echo "CNAME for ${HOSTNAME} already exists. Skipping route dns."
+    fi
 
     cat <<EOF > $SYSTEMD_DIR/cloudflared-${INSTANCE_NAME}.service
 [Unit]
