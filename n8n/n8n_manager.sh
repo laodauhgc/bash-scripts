@@ -1,30 +1,46 @@
 #!/bin/bash
 
 # Script Name: n8n-manager.sh
-# Version: v0.1.7
+# Version: v0.1.9
 
-SCRIPT_VERSION="v0.1.7"
+SCRIPT_VERSION="v0.1.9"
 
 BASE_DIR="/opt/n8n-instances"
 CLOUDFLARED_ETC="/etc/cloudflared"
 SYSTEMD_DIR="/etc/systemd/system"
 DEFAULT_CONFIG="$BASE_DIR/default-config.json"
 
+# Colors and Icons
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+CHECK="\u2705"
+CROSS="\u274C"
+INFO="\u2139\uFE0F"
+WARNING="\u26A0\uFE0F"
+ARROW="\u279C"
+
 check_dependencies() {
+    local missing=0
     if ! command -v docker &> /dev/null; then
-        echo "Error: Docker is not installed. Please install Docker first."
-        exit 1
+        echo -e "${RED}${CROSS} Error: Docker is not installed. Please install Docker first.${NC}"
+        missing=1
     fi
     if ! command -v docker compose &> /dev/null; then
-        echo "Error: Docker Compose is not installed. Please install it first."
-        exit 1
+        echo -e "${RED}${CROSS} Error: Docker Compose is not installed. Please install it first.${NC}"
+        missing=1
     fi
     if ! command -v cloudflared &> /dev/null; then
-        echo "Error: Cloudflared is not installed. Please install it first."
-        exit 1
+        echo -e "${RED}${CROSS} Error: Cloudflared is not installed. Please install it first.${NC}"
+        missing=1
     fi
     if ! command -v jq &> /dev/null; then
-        echo "Error: jq is not installed. Please install jq for JSON handling (sudo apt install jq)."
+        echo -e "${RED}${CROSS} Error: jq is not installed. Please install jq for JSON handling (sudo apt install jq).${NC}"
+        missing=1
+    fi
+    if [ $missing -eq 1 ]; then
         exit 1
     fi
 }
@@ -44,7 +60,7 @@ save_config() {
   "n8n_port": "$N8N_PORT"
 }
 EOF
-    echo "Default config saved to $DEFAULT_CONFIG."
+    echo -e "${GREEN}${CHECK} Default config saved to $DEFAULT_CONFIG.${NC}"
 }
 
 load_config() {
@@ -59,57 +75,57 @@ load_config() {
         PG_USER=$(jq -r '.pg_user' "$DEFAULT_CONFIG")
         PG_PASS=$(jq -r '.pg_pass' "$DEFAULT_CONFIG")
         N8N_PORT=$(jq -r '.n8n_port' "$DEFAULT_CONFIG")
-        echo "Loaded default config. You can override any field."
+        echo -e "${GREEN}${CHECK} Loaded default config. You can override any field.${NC}"
     else
-        echo "No default config found."
+        echo -e "${YELLOW}${WARNING} No default config found.${NC}"
     fi
 }
 
 install_instance() {
-    read -p "Enter instance name (e.g., myn8n, no spaces): " INSTANCE_NAME
+    read -p "$(echo -e "${BLUE}${ARROW} Enter instance name (e.g., myn8n, no spaces): ${NC}")" INSTANCE_NAME
     INSTANCE_DIR="$BASE_DIR/$INSTANCE_NAME"
     if [ -d "$INSTANCE_DIR" ]; then
-        echo "Error: Instance $INSTANCE_NAME already exists."
+        echo -e "${RED}${CROSS} Error: Instance $INSTANCE_NAME already exists.${NC}"
         return
     fi
 
     mkdir -p "$INSTANCE_DIR"
     cd "$INSTANCE_DIR" || exit
 
-    read -p "Load default config? (y/n): " LOAD_CONFIG
+    read -p "$(echo -e "${BLUE}${ARROW} Load default config? (y/n): ${NC}")" LOAD_CONFIG
     if [ "$LOAD_CONFIG" == "y" ]; then
         load_config
     fi
 
-    read -p "Enter hostname (e.g., n8n.example.com) [${HOSTNAME:-}]: " INPUT
+    read -p "$(echo -e "${BLUE}${ARROW} Enter hostname (e.g., n8n.example.com) [${HOSTNAME:-}]: ${NC}")" INPUT
     HOSTNAME=${INPUT:-$HOSTNAME}
     DOMAIN=$(echo $HOSTNAME | cut -d'.' -f2-)
-    read -p "Enter timezone (e.g., Asia/Ho_Chi_Minh) [${TIMEZONE:-}]: " INPUT
+    read -p "$(echo -e "${BLUE}${ARROW} Enter timezone (e.g., Asia/Ho_Chi_Minh) [${TIMEZONE:-}]: ${NC}")" INPUT
     TIMEZONE=${INPUT:-$TIMEZONE}
-    read -p "Enable basic auth? (y/n) [${ENABLE_AUTH:-}]: " INPUT
+    read -p "$(echo -e "${BLUE}${ARROW} Enable basic auth? (y/n) [${ENABLE_AUTH:-}]: ${NC}")" INPUT
     ENABLE_AUTH=${INPUT:-$ENABLE_AUTH}
     if [ "$ENABLE_AUTH" == "y" ]; then
-        read -p "Enter basic auth username [${AUTH_USER:-}]: " INPUT
+        read -p "$(echo -e "${BLUE}${ARROW} Enter basic auth username [${AUTH_USER:-}]: ${NC}")" INPUT
         AUTH_USER=${INPUT:-$AUTH_USER}
-        read -s -p "Enter basic auth password [${AUTH_PASS:-hidden}]: " INPUT
+        read -s -p "$(echo -e "${BLUE}${ARROW} Enter basic auth password [${AUTH_PASS:-hidden}]: ${NC}")" INPUT
         if [ ! -z "$INPUT" ]; then AUTH_PASS=$INPUT; fi
         echo
     fi
-    read -p "Use PostgreSQL for database? (y/n) [${USE_PG:-}]: " INPUT
+    read -p "$(echo -e "${BLUE}${ARROW} Use PostgreSQL for database? (y/n) [${USE_PG:-}]: ${NC}")" INPUT
     USE_PG=${INPUT:-$USE_PG}
     if [ "$USE_PG" == "y" ]; then
-        read -p "Enter PostgreSQL database name [${PG_DB:-}]: " INPUT
+        read -p "$(echo -e "${BLUE}${ARROW} Enter PostgreSQL database name [${PG_DB:-}]: ${NC}")" INPUT
         PG_DB=${INPUT:-$PG_DB}
-        read -p "Enter PostgreSQL username [${PG_USER:-}]: " INPUT
+        read -p "$(echo -e "${BLUE}${ARROW} Enter PostgreSQL username [${PG_USER:-}]: ${NC}")" INPUT
         PG_USER=${INPUT:-$PG_USER}
-        read -s -p "Enter PostgreSQL password [${PG_PASS:-hidden}]: " INPUT
+        read -s -p "$(echo -e "${BLUE}${ARROW} Enter PostgreSQL password [${PG_PASS:-hidden}]: ${NC}")" INPUT
         if [ ! -z "$INPUT" ]; then PG_PASS=$INPUT; fi
         echo
     fi
-    read -p "Enter N8N port (default 5678) [${N8N_PORT:-5678}]: " INPUT
+    read -p "$(echo -e "${BLUE}${ARROW} Enter N8N port (default 5678) [${N8N_PORT:-5678}]: ${NC}")" INPUT
     N8N_PORT=${INPUT:-${N8N_PORT:-5678}}
 
-    save_config  # Save after input for next time
+    save_config
 
     cat <<EOF > docker-compose.yml
 services:
@@ -175,17 +191,17 @@ EOF
     fi
 
     docker compose up -d
-    echo "n8n instance $INSTANCE_NAME started."
+    echo -e "${GREEN}${CHECK} n8n instance $INSTANCE_NAME started.${NC}"
 
     # Check if tunnel exists
     EXISTING_UUID=$(cloudflared tunnel list | grep "${INSTANCE_NAME}-tunnel" | awk '{print $1}')
     if [ -n "$EXISTING_UUID" ]; then
-        echo "Tunnel ${INSTANCE_NAME}-tunnel already exists. Using existing UUID: $EXISTING_UUID"
+        echo -e "${YELLOW}${INFO} Tunnel ${INSTANCE_NAME}-tunnel already exists. Using existing UUID: $EXISTING_UUID${NC}"
         UUID="$EXISTING_UUID"
     else
         CREATE_OUTPUT=$(cloudflared tunnel create ${INSTANCE_NAME}-tunnel 2>&1)
         if echo "$CREATE_OUTPUT" | grep -q "failed"; then
-            echo "Error: Failed to create tunnel. $CREATE_OUTPUT"
+            echo -e "${RED}${CROSS} Error: Failed to create tunnel. $CREATE_OUTPUT${NC}"
             return
         fi
         sleep 5  # Wait for sync
@@ -205,51 +221,14 @@ EOF
     # Handle DNS route
     ROUTE_OUTPUT=$(cloudflared tunnel route dns ${INSTANCE_NAME}-tunnel ${HOSTNAME} 2>&1)
     if echo "$ROUTE_OUTPUT" | grep -q "already exists"; then
-        echo "Existing CNAME detected. Need to update it."
-        read -s -p "Enter your Cloudflare API Token (with DNS:Edit permission): " CF_TOKEN
-        echo
-
-        # Get zone_id
-        ZONE_OUTPUT=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=${DOMAIN}" \
-          -H "Authorization: Bearer ${CF_TOKEN}" \
-          -H "Content-Type: application/json")
-        ZONE_ID=$(echo "$ZONE_OUTPUT" | jq -r '.result[0].id')
-        if [ -z "$ZONE_ID" ]; then
-            echo "Error: Failed to get zone ID for ${DOMAIN}."
-            return
-        fi
-
-        # Get record_id
-        RECORD_OUTPUT=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records?name=${HOSTNAME}" \
-          -H "Authorization: Bearer ${CF_TOKEN}" \
-          -H "Content-Type: application/json")
-        RECORD_ID=$(echo "$RECORD_OUTPUT" | jq -r '.result[0].id')
-        CURRENT_CONTENT=$(echo "$RECORD_OUTPUT" | jq -r '.result[0].content')
-
-        if [ -n "$RECORD_ID" ]; then
-            TARGET_CONTENT="${UUID}.cfargotunnel.com"
-            if [ "$CURRENT_CONTENT" != "$TARGET_CONTENT" ]; then
-                # Delete existing record
-                DELETE_OUTPUT=$(curl -s -X DELETE "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records/${RECORD_ID}" \
-                  -H "Authorization: Bearer ${CF_TOKEN}" \
-                  -H "Content-Type: application/json")
-                if echo "$DELETE_OUTPUT" | grep -q '"success":true'; then
-                    echo "Deleted existing CNAME."
-                    # Now create new
-                    cloudflared tunnel route dns ${INSTANCE_NAME}-tunnel ${HOSTNAME}
-                else
-                    echo "Error: Failed to delete existing CNAME. $DELETE_OUTPUT"
-                    return
-                fi
-            else
-                echo "CNAME already points to correct target. Skipping."
-            fi
-        else
-            echo "No existing record found. Proceeding with route dns."
-            cloudflared tunnel route dns ${INSTANCE_NAME}-tunnel ${HOSTNAME}
-        fi
+        echo -e "${YELLOW}${WARNING} Existing CNAME detected for ${HOSTNAME}. To update it manually:${NC}"
+        echo -e "1. Go to Cloudflare Dashboard > Select domain ${DOMAIN} > DNS tab."
+        echo -e "2. Find the CNAME record for ${HOSTNAME} and delete it."
+        echo -e "3. Rerun this script (install instance) to add the correct CNAME."
+        echo -e "Alternatively, edit the existing CNAME to point to ${UUID}.cfargotunnel.com."
+        echo -e "After updating DNS, restart the tunnel service: systemctl restart cloudflared-${INSTANCE_NAME}.service"
     else
-        echo "DNS route created successfully."
+        echo -e "${GREEN}${CHECK} DNS route created successfully.${NC}"
     fi
 
     cat <<EOF > $SYSTEMD_DIR/cloudflared-${INSTANCE_NAME}.service
@@ -272,53 +251,52 @@ EOF
     systemctl enable cloudflared-${INSTANCE_NAME}.service
     systemctl start cloudflared-${INSTANCE_NAME}.service
 
-    echo "Installation complete. Access at https://${HOSTNAME}"
-
-    echo "To fix 'Connection lost' error, create a Cloudflare Transform Rule:"
-    echo "1. Go to Cloudflare Dashboard > Rules > Transform Rules > Modify Request Header."
-    echo "2. Create rule: When hostname equals ${HOSTNAME}, set Origin header to https://${HOSTNAME}."
-    echo "3. Deploy."
+    echo -e "${GREEN}${CHECK} Installation complete. Access at https://${HOSTNAME}${NC}"
+    echo -e "${YELLOW}${INFO} To fix 'Connection lost' error, create a Cloudflare Transform Rule:${NC}"
+    echo -e "1. Go to Cloudflare Dashboard > Rules > Transform Rules > Modify Request Header."
+    echo -e "2. Create rule: When hostname equals ${HOSTNAME}, set Origin header to https://${HOSTNAME}."
+    echo -e "3. Deploy."
 }
 
 update_instance() {
-    read -p "Enter instance name to update: " INSTANCE_NAME
+    read -p "$(echo -e "${BLUE}${ARROW} Enter instance name to update: ${NC}")" INSTANCE_NAME
     INSTANCE_DIR="$BASE_DIR/$INSTANCE_NAME"
     if [ ! -d "$INSTANCE_DIR" ]; then
-        echo "Error: Instance $INSTANCE_NAME not found."
+        echo -e "${RED}${CROSS} Error: Instance $INSTANCE_NAME not found.${NC}"
         return
     fi
 
     cd "$INSTANCE_DIR" || exit
     docker compose pull
     docker compose up -d
-    echo "Update complete for $INSTANCE_NAME."
+    echo -e "${GREEN}${CHECK} Update complete for $INSTANCE_NAME.${NC}"
 }
 
 edit_instance() {
-    read -p "Enter instance name to edit: " INSTANCE_NAME
+    read -p "$(echo -e "${BLUE}${ARROW} Enter instance name to edit: ${NC}")" INSTANCE_NAME
     INSTANCE_DIR="$BASE_DIR/$INSTANCE_NAME"
     if [ ! -d "$INSTANCE_DIR" ]; then
-        echo "Error: Instance $INSTANCE_NAME not found."
+        echo -e "${RED}${CROSS} Error: Instance $INSTANCE_NAME not found.${NC}"
         return
     fi
 
-    echo "To edit, stop the instance, edit files manually (e.g., docker-compose.yml, tunnel.yml), then restart."
+    echo -e "${YELLOW}${INFO} To edit, stop the instance, edit files manually (e.g., docker-compose.yml, tunnel.yml), then restart.${NC}"
     cd "$INSTANCE_DIR" || exit
     docker compose down
     systemctl stop cloudflared-${INSTANCE_NAME}.service
 
-    read -p "Press Enter after editing files..."
+    read -p "$(echo -e "${BLUE}${ARROW} Press Enter after editing files...${NC}")"
     
     docker compose up -d
     systemctl start cloudflared-${INSTANCE_NAME}.service
-    echo "Edit complete for $INSTANCE_NAME."
+    echo -e "${GREEN}${CHECK} Edit complete for $INSTANCE_NAME.${NC}"
 }
 
 remove_instance() {
-    read -p "Enter instance name to remove: " INSTANCE_NAME
+    read -p "$(echo -e "${BLUE}${ARROW} Enter instance name to remove: ${NC}")" INSTANCE_NAME
     INSTANCE_DIR="$BASE_DIR/$INSTANCE_NAME"
     if [ ! -d "$INSTANCE_DIR" ]; then
-        echo "Error: Instance $INSTANCE_NAME not found."
+        echo -e "${RED}${CROSS} Error: Instance $INSTANCE_NAME not found.${NC}"
         return
     fi
 
@@ -335,20 +313,23 @@ remove_instance() {
 
     cloudflared tunnel delete ${INSTANCE_NAME}-tunnel --force
 
-    echo "Removal complete for $INSTANCE_NAME."
+    echo -e "${GREEN}${CHECK} Removal complete for $INSTANCE_NAME.${NC}"
 }
 
 main_menu() {
-    echo "n8n Manager Script - Version $SCRIPT_VERSION"
-    echo "Select an action:"
-    echo "1) Install new instance"
-    echo "2) Update existing instance"
-    echo "3) Edit existing instance"
-    echo "4) Remove existing instance"
-    echo "5) List instances"
-    echo "6) Exit"
+    echo -e "${BLUE}======================================${NC}"
+    echo -e "${BLUE} n8n Manager Script - Version $SCRIPT_VERSION ${NC}"
+    echo -e "${BLUE}======================================${NC}"
+    echo -e "${YELLOW}Select an action:${NC}"
+    echo -e "1) ${GREEN}Install new instance${NC}"
+    echo -e "2) ${GREEN}Update existing instance${NC}"
+    echo -e "3) ${GREEN}Edit existing instance${NC}"
+    echo -e "4) ${GREEN}Remove existing instance${NC}"
+    echo -e "5) ${GREEN}List instances${NC}"
+    echo -e "6) ${RED}Exit${NC}"
+    echo -e "${BLUE}======================================${NC}"
 
-    read -p "Enter choice: " CHOICE
+    read -p "$(echo -e "${BLUE}${ARROW} Enter choice: ${NC}")" CHOICE
     case $CHOICE in
         1) install_instance ;;
         2) update_instance ;;
@@ -356,7 +337,7 @@ main_menu() {
         4) remove_instance ;;
         5) ls -1 $BASE_DIR ;;
         6) exit 0 ;;
-        *) echo "Invalid choice." ;;
+        *) echo -e "${RED}${CROSS} Invalid choice.${NC}" ;;
     esac
     main_menu
 }
