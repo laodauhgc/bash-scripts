@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # Script Name: n8n-manager.sh
-# Version: v0.1.5
+# Version: v0.1.7
 
-SCRIPT_VERSION="v0.1.5"
+SCRIPT_VERSION="v0.1.7"
 
 BASE_DIR="/opt/n8n-instances"
 CLOUDFLARED_ETC="/etc/cloudflared"
@@ -83,6 +83,7 @@ install_instance() {
 
     read -p "Enter hostname (e.g., n8n.example.com) [${HOSTNAME:-}]: " INPUT
     HOSTNAME=${INPUT:-$HOSTNAME}
+    DOMAIN=$(echo $HOSTNAME | cut -d'.' -f2-)
     read -p "Enter timezone (e.g., Asia/Ho_Chi_Minh) [${TIMEZONE:-}]: " INPUT
     TIMEZONE=${INPUT:-$TIMEZONE}
     read -p "Enable basic auth? (y/n) [${ENABLE_AUTH:-}]: " INPUT
@@ -119,11 +120,11 @@ services:
     ports:
       - "127.0.0.1:${N8N_PORT}:5678"
     environment:
-      - N8N_HOST=localhost
+      - N8N_HOST=${HOSTNAME}
       - N8N_PORT=5678
       - N8N_PROTOCOL=https
       - N8N_EDITOR_BASE_URL=https://${HOSTNAME}/
-      - WEBHOOK_TUNNEL_URL=https://${HOSTNAME}/
+      - WEBHOOK_URL=https://${HOSTNAME}/
       - TZ=${TIMEZONE}
 EOF
 
@@ -188,12 +189,8 @@ EOF
             return
         fi
         sleep 5  # Wait for sync
-        INFO_OUTPUT=$(cloudflared tunnel info ${INSTANCE_NAME}-tunnel 2>&1)
-        UUID=$(echo "$INFO_OUTPUT" | grep -oP 'ID:\s*\K[0-9a-f-]{36}')
-        if [ -z "$UUID" ]; then
-            echo "Error: Failed to get UUID from tunnel info."
-            return
-        fi
+        EXISTING_UUID=$(cloudflared tunnel list | grep "${INSTANCE_NAME}-tunnel" | awk '{print $1}')
+        UUID="$EXISTING_UUID"
     fi
 
     cat <<EOF > $CLOUDFLARED_ETC/${INSTANCE_NAME}-tunnel.yml
@@ -205,11 +202,54 @@ ingress:
   - service: http_status:404
 EOF
 
-    # Route DNS only if not already routed
-    if ! cloudflared tunnel route list | grep -q "${HOSTNAME}"; then
-        cloudflared tunnel route dns ${INSTANCE_NAME}-tunnel ${HOSTNAME}
+    # Handle DNS route
+    ROUTE_OUTPUT=$(cloudflared tunnel route dns ${INSTANCE_NAME}-tunnel ${HOSTNAME} 2>&1)
+    if echo "$ROUTE_OUTPUT" | grep -q "already exists"; then
+        echo "Existing CNAME detected. Need to update it."
+        read -s -p "Enter your Cloudflare API Token (with DNS:Edit permission): " CF_TOKEN
+        echo
+
+        # Get zone_id
+        ZONE_OUTPUT=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=${DOMAIN}" \
+          -H "Authorization: Bearer ${CF_TOKEN}" \
+          -H "Content-Type: application/json")
+        ZONE_ID=$(echo "$ZONE_OUTPUT" | jq -r '.result[0].id')
+        if [ -z "$ZONE_ID" ]; then
+            echo "Error: Failed to get zone ID for ${DOMAIN}."
+            return
+        fi
+
+        # Get record_id
+        RECORD_OUTPUT=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records?name=${HOSTNAME}" \
+          -H "Authorization: Bearer ${CF_TOKEN}" \
+          -H "Content-Type: application/json")
+        RECORD_ID=$(echo "$RECORD_OUTPUT" | jq -r '.result[0].id')
+        CURRENT_CONTENT=$(echo "$RECORD_OUTPUT" | jq -r '.result[0].content')
+
+        if [ -n "$RECORD_ID" ]; then
+            TARGET_CONTENT="${UUID}.cfargotunnel.com"
+            if [ "$CURRENT_CONTENT" != "$TARGET_CONTENT" ]; then
+                # Delete existing record
+                DELETE_OUTPUT=$(curl -s -X DELETE "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records/${RECORD_ID}" \
+                  -H "Authorization: Bearer ${CF_TOKEN}" \
+                  -H "Content-Type: application/json")
+                if echo "$DELETE_OUTPUT" | grep -q '"success":true'; then
+                    echo "Deleted existing CNAME."
+                    # Now create new
+                    cloudflared tunnel route dns ${INSTANCE_NAME}-tunnel ${HOSTNAME}
+                else
+                    echo "Error: Failed to delete existing CNAME. $DELETE_OUTPUT"
+                    return
+                fi
+            else
+                echo "CNAME already points to correct target. Skipping."
+            fi
+        else
+            echo "No existing record found. Proceeding with route dns."
+            cloudflared tunnel route dns ${INSTANCE_NAME}-tunnel ${HOSTNAME}
+        fi
     else
-        echo "CNAME for ${HOSTNAME} already exists. Skipping route dns."
+        echo "DNS route created successfully."
     fi
 
     cat <<EOF > $SYSTEMD_DIR/cloudflared-${INSTANCE_NAME}.service
@@ -233,6 +273,11 @@ EOF
     systemctl start cloudflared-${INSTANCE_NAME}.service
 
     echo "Installation complete. Access at https://${HOSTNAME}"
+
+    echo "To fix 'Connection lost' error, create a Cloudflare Transform Rule:"
+    echo "1. Go to Cloudflare Dashboard > Rules > Transform Rules > Modify Request Header."
+    echo "2. Create rule: When hostname equals ${HOSTNAME}, set Origin header to https://${HOSTNAME}."
+    echo "3. Deploy."
 }
 
 update_instance() {
