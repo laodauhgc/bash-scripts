@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # Script Name: n8n-manager.sh
-# Version: v0.1.3
+# Version: v0.1.4
 
-SCRIPT_VERSION="v0.1.3"
+SCRIPT_VERSION="v0.1.4"
 
 BASE_DIR="/opt/n8n-instances"
 CLOUDFLARED_ETC="/etc/cloudflared"
@@ -111,7 +111,6 @@ install_instance() {
     save_config  # Save after input for next time
 
     cat <<EOF > docker-compose.yml
-version: '3.8'
 services:
   n8n:
     image: n8nio/n8n:latest
@@ -122,7 +121,8 @@ services:
     environment:
       - N8N_HOST=localhost
       - N8N_PORT=5678
-      - N8N_PROTOCOL=http
+      - N8N_PROTOCOL=https
+      - N8N_EDITOR_BASE_URL=https://${HOSTNAME}/
       - WEBHOOK_TUNNEL_URL=https://${HOSTNAME}/
       - TZ=${TIMEZONE}
 EOF
@@ -176,16 +176,14 @@ EOF
     docker compose up -d
     echo "n8n instance $INSTANCE_NAME started."
 
-    TUNNEL_OUTPUT=$(cloudflared tunnel create ${INSTANCE_NAME}-tunnel 2>&1)
-    UUID=$(echo "$TUNNEL_OUTPUT" | grep -oP '(Tunnel ID: |with id )\K[0-9a-f-]{36}')
+    cloudflared tunnel create ${INSTANCE_NAME}-tunnel
+    sleep 5  # Wait for tunnel to sync
+
+    INFO_OUTPUT=$(cloudflared tunnel info ${INSTANCE_NAME}-tunnel 2>&1)
+    UUID=$(echo "$INFO_OUTPUT" | grep -oP 'ID:\s*\K[0-9a-f-]{36}')
     if [ -z "$UUID" ]; then
-        echo "Warning: Failed to extract UUID directly. Attempting to fetch from tunnel list..."
-        LIST_OUTPUT=$(cloudflared tunnel list | grep "${INSTANCE_NAME}-tunnel")
-        UUID=$(echo "$LIST_OUTPUT" | awk '{print $1}')
-        if [ -z "$UUID" ]; then
-            echo "Error: Failed to get UUID. Please check 'cloudflared tunnel list' manually."
-            return
-        fi
+        echo "Error: Failed to get UUID from tunnel info. Please check manually with 'cloudflared tunnel info ${INSTANCE_NAME}-tunnel'."
+        return
     fi
 
     cat <<EOF > $CLOUDFLARED_ETC/${INSTANCE_NAME}-tunnel.yml
