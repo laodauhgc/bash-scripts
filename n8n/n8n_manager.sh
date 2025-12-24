@@ -1,22 +1,14 @@
 #!/bin/bash
 
 # Script Name: n8n-manager.sh
-# Description: Bash script to manage n8n installation, update, edit, and removal using Docker, Docker Compose, and Cloudflared.
-# Supports PostgreSQL for production, multiple instances (by instance name), and custom configurations.
-# Author: Grok AI Assistant
-# Version: v0.1.0
-# Usage: sudo bash n8n-manager.sh
-# Requirements: Ubuntu 24.04, Docker, Docker Compose, Cloudflared pre-installed.
-# Run as root or with sudo for file/systemd operations.
+# Version: v0.1.1
 
-SCRIPT_VERSION="v0.1.0"
+SCRIPT_VERSION="v0.1.1"
 
-# Default paths
 BASE_DIR="/opt/n8n-instances"
 CLOUDFLARED_ETC="/etc/cloudflared"
 SYSTEMD_DIR="/etc/systemd/system"
 
-# Function to check dependencies
 check_dependencies() {
     if ! command -v docker &> /dev/null; then
         echo "Error: Docker is not installed. Please install Docker first."
@@ -32,7 +24,6 @@ check_dependencies() {
     fi
 }
 
-# Function to create a new instance
 install_instance() {
     read -p "Enter instance name (e.g., myn8n, no spaces): " INSTANCE_NAME
     INSTANCE_DIR="$BASE_DIR/$INSTANCE_NAME"
@@ -44,7 +35,6 @@ install_instance() {
     mkdir -p "$INSTANCE_DIR"
     cd "$INSTANCE_DIR" || exit
 
-    # Gather custom configs
     read -p "Enter hostname (e.g., n8n.example.com): " HOSTNAME
     read -p "Enter timezone (e.g., Asia/Ho_Chi_Minh): " TIMEZONE
     read -p "Enable basic auth? (y/n): " ENABLE_AUTH
@@ -63,7 +53,6 @@ install_instance() {
     read -p "Enter N8N port (default 5678): " N8N_PORT
     N8N_PORT=${N8N_PORT:-5678}
 
-    # Create docker-compose.yml
     cat <<EOF > docker-compose.yml
 version: '3.8'
 services:
@@ -120,19 +109,23 @@ EOF
 EOF
     fi
 
-    # Create volumes dirs
     mkdir -p n8n_data
+    chown 1000:1000 n8n_data
     if [ "$USE_PG" == "y" ]; then
         mkdir -p postgres_data
+        chown 999:999 postgres_data
     fi
 
-    # Start compose
     docker compose up -d
     echo "n8n instance $INSTANCE_NAME started."
 
-    # Setup Cloudflared tunnel
-    cloudflared tunnel create ${INSTANCE_NAME}-tunnel
-    UUID=$(ls /root/.cloudflared/*.json | head -1 | sed 's/.*\///; s/\.json//')  # Assume first JSON, adjust if multiple
+    TUNNEL_OUTPUT=$(cloudflared tunnel create ${INSTANCE_NAME}-tunnel)
+    UUID=$(echo "$TUNNEL_OUTPUT" | grep -oP 'Tunnel ID: \K[0-9a-f-]{36}')
+    if [ -z "$UUID" ]; then
+        echo "Error: Failed to extract UUID from tunnel creation."
+        return
+    fi
+
     cat <<EOF > $CLOUDFLARED_ETC/${INSTANCE_NAME}-tunnel.yml
 tunnel: ${INSTANCE_NAME}-tunnel
 credentials-file: /root/.cloudflared/${UUID}.json
@@ -144,7 +137,6 @@ EOF
 
     cloudflared tunnel route dns ${INSTANCE_NAME}-tunnel ${HOSTNAME}
 
-    # Create systemd service
     cat <<EOF > $SYSTEMD_DIR/cloudflared-${INSTANCE_NAME}.service
 [Unit]
 Description=Cloudflare Tunnel - ${INSTANCE_NAME}-tunnel
@@ -168,7 +160,6 @@ EOF
     echo "Installation complete. Access at https://${HOSTNAME}"
 }
 
-# Function to update instance
 update_instance() {
     read -p "Enter instance name to update: " INSTANCE_NAME
     INSTANCE_DIR="$BASE_DIR/$INSTANCE_NAME"
@@ -183,7 +174,6 @@ update_instance() {
     echo "Update complete for $INSTANCE_NAME."
 }
 
-# Function to edit instance (reconfigure)
 edit_instance() {
     read -p "Enter instance name to edit: " INSTANCE_NAME
     INSTANCE_DIR="$BASE_DIR/$INSTANCE_NAME"
@@ -204,7 +194,6 @@ edit_instance() {
     echo "Edit complete for $INSTANCE_NAME."
 }
 
-# Function to remove instance
 remove_instance() {
     read -p "Enter instance name to remove: " INSTANCE_NAME
     INSTANCE_DIR="$BASE_DIR/$INSTANCE_NAME"
@@ -214,7 +203,7 @@ remove_instance() {
     fi
 
     cd "$INSTANCE_DIR" || exit
-    docker compose down -v  # Remove volumes too
+    docker compose down -v
     rm -rf "$INSTANCE_DIR"
 
     systemctl stop cloudflared-${INSTANCE_NAME}.service
@@ -229,7 +218,6 @@ remove_instance() {
     echo "Removal complete for $INSTANCE_NAME."
 }
 
-# Main menu
 main_menu() {
     echo "n8n Manager Script - Version $SCRIPT_VERSION"
     echo "Select an action:"
@@ -250,10 +238,9 @@ main_menu() {
         6) exit 0 ;;
         *) echo "Invalid choice." ;;
     esac
-    main_menu  # Loop back to menu
+    main_menu
 }
 
-# Run
 check_dependencies
 mkdir -p $BASE_DIR
 main_menu
