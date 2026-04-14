@@ -202,20 +202,8 @@ setup_proxies() {
     # Format: PORT|USER|PASS|IPV6
     > "$WORK_DIR/proxies.conf"
 
-    # ---- Output file header ----
-    cat > "$OUTPUT_FILE" <<HEADER
-=================================================================
-  SOCKS5 IPv6 PROXY LIST
-  Date    : $(date '+%Y-%m-%d %H:%M:%S %Z')
-  Server  : ${public_ipv4}
-  Proxies : ${PROXY_COUNT}
-  Engine  : microsocks
-=================================================================
-
-  Connect: socks5://user:pass@${public_ipv4}:port
-  Outgoing traffic uses unique IPv6 per proxy
------------------------------------------------------------------
-HEADER
+    # ---- Output file (raw, one proxy per line) ----
+    > "$OUTPUT_FILE"
 
     # ---- Generate proxies ----
     USED_IPS=()
@@ -243,16 +231,13 @@ HEADER
         # Save proxy config
         echo "${port}|${user}|${pass}|${ipv6}" >> "$WORK_DIR/proxies.conf"
 
-        # Save to output file
-        echo "Proxy ${i}: socks5://${user}:${pass}@${public_ipv4}:${port}  # outgoing=${ipv6}" >> "$OUTPUT_FILE"
+        # Save to output file (raw format)
+        echo "socks5://${user}:${pass}@${public_ipv4}:${port}" >> "$OUTPUT_FILE"
 
         # Progress
         printf "  ${GREEN}[%3d/%d]${NC} :%d -> %s\n" "$i" "$PROXY_COUNT" "$port" "$ipv6"
     done
 
-    echo "" >> "$OUTPUT_FILE"
-    echo "=================================================================" >> "$OUTPUT_FILE"
-    echo "Test: curl -x socks5://user:pass@${public_ipv4}:port https://api64.ipify.org" >> "$OUTPUT_FILE"
 }
 
 # ======================== START / STOP PROXIES ========================
