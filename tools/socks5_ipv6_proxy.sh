@@ -549,12 +549,11 @@ remove_all() {
     rm -f /etc/sysctl.d/99-socks5-ndp.conf
     sysctl --system &>/dev/null || true
 
-    # Remove firewall rules
+    # Remove firewall rules (best effort)
     if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "active"; then
-        # Remove port ranges (best effort)
-        ufw status numbered 2>/dev/null | grep "socks5" | while read -r line; do
-            ufw delete allow "$(echo "$line" | grep -oP '\d+:\d+')/tcp" 2>/dev/null || true
-        done
+        ufw status numbered 2>/dev/null | grep -oP '\d+:\d+' | while read -r range; do
+            ufw delete allow "${range}/tcp" 2>/dev/null || true
+        done || true
     fi
 
     # Remove work dir and output
